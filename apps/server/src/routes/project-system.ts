@@ -1,0 +1,22 @@
+import { ApiErrorSchema, ArtifactVersionListSchema, BackupListSchema, BackupSchema, ProjectSettingsSchema, RestoreBackupSchema, UpdateProjectSettingsSchema, UpdateWorkflowStepSchema, WorkflowSchema, WorkflowStepSchema,
+  type ApiError,type ArtifactVersion,type BackupInfo,type ProjectSettings,type RestoreBackupInput,type UpdateProjectSettingsInput,type UpdateWorkflowStepInput,type Workflow,type WorkflowStep } from "@our-platform/shared";
+import { Type } from "@sinclair/typebox";
+import type { FastifyInstance } from "fastify";
+import type { ArtifactRepository } from "../repositories/artifact-repository.js";
+import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
+import type { WorkflowRepository } from "../repositories/workflow-repository.js";
+import type { BackupService } from "../services/backup-service.js";
+
+const Params=Type.Object({id:Type.String({format:"uuid"})});
+const StepParams=Type.Object({id:Type.String({format:"uuid"}),stepKey:Type.String()});
+
+export function registerProjectSystemRoutes(app:FastifyInstance, settings:ProjectSettingsRepository, workflow:WorkflowRepository, artifacts:ArtifactRepository, backups:BackupService):void {
+  app.get<{Params:{id:string};Reply:ProjectSettings|ApiError}>("/api/projects/:id/settings",{schema:{params:Params,response:{200:ProjectSettingsSchema,404:ApiErrorSchema}}},async(req,reply)=>settings.get(req.params.id)??reply.code(404).send({error:"not_found",message:"Proyecto no encontrado."}));
+  app.put<{Params:{id:string};Body:UpdateProjectSettingsInput;Reply:ProjectSettings|ApiError}>("/api/projects/:id/settings",{schema:{params:Params,body:UpdateProjectSettingsSchema,response:{200:ProjectSettingsSchema,404:ApiErrorSchema}}},async(req,reply)=>settings.update(req.params.id,req.body)??reply.code(404).send({error:"not_found",message:"Proyecto no encontrado."}));
+  app.get<{Params:{id:string};Reply:Workflow}>("/api/projects/:id/workflow",{schema:{params:Params,response:{200:WorkflowSchema}}},async(req)=>({steps:workflow.list(req.params.id)}));
+  app.patch<{Params:{id:string;stepKey:string};Body:UpdateWorkflowStepInput;Reply:WorkflowStep|ApiError}>("/api/projects/:id/workflow/:stepKey",{schema:{params:StepParams,body:UpdateWorkflowStepSchema,response:{200:WorkflowStepSchema,404:ApiErrorSchema}}},async(req,reply)=>workflow.update(req.params.id,req.params.stepKey,req.body.state)??reply.code(404).send({error:"not_found",message:"Etapa no encontrada."}));
+  app.get<{Params:{id:string};Reply:{versions:ArtifactVersion[]}}>("/api/projects/:id/artifacts",{schema:{params:Params,response:{200:ArtifactVersionListSchema}}},async(req)=>({versions:artifacts.list(req.params.id)}));
+  app.get<{Reply:{backups:BackupInfo[]}}>("/api/backups",{schema:{response:{200:BackupListSchema}}},async()=>({backups:backups.list()}));
+  app.post<{Reply:BackupInfo}>("/api/backups",{schema:{response:{201:BackupSchema}}},async(_req,reply)=>reply.code(201).send(await backups.create()));
+  app.post<{Body:RestoreBackupInput;Reply:{restored:BackupInfo;safetyBackup:BackupInfo}}>("/api/backups/restore",{schema:{body:RestoreBackupSchema}},async(req)=>backups.restore(req.body.filename));
+}

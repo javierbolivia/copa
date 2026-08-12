@@ -1,0 +1,26 @@
+{
+  "name": "our-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Plataforma local de investigación y creación de productos digitales.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build:shared": "npm run build --workspace @our-platform/shared",
+    "dev": "npm run build:shared && concurrently --kill-others --names shared,server,web \"npm run dev --workspace @our-platform/shared\" \"npm run dev --workspace @our-platform/server\" \"npm run dev --workspace @our-platform/web\"",
+    "build": "npm run build:shared && npm run build --workspace @our-platform/server && npm run build --workspace @our-platform/web",
+    "typecheck": "npm run typecheck --workspace @our-platform/shared && npm run build:shared && npm run typecheck --workspace @our-platform/server && npm run typecheck --workspace @our-platform/web",
+    "test": "npm run build:shared && npm run test --workspace @our-platform/server",
+    "start": "npm run start --workspace @our-platform/server",
+    "spike:sqlite": "node scripts/sqlite-spike.mjs",
+    "verify:fresh": "node scripts/fresh-start-verify.mjs"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

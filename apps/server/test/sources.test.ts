@@ -1,0 +1,70 @@
+import type { Project, SourceBundle } from "@our-platform/shared";
+import type { FastifyInstance } from "fastify";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
+import { AppDatabase } from "../src/database/database.js";
+import { ProjectRepository } from "../src/repositories/project-repository.js";
+import { SourceRepository } from "../src/repositories/source-repository.js";
+import { JobRepository } from "../src/repositories/job-repository.js";
+import { extractYouTubeVideoId } from "../src/services/youtube-import-service.js";
+import { YouTubeImportService } from "../src/services/youtube-import-service.js";
+import { YouTubeAdapter, type YouTubeComment, type YouTubeThread } from "../src/integrations/youtube-adapter.js";
+
+describe("Sources API",()=>{
+  let app:FastifyInstance; let project:Project;
+  beforeEach(async()=>{app=await createApp({databasePath:":memory:",logger:false,serveFrontend:false});project=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Demo",niche:"Fotos"}})).json<Project>();});
+  afterEach(async()=>app.close());
+
+  it("crea fixture demo, evidencia y habilita Problemas",async()=>{
+    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}});
+    expect(response.statusCode).toBe(201);const bundle=response.json<SourceBundle>();expect(bundle.sources).toHaveLength(1);expect(bundle.sources[0]?.metadata).toMatchObject({demo:true});expect(bundle.comments).toHaveLength(10);expect(bundle.comments.every(c=>c.isDemo)).toBe(true);
+    const comments=await app.inject({method:"GET",url:`/api/projects/${project.id}/comments?query=duplicados&minLikes=10`});expect(comments.json().comments).toHaveLength(1);
+    const workflow=await app.inject({method:"GET",url:`/api/projects/${project.id}/workflow`});expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="sources").state).toBe("COMPLETED");expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="problems").state).toBe("READY");
+  });
+
+  it("segmenta texto manual, filtra y elimina en cascada",async()=>{
+    const created=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",title:"Entrevista","text":"Primer hallazgo.\n\nSegundo hallazgo."}});expect(created.statusCode).toBe(201);const bundle=created.json<SourceBundle>();expect(bundle.comments.map(c=>c.text)).toEqual(["Primer hallazgo.","Segundo hallazgo."]);
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/sources?sourceType=manual&query=Entrevista`})).json().sources).toHaveLength(1);
+    expect((await app.inject({method:"DELETE",url:`/api/projects/${project.id}/sources/${bundle.sources[0]!.id}`})).statusCode).toBe(200);
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/comments`})).json().comments).toEqual([]);
+  });
+
+  it("no crea import YouTube sin clave y no acepta URLs ajenas",async()=>{
+    expect((await app.inject({method:"GET",url:"/api/integrations/youtube/status"})).json()).toEqual({configured:false});
+    const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"youtube",url:"https://youtu.be/dQw4w9WgXcQ"}});expect(response.statusCode).toBe(503);expect(response.json()).toMatchObject({error:"youtube_not_configured"});
+    expect(extractYouTubeVideoId("https://example.com/watch?v=dQw4w9WgXcQ")).toBeUndefined();expect(extractYouTubeVideoId("https://youtube.com/shorts/dQw4w9WgXcQ")).toBe("dQw4w9WgXcQ");
+  });
+
+  it("aísla fuentes por proyecto y valida campos condicionales",async()=>{
+    const other=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Otro",niche:"N"}})).json<Project>();
+    const bundle=(await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}})).json<SourceBundle>();
+    expect((await app.inject({method:"GET",url:`/api/projects/${other.id}/sources/${bundle.sources[0]!.id}`})).statusCode).toBe(404);
+    expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",text:"  "}})).statusCode).toBe(400);
+  });
+});
+
+describe("constraints Sources",()=>{
+  it("crea evidence por comentario, deduplica IDs de plataforma y bloquea relaciones cruzadas",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db);const a=projects.create({name:"A",niche:"N"}),b=projects.create({name:"B",niche:"N"});const bundle=sources.createDemo(a.id);
+    expect(db.connection.prepare("SELECT count(*) count FROM evidence_snippets WHERE project_id=?").get(a.id)).toMatchObject({count:10});
+    const sourceId=bundle.sources[0]!.id,now=new Date().toISOString();expect(()=>db.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,created_at) VALUES(?,?,?,?,?,?,?)`).run("01911111-1111-7111-8111-111111111111",b.id,sourceId,"foreign","X","Y",now)).toThrow();
+    expect(()=>db.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,created_at) VALUES(?,?,?,?,?,?,?)`).run("01922222-2222-7222-8222-222222222222",a.id,sourceId,"demo-1","X","Y",now)).toThrow();db.close();
+  });
+
+  it("pagina YouTube, recupera replies faltantes y deduplica antes de persistir",async()=>{
+    const top=(id:string,text:string):YouTubeComment=>({commentId:id,parentCommentId:null,author:"Autor",text,likes:1,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:false});
+    const reply=(id:string,parent:string):YouTubeComment=>({commentId:id,parentCommentId:parent,author:"Reply",text:id,likes:0,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:true});
+    const thread1:YouTubeThread={threadId:"thread-1",topLevelComment:top("comment001a","Uno"),totalReplyCount:2,embeddedReplies:[reply("reply00001a","comment001a")]};
+    const thread2:YouTubeThread={threadId:"thread-2",topLevelComment:top("comment002a","Dos"),totalReplyCount:0,embeddedReplies:[]};
+    class FakeYouTube extends YouTubeAdapter {
+      constructor(){super({apiKey:"demo"});}
+      override async getVideo(){return {videoId:"dQw4w9WgXcQ",title:"Video",channelId:"channel",channelTitle:"Canal",publishedAt:"2026-01-01T00:00:00Z",commentCount:4};}
+      override async listCommentThreads(input:{videoId:string;pageToken?:string}){return input.pageToken?{items:[thread2]}:{items:[thread1],nextPageToken:"page-2"};}
+      override async listReplies(){return {items:[reply("reply00001a","comment001a"),reply("reply00002a","comment001a")]};}
+    }
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),jobs=new JobRepository(db);const project=projects.create({name:"YT",niche:"N"});const service=new YouTubeImportService(sources,jobs,"demo",new FakeYouTube());const queued=service.queue(project.id,"https://youtu.be/dQw4w9WgXcQ");
+    for(let i=0;i<20&&jobs.get(project.id,queued.job.id)?.status!=="COMPLETED";i++)await new Promise(resolve=>setImmediate(resolve));
+    expect(jobs.get(project.id,queued.job.id)?.status).toBe("COMPLETED");expect(sources.listComments(project.id,{limit:100})).toHaveLength(4);expect(sources.get(project.id,queued.source.id)?.status).toBe("ready");
+    expect(()=>service.queue(project.id,"https://youtu.be/dQw4w9WgXcQ")).toThrow(/ya fue añadido/);db.close();
+  });
+});

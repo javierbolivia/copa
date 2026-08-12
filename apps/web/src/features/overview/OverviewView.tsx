@@ -1,0 +1,11 @@
+import type { ArtifactVersion, Project, Workflow } from "@our-platform/shared";
+
+const stateLabel:Record<string,string>={PENDING:"Pendiente",READY:"Listo",IN_PROGRESS:"En curso",COMPLETED:"Completado",STALE:"Obsoleto",BLOCKED:"Bloqueado"};
+
+export function OverviewView({project,workflow,artifacts,onEdit,onNavigate}:{project:Project;workflow:Workflow|null;artifacts:ArtifactVersion[];onEdit:()=>void;onNavigate:(step:string)=>void}) {
+  return <section className="content-section"><div className="overview-grid"><article className="detail-card"><span className="eyebrow">RESUMEN</span><h2>{project.name}</h2><p>{project.description??"Sin descripción."}</p><dl><div><dt>Nicho</dt><dd>{project.niche}</dd></div><div><dt>Actualizado</dt><dd>{new Date(project.updatedAt).toLocaleString("es")}</dd></div><div><dt>Etapa actual</dt><dd>{project.workflowStage}</dd></div></dl><button className="button secondary" onClick={onEdit}>Configurar proyecto</button></article><article className="detail-card"><span className="eyebrow">PROGRESO</span><h2>{project.workflowCompletedSteps} de {project.workflowTotalSteps} etapas</h2><div className="workflow-list">{workflow?.steps.map((step)=><button className={`workflow-step ${step.state.toLowerCase()}`} key={step.id} onClick={()=>onNavigate(step.stepKey)} title={step.staleReason??step.state}><span>{step.position}</span><div><strong>{step.label}</strong><small>{stateLabel[step.state]??step.state}</small></div></button>)}</div></article></div><article className="detail-card artifact-panel"><span className="eyebrow">VERSIONES Y LINEAGE</span><h2>Artefactos del proyecto</h2>{artifacts.length===0?<p>Aún no hay artefactos. Empieza en Investigación o importa la fuente Demo.</p>:artifacts.map((version)=><div className={`artifact-row ${version.freshness}`} key={version.id}><div><strong>{humanize(version.artifactType)} · versión {version.versionNumber}</strong><span>{version.status} · {version.freshness}</span></div><time>{new Date(version.createdAt).toLocaleString("es")}</time>{version.staleReason&&<p>⚠ {version.staleReason}</p>}</div>)}</article></section>;
+}
+
+function humanize(value:string){return value.replaceAll("_"," ").replace(/\b\w/g,(letter)=>letter.toUpperCase());}
+
+

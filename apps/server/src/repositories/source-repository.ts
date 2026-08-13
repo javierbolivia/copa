@@ -82,7 +82,22 @@ export class SourceRepository {
     return row?toSource(row):undefined;
   }
 
-  setIncludedInAnalysis(projectId:string,sourceId:string,included:boolean):Source|undefined{this.database.connection.prepare("UPDATE sources SET include_in_analysis=?,updated_at=? WHERE project_id=? AND id=?").run(included?1:0,new Date().toISOString(),projectId,sourceId);return this.get(projectId,sourceId);}
+  setIncludedInAnalysis(projectId: string, sourceId: string, included: boolean): Source | undefined {
+    const current = this.get(projectId, sourceId);
+    if (!current) return undefined;
+    if (current.includeInAnalysis === included) return current;
+    const now = new Date().toISOString();
+    this.database.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.connection.prepare("UPDATE sources SET include_in_analysis=?,updated_at=? WHERE project_id=? AND id=?").run(included ? 1 : 0, now, projectId, sourceId);
+      this.invalidateSourceArtifacts(projectId, "Se actualizó el conjunto de fuentes incluidas en análisis.", now);
+      this.database.connection.exec("COMMIT");
+    } catch (error) {
+      this.database.connection.exec("ROLLBACK");
+      throw error;
+    }
+    return this.get(projectId, sourceId);
+  }
 
   analysisSet(projectId:string):Comment[]{return (this.database.connection.prepare(`SELECT c.* FROM comments c JOIN sources s ON s.id=c.source_id AND s.project_id=c.project_id WHERE c.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,c.created_at`).all(projectId) as unknown as CommentRow[]).map(toComment);}
 

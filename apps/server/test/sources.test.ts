@@ -22,6 +22,18 @@ describe("Sources API",()=>{
     const workflow=await app.inject({method:"GET",url:`/api/projects/${project.id}/workflow`});expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="sources").state).toBe("COMPLETED");expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="problems").state).toBe("READY");
   });
 
+  it("persiste include/exclude, conserva datos y marca Sources stale",async()=>{
+    const bundle=(await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}})).json<SourceBundle>();
+    const source=bundle.sources[0]!;
+    await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/sources/run`,payload:{provider:"mock"}});
+    const response=await app.inject({method:"PUT",url:`/api/projects/${project.id}/sources/${source.id}/analysis`,payload:{included:false}});
+    expect(response.statusCode).toBe(200);expect(response.json()).toMatchObject({id:source.id,includeInAnalysis:false});
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/analysis-set`})).json().comments).toEqual([]);
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/comments`})).json().comments).toHaveLength(10);
+    const workflow=(await app.inject({method:"GET",url:`/api/projects/${project.id}/workflow`})).json();
+    expect(workflow.steps.find((step:{stepKey:string})=>step.stepKey==="sources").state).toBe("STALE");
+  });
+
   it("segmenta texto manual, filtra y elimina en cascada",async()=>{
     const created=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",title:"Entrevista","text":"Primer hallazgo.\n\nSegundo hallazgo."}});expect(created.statusCode).toBe(201);const bundle=created.json<SourceBundle>();expect(bundle.comments.map(c=>c.text)).toEqual(["Primer hallazgo.","Segundo hallazgo."]);
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/sources?sourceType=manual&query=Entrevista`})).json().sources).toHaveLength(1);

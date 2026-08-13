@@ -1,82 +1,32 @@
 import type { AppDatabase } from "../database/database.js";
 
-export type SupportType = "DIRECT" | "INFERRED" | "CONTEXT_ONLY" | "NOT_SUPPORTED";
-export type ProblemStrength = "SIGNAL" | "EMERGING" | "PATTERN" | "STRONG_PATTERN";
+export type SupportType="DIRECT"|"INFERRED"|"CONTEXT_ONLY"|"NOT_SUPPORTED";
+export type ProblemStrength="SIGNAL"|"EMERGING"|"PATTERN"|"STRONG_PATTERN";
+export type ResearchRelevance="CORE"|"RELATED"|"TANGENTIAL"|"OUT_OF_SCOPE";
+export const PROBLEM_BATCH_SIZE=60;
+export const PROBLEM_QUALITY_CONFIG={emergingAuthors:2,patternAuthors:4,strongAuthors:6,strongSources:2,coreRelevance:80,relatedRelevance:60,tangentialRelevance:40} as const;
+const STOP_WORDS=new Set("de del la el los las y o en para por con un una que como sobre sus se al a es son no mi tu su this that from into foto fotos fotografia fotografias tutorial video problema usuarios user".split(" "));
+const tokens=(value:string)=>new Set(value.toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/gu,"").match(/[\p{L}\p{N}]{3,}/gu)?.filter(word=>!STOP_WORDS.has(word))??[]);
+const overlap=(a:Set<string>,b:Set<string>)=>[...a].filter(word=>b.has(word));
+const isRecord=(value:unknown):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value);
+interface EvidenceRow{id:string;commentId:string;quoteText:string;author:string;sourceId:string;sourceTitle:string;likes:number;isReply:number;threadId:string|null;}
+interface Candidate{id:string;name:string;summary:string;category:string;evidenceIds:string[];semanticSignature:string;relevanceScore?:number;}
+interface ValidatedEvidence extends EvidenceRow{supportType:SupportType;}
+export interface ProblemPipelineMetrics {activeSources:number;rawComments:number;analysisEligibleComments:number;commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number;clustersAfterMerge:number;finalProblems:number;signals:number;emerging:number;patterns:number;strongPatterns:number;corpusCoverage:number;}
 
-export interface ProblemQualityConfig { readonly emergingAuthors: number; readonly patternAuthors: number; readonly strongAuthors: number; readonly strongSources: number; }
-export const PROBLEM_QUALITY_CONFIG: ProblemQualityConfig = { emergingAuthors: 2, patternAuthors: 4, strongAuthors: 6, strongSources: 2 };
-const STOP_WORDS = new Set("de del la el los las y o en para por con un una que como sobre sus se al a es son no mi tu su this that from into foto fotos fotografia fotografias tutorial video".split(" "));
-const tokens = (value: string) => new Set(value.toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/gu, "").match(/[\p{L}\p{N}]{3,}/gu)?.filter((word) => !STOP_WORDS.has(word)) ?? []);
-const overlap = (a: Set<string>, b: Set<string>) => [...a].filter((word) => b.has(word));
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+/** A human phrase is always preferred; titles are deliberately never tokenized into a focus. */
+export function deriveResearchFocus(_sourceTitles:readonly string[],fallback:string,explicit?:string|null):string { return explicit?.trim().replace(/\s+/gu," ")||fallback.trim().replace(/\s+/gu," ")||"Investigación del proyecto"; }
+export function relevanceLevel(score:number):ResearchRelevance {return score>=PROBLEM_QUALITY_CONFIG.coreRelevance?"CORE":score>=PROBLEM_QUALITY_CONFIG.relatedRelevance?"RELATED":score>=PROBLEM_QUALITY_CONFIG.tangentialRelevance?"TANGENTIAL":"OUT_OF_SCOPE";}
+export function createProblemBatches<T>(items:readonly T[],size=PROBLEM_BATCH_SIZE):T[][] {if(size<1)throw new Error("El tamaño de batch debe ser positivo.");const result:T[][]=[];for(let i=0;i<items.length;i+=size)result.push([...items.slice(i,i+size)]);return result;}
+export function classifyEvidenceSupport(claim:string,quote:string,focus:string):SupportType {const claimTokens=tokens(claim),quoteTokens=tokens(quote),direct=overlap(claimTokens,quoteTokens).length;if(direct>=2||(direct===1&&(claimTokens.size<=2||quoteTokens.size<=4)))return"DIRECT";if(direct===1&&quoteTokens.size>=3)return"INFERRED";return overlap(tokens(focus),quoteTokens).length>0?"CONTEXT_ONLY":"NOT_SUPPORTED";}
+export function scoreProblem(input:{precision:number;uniqueAuthors:number;uniqueSources:number;uniqueThreads?:number;totalLikes:number;relevance:number}):number {const recurrence=Math.min(100,input.uniqueAuthors*16+Math.max(0,input.uniqueSources-1)*12+Math.max(0,(input.uniqueThreads??input.uniqueAuthors)-1)*8);const engagement=Math.min(100,Math.log10(input.totalLikes+1)*25);let score=Math.round(input.precision*.36+recurrence*.34+input.relevance*.25+engagement*.05);if(input.uniqueAuthors<=1)score=Math.min(score,35);if(input.precision<60)score=Math.min(score,45);if(input.relevance<PROBLEM_QUALITY_CONFIG.tangentialRelevance)score=Math.min(score,30);return Math.max(0,Math.min(100,score));}
+export function strengthLevel(uniqueAuthors:number,uniqueSources:number):ProblemStrength {if(uniqueAuthors>=PROBLEM_QUALITY_CONFIG.strongAuthors||(uniqueAuthors>=PROBLEM_QUALITY_CONFIG.patternAuthors&&uniqueSources>=PROBLEM_QUALITY_CONFIG.strongSources))return"STRONG_PATTERN";if(uniqueAuthors>=PROBLEM_QUALITY_CONFIG.patternAuthors)return"PATTERN";if(uniqueAuthors>=PROBLEM_QUALITY_CONFIG.emergingAuthors)return"EMERGING";return"SIGNAL";}
+function candidate(value:unknown,index:number):Candidate|undefined {if(!isRecord(value)||typeof value.name!=="string"||typeof value.summary!=="string")return undefined;const evidenceIds=Array.isArray(value.evidenceIds)?value.evidenceIds.filter((id):id is string=>typeof id==="string"):[];const signature=typeof value.semanticSignature==="string"&&value.semanticSignature.trim()?value.semanticSignature:normalizeSignature(`${value.name} ${value.summary}`);return{id:typeof value.id==="string"?value.id:`problem-${index+1}`,name:value.name.trim(),summary:value.summary.trim(),category:typeof value.category==="string"?value.category:"problem",evidenceIds:[...new Set(evidenceIds)],semanticSignature:normalizeSignature(signature),...(typeof value.researchRelevanceScore==="number"?{relevanceScore:Math.max(0,Math.min(100,Math.round(value.researchRelevanceScore)))}:{})};}
+function normalizeSignature(value:string):string{return [...tokens(value)].sort().join("_");}
+function relevant(claim:string,focus:string):number {const count=overlap(tokens(claim),tokens(focus)).length;return Math.min(100,count*34+(count?18:10));}
+function similar(a:Candidate,b:Candidate):boolean {if(a.semanticSignature&&a.semanticSignature===b.semanticSignature)return true;const at=tokens(`${a.name} ${a.summary} ${a.semanticSignature}`),bt=tokens(`${b.name} ${b.summary} ${b.semanticSignature}`),shared=overlap(at,bt).length;return shared>=2&&shared/Math.max(1,Math.min(at.size,bt.size))>=.5;}
+/** Global reduce: candidates from every MAP batch are clustered before evidence validation. */
+export function mergeProblemCandidates(values:readonly unknown[]):Candidate[]{const merged:Candidate[]=[];values.map(candidate).filter((item):item is Candidate=>!!item).forEach(item=>{const existing=merged.find(other=>similar(item,other));if(existing){existing.evidenceIds=[...new Set([...existing.evidenceIds,...item.evidenceIds])];existing.relevanceScore=Math.max(existing.relevanceScore??0,item.relevanceScore??0);}else merged.push({...item});});return merged;}
+export function analysisSetSnapshot(database:AppDatabase,projectId:string):{rows:EvidenceRow[];activeSources:number;rawComments:number;eligibleComments:number}{const db=database.connection;const rows=db.prepare(`SELECT e.id,e.comment_id commentId,e.quote_text quoteText,c.author,e.source_id sourceId,s.title sourceTitle,c.likes,c.is_reply isReply,c.thread_id threadId FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed')`).all(projectId) as unknown as EvidenceRow[];const counts=db.prepare(`SELECT COUNT(DISTINCT CASE WHEN s.include_in_analysis=1 AND s.status IN ('ready','completed') THEN s.id END) activeSources,COUNT(DISTINCT c.id) rawComments,COUNT(DISTINCT CASE WHEN s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') THEN c.id END) eligibleComments FROM sources s LEFT JOIN comments c ON c.source_id=s.id AND c.project_id=s.project_id WHERE s.project_id=?`).get(projectId) as {activeSources:number;rawComments:number;eligibleComments:number};return{rows,activeSources:counts.activeSources,rawComments:counts.rawComments,eligibleComments:counts.eligibleComments};}
 
-interface EvidenceRow { id: string; commentId: string; quoteText: string; author: string; sourceId: string; sourceTitle: string; likes: number; isReply: number; }
-interface Candidate { id: string; name: string; summary: string; category: string; evidenceIds: string[]; }
-interface ValidatedEvidence extends EvidenceRow { supportType: SupportType; }
-
-export function deriveResearchFocus(sourceTitles: readonly string[], fallback: string): string {
-  const frequency = new Map<string, number>();
-  for (const title of sourceTitles) for (const token of tokens(title)) frequency.set(token, (frequency.get(token) ?? 0) + 1);
-  const focus = [...frequency.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6).map(([token]) => token);
-  return focus.length ? focus.join(" ") : fallback;
-}
-
-export function classifyEvidenceSupport(claim: string, quote: string, focus: string): SupportType {
-  const claimTokens = tokens(claim), quoteTokens = tokens(quote), directOverlap = overlap(claimTokens, quoteTokens).length;
-  if (directOverlap >= 2 || (directOverlap === 1 && (claimTokens.size <= 2 || quoteTokens.size <= 4))) return "DIRECT";
-  if (directOverlap === 1 && quoteTokens.size >= 3) return "INFERRED";
-  return overlap(tokens(focus), quoteTokens).length > 0 ? "CONTEXT_ONLY" : "NOT_SUPPORTED";
-}
-
-export function scoreProblem(input: { precision: number; uniqueAuthors: number; uniqueSources: number; totalLikes: number; relevance: number }): number {
-  const recurrence = Math.min(100, input.uniqueAuthors * 18 + Math.max(0, input.uniqueSources - 1) * 14);
-  const engagement = Math.min(100, Math.log10(input.totalLikes + 1) * 25);
-  let score = Math.round(input.precision * .38 + recurrence * .32 + input.relevance * .24 + engagement * .06);
-  if (input.uniqueAuthors <= 1) score = Math.min(score, 35);
-  if (input.precision < 60) score = Math.min(score, 45);
-  return Math.max(0, Math.min(100, score));
-}
-
-export function strengthLevel(uniqueAuthors: number, uniqueSources: number): ProblemStrength {
-  if (uniqueAuthors >= PROBLEM_QUALITY_CONFIG.strongAuthors || (uniqueAuthors >= PROBLEM_QUALITY_CONFIG.patternAuthors && uniqueSources >= PROBLEM_QUALITY_CONFIG.strongSources)) return "STRONG_PATTERN";
-  if (uniqueAuthors >= PROBLEM_QUALITY_CONFIG.patternAuthors) return "PATTERN";
-  if (uniqueAuthors >= PROBLEM_QUALITY_CONFIG.emergingAuthors) return "EMERGING";
-  return "SIGNAL";
-}
-
-function candidate(value: unknown, index: number): Candidate | undefined {
-  if (!isRecord(value) || typeof value.name !== "string" || typeof value.summary !== "string") return undefined;
-  const evidenceIds = Array.isArray(value.evidenceIds) ? value.evidenceIds.filter((id): id is string => typeof id === "string") : [];
-  return { id: typeof value.id === "string" ? value.id : `problem-${index + 1}`, name: value.name.trim(), summary: value.summary.trim(), category: typeof value.category === "string" ? value.category : "problem", evidenceIds: [...new Set(evidenceIds)] };
-}
-function relevant(claim: string, focus: string): number { const score = overlap(tokens(claim), tokens(focus)).length; return Math.min(100, score * 34 + (score ? 18 : 10)); }
-function mergeKey(value: Candidate): Set<string> { return tokens(`${value.name} ${value.summary}`); }
-
-/** Validates Gemini candidates against the persisted active Analysis Set; no generated evidence can enter storage. */
-export function qualityProblems(database: AppDatabase, projectId: string, raw: unknown): Record<string, unknown> {
-  const output = isRecord(raw) ? raw : {};
-  const rows = database.connection.prepare(`SELECT e.id,e.comment_id commentId,e.quote_text quoteText,c.author,e.source_id sourceId,s.title sourceTitle,c.likes,c.is_reply isReply FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed')`).all(projectId) as unknown as EvidenceRow[];
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  const sourceTitles = [...new Set(rows.map((row) => row.sourceTitle))];
-  const project = database.connection.prepare("SELECT niche FROM projects WHERE id=?").get(projectId) as { niche: string } | undefined;
-  const focus = deriveResearchFocus(sourceTitles, project?.niche ?? "");
-  const candidates = (Array.isArray(output.items) ? output.items : []).map(candidate).filter((item): item is Candidate => item !== undefined);
-  const merged: Candidate[] = [];
-  for (const item of candidates) {
-    const same = merged.find((other) => { const a = mergeKey(item), b = mergeKey(other), common = overlap(a, b).length; return common >= 2 && common / Math.max(1, Math.min(a.size, b.size)) >= .5; });
-    if (same) same.evidenceIds = [...new Set([...same.evidenceIds, ...item.evidenceIds])]; else merged.push(item);
-  }
-  const items = merged.flatMap((item) => {
-    const claim = `${item.name} ${item.summary}`;
-    const classified: ValidatedEvidence[] = item.evidenceIds.flatMap((id) => { const row = byId.get(id); if (!row) return []; return [{ ...row, supportType: classifyEvidenceSupport(claim, row.quoteText, focus) }]; });
-    const supported = classified.filter((row) => row.supportType === "DIRECT" || row.supportType === "INFERRED");
-    if (!supported.length) return [];
-    const direct = supported.filter((row) => row.supportType === "DIRECT"), inferred = supported.filter((row) => row.supportType === "INFERRED");
-    const authors = new Set(supported.map((row) => row.author.trim().toLocaleLowerCase("es"))), sources = new Set(supported.map((row) => row.sourceId));
-    const precision = Math.round(((direct.length + inferred.length * .7) / Math.max(1, item.evidenceIds.length)) * 100);
-    const relevance = relevant(claim, focus), likes = supported.reduce((sum, row) => sum + row.likes, 0);
-    const strength = scoreProblem({ precision, uniqueAuthors: authors.size, uniqueSources: sources.size, totalLikes: likes, relevance });
-    return [{ id: item.id, name: item.name, summary: item.summary, category: item.category, tags: [...new Set([item.category])], evidenceIds: supported.map((row) => row.id), quotes: supported.map((row) => row.quoteText), evidenceCount: supported.length, uniqueAuthors: authors.size, uniqueSources: sources.size, directEvidenceCount: direct.length, inferredEvidenceCount: inferred.length, totalLikes: likes, evidencePrecisionScore: precision, relevanceScore: relevance, problemStrengthScore: strength, strengthLevel: strengthLevel(authors.size, sources.size), evidence: supported.map((row) => ({ evidenceId: row.id, commentId: row.commentId, quote: row.quoteText, author: row.author, sourceTitle: row.sourceTitle, likes: row.likes, isReply: row.isReply === 1, supportType: row.supportType })) }];
-  });
-  return { ...output, schemaVersion: typeof output.schemaVersion === "number" ? output.schemaVersion : 1, qualityAlgorithmVersion: "problem-quality-v1", researchFocus: focus, items };
-}
+export function qualityProblems(database:AppDatabase,projectId:string,raw:unknown,options?:{researchFocus?:string|null;metrics?:Partial<ProblemPipelineMetrics>}):Record<string,unknown>{const output=isRecord(raw)?raw:{};const snapshot=analysisSetSnapshot(database,projectId),byId=new Map(snapshot.rows.map(row=>[row.id,row]));const project=database.connection.prepare("SELECT niche FROM projects WHERE id=?").get(projectId) as {niche:string}|undefined;const stored=database.connection.prepare("SELECT research_focus FROM project_settings WHERE project_id=?").get(projectId) as {research_focus:string|null}|undefined;const focus=deriveResearchFocus([],project?.niche??"",options?.researchFocus??stored?.research_focus);const candidates=(Array.isArray(output.items)?output.items:[]);const merged=mergeProblemCandidates(candidates);const items=merged.flatMap(item=>{const claim=`${item.name} ${item.summary}`;const classified:ValidatedEvidence[]=item.evidenceIds.flatMap(id=>{const row=byId.get(id);return row?[{...row,supportType:classifyEvidenceSupport(claim,row.quoteText,focus)}]:[];});const supported=classified.filter(row=>row.supportType==="DIRECT"||row.supportType==="INFERRED");if(!supported.length)return[];const direct=supported.filter(row=>row.supportType==="DIRECT"),inferred=supported.filter(row=>row.supportType==="INFERRED"),authors=new Set(supported.map(row=>row.author.trim().toLocaleLowerCase("es"))),sources=new Set(supported.map(row=>row.sourceId)),threads=new Set(supported.map(row=>row.threadId??row.commentId));const precision=Math.round((direct.length+inferred.length*.7)/Math.max(1,item.evidenceIds.length)*100),relevance=item.relevanceScore??relevant(claim,focus),likes=supported.reduce((sum,row)=>sum+row.likes,0),strength=scoreProblem({precision,uniqueAuthors:authors.size,uniqueSources:sources.size,uniqueThreads:threads.size,totalLikes:likes,relevance});return[{id:item.id,name:item.name,summary:item.summary,category:item.category,tags:[...new Set([item.category])],semanticSignature:item.semanticSignature,evidenceIds:supported.map(row=>row.id),quotes:supported.map(row=>row.quoteText),evidenceCount:supported.length,uniqueAuthors:authors.size,uniqueSources:sources.size,uniqueThreads:threads.size,directEvidenceCount:direct.length,inferredEvidenceCount:inferred.length,totalLikes:likes,evidencePrecisionScore:precision,relevanceScore:relevance,relevanceLevel:relevanceLevel(relevance),problemStrengthScore:strength,strengthLevel:strengthLevel(authors.size,sources.size),evidence:supported.map(row=>({evidenceId:row.id,commentId:row.commentId,quote:row.quoteText,author:row.author,sourceTitle:row.sourceTitle,likes:row.likes,isReply:row.isReply===1,supportType:row.supportType}))}];});const levels=(level:ProblemStrength)=>items.filter(item=>item.strengthLevel===level).length;const selected=options?.metrics?.commentsSelectedForSemanticAnalysis??snapshot.eligibleComments;const metrics:ProblemPipelineMetrics={activeSources:snapshot.activeSources,rawComments:snapshot.rawComments,analysisEligibleComments:snapshot.eligibleComments,commentsSelectedForSemanticAnalysis:selected,batchesSentToGemini:options?.metrics?.batchesSentToGemini??0,commentsPerBatch:options?.metrics?.commentsPerBatch??PROBLEM_BATCH_SIZE,candidateInsights:options?.metrics?.candidateInsights??candidates.length,candidateEvidenceLinks:options?.metrics?.candidateEvidenceLinks??candidates.flatMap(candidate).filter((x):x is Candidate=>!!x).reduce((n,x)=>n+x.evidenceIds.length,0),clustersBeforeValidation:options?.metrics?.clustersBeforeValidation??merged.length,clustersAfterMerge:items.length,finalProblems:items.length,signals:levels("SIGNAL"),emerging:levels("EMERGING"),patterns:levels("PATTERN"),strongPatterns:levels("STRONG_PATTERN"),corpusCoverage:snapshot.eligibleComments?Number((selected/snapshot.eligibleComments*100).toFixed(1)):0};return{...output,schemaVersion:typeof output.schemaVersion==="number"?output.schemaVersion:1,qualityAlgorithmVersion:"problem-quality-v2-global",researchFocus:focus,analysisMetrics:metrics,items};}

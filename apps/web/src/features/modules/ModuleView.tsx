@@ -9,9 +9,11 @@ import { RefinedModuleOutput } from "../refinement/RefinedModuleOutput";
 const refinedModules = new Set<ModuleKey>(["product","avatar","mechanism","beliefs","offer","landing","funnel","emails","content","final_product"]);
 
 export function ModuleView({projectId,moduleKey,evidenceFocus,onOpenEvidence,onChanged}:{projectId:string;moduleKey:ModuleKey;evidenceFocus:string|null;onOpenEvidence:(commentId:string)=>void;onChanged:()=>void}) {
-  if(moduleKey==="sources")return <SourcesView projectId={projectId} focusCommentId={evidenceFocus} onChanged={onChanged}/>;
+  if(moduleKey==="sources")return <><ResearchFocusPanel projectId={projectId} onChanged={onChanged}/><SourcesView projectId={projectId} focusCommentId={evidenceFocus} onChanged={onChanged}/></>;
   return <GeneratedModuleView projectId={projectId} moduleKey={moduleKey} onOpenEvidence={onOpenEvidence} onChanged={onChanged}/>;
 }
+
+function ResearchFocusPanel({projectId,onChanged}:{projectId:string;onChanged:()=>void}){const [value,setValue]=useState(""),[saved,setSaved]=useState<string|null>(null),[saving,setSaving]=useState(false),[error,setError]=useState<string|null>(null);useEffect(()=>{void api.researchFocus(projectId).then(focus=>{setValue(focus.value??"");setSaved(focus.value);}).catch(reason=>setError(messageOf(reason)));},[projectId]);const save=async()=>{if(value.trim().length<3)return;setSaving(true);setError(null);try{const focus=await api.saveResearchFocus(projectId,value);setValue(focus.value);setSaved(focus.value);onChanged();}catch(reason){setError(messageOf(reason));}finally{setSaving(false);}};return <section className="content-section"><article className="detail-card research-focus-panel"><span className="eyebrow">RESEARCH FOCUS</span><label>Foco activo que usará Problemas<input value={value} onChange={event=>setValue(event.target.value)} placeholder="Tema o problema a investigar"/></label><div className="button-row"><button type="button" className="button primary" disabled={saving||value.trim().length<3} onClick={()=>void save()}>Guardar</button>{saved&&<small>Activo: {saved}</small>}</div>{error&&<InlineError message={error}/>}</article></section>;}
 
 function GeneratedModuleView({projectId,moduleKey,onOpenEvidence,onChanged}:{projectId:string;moduleKey:ModuleKey;onOpenEvidence:(commentId:string)=>void;onChanged:()=>void}) {
   const [results,setResults]=useState<ModuleResult[]>([]),[selectedId,setSelectedId]=useState<string|null>(null);

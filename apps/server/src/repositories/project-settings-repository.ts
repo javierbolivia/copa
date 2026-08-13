@@ -23,4 +23,18 @@ export class ProjectSettingsRepository {
     return this.get(projectId);
     }catch(error){if(this.database.connection.isTransaction)this.database.connection.exec("ROLLBACK");throw error;}
   }
+
+  researchFocus(projectId:string):{value:string|null;source:"user"|"youtube_query"|null}|undefined {
+    const row=this.database.connection.prepare("SELECT research_focus,research_focus_source FROM project_settings WHERE project_id=?").get(projectId) as {research_focus:string|null;research_focus_source:"user"|"youtube_query"|null}|undefined;
+    return row?{value:row.research_focus,source:row.research_focus_source}:undefined;
+  }
+
+  setResearchFocus(projectId:string,value:string,source:"user"|"youtube_query"):{value:string;source:"user"|"youtube_query"}|undefined {
+    const current=this.researchFocus(projectId);if(!current)return undefined;
+    const normalized=value.trim().replace(/\s+/gu," ");
+    if(normalized.length<3||normalized.length>240)throw new Error("El Research Focus debe tener entre 3 y 240 caracteres.");
+    if(source==="youtube_query"&&current.source==="user"&&current.value)return {value:current.value,source:"user"};
+    this.database.connection.prepare("UPDATE project_settings SET research_focus=?,research_focus_source=?,updated_at=? WHERE project_id=?").run(normalized,source,new Date().toISOString(),projectId);
+    return {value:normalized,source};
+  }
 }

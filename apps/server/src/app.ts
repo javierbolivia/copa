@@ -38,6 +38,7 @@ import { ProductStudioService } from "./services/product-studio-service.js";
 import { registerProductStudioRoutes } from "./routes/product-studio.js";
 import { ProductExportService } from "./services/product-export-service.js";
 import { registerProductExportRoutes } from "./routes/product-exports.js";
+import { registerResearchFocusRoutes } from "./routes/research-focus.js";
 
 export interface CreateAppOptions {
   readonly databasePath: string;
@@ -124,6 +125,7 @@ export async function createApp(
   registerHealthRoute(app, database);
   registerProjectRoutes(app, projects);
   registerProjectSystemRoutes(app, settings, workflow, artifacts, backups);
+  registerResearchFocusRoutes(app, settings, database);
   const youtubeImports = new YouTubeImportService(sources, jobs);
   registerSourceRoutes(app, sources, jobs, youtubeImports);
   registerModuleRoutes(app, projects, modules);

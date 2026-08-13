@@ -854,6 +854,16 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX comments_analysis_set_idx ON comments(project_id, source_id, analysis_eligible, quality_score);
     `,
   },
+  {
+    version: 9,
+    name: "009_research_focus",
+    sql: `
+      ALTER TABLE project_settings ADD COLUMN research_focus TEXT
+        CHECK (research_focus IS NULL OR length(trim(research_focus)) BETWEEN 3 AND 240);
+      ALTER TABLE project_settings ADD COLUMN research_focus_source TEXT
+        CHECK (research_focus_source IS NULL OR research_focus_source IN ('user','youtube_query'));
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

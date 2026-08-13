@@ -14,7 +14,7 @@ import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
 import type { KnowledgeRepository } from "../repositories/knowledge-repository.js";
 import { getAgentKnowledgePolicy } from "./knowledge/index.js";
-import { qualityProblems } from "./problem-quality-engine.js";
+import { createProblemBatches, qualityProblems } from "./problem-quality-engine.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -140,7 +140,9 @@ export class ModuleService {
     }
 
     const evidence = this.db.connection.prepare(
-      "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
+      key === "problems"
+        ? "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
+        : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
     ).all(projectId) as unknown as Array<{ id: string; quoteText: string }>;
     const evidenceIds = evidence.map((row) => row.id);
     const project = this.db.connection.prepare("SELECT name,niche FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string };
@@ -160,6 +162,7 @@ export class ModuleService {
     };
     let reportedModel: string | undefined;
     let providerInput: Record<string, unknown> | undefined;
+    let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
     if ((selectedProvider === "openai"||selectedProvider==="gemini") && key !== "sources") {
       const prompt = getModulePrompt(key);
@@ -175,13 +178,26 @@ export class ModuleService {
         additionalInstructions: instructions?.trim() || null,
       };
       let generated:LlmGenerateResult<Record<string,unknown>>;
+      const problemBatches=key==="problems"&&selectedProvider==="gemini"?createProblemBatches(evidence):undefined;
+      if(problemBatches){
+        const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
+        for(const [index,batch] of problemBatches.entries()){
+          const mapInput={...providerInput,stage:"map",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
+          const mappedResult=await this.options.gemini.generate<Record<string,unknown>>({provider:"gemini",model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
+          if(Array.isArray(mappedResult.output.items))mapped.push(...mappedResult.output.items.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
+          mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
+        }
+        problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToGemini:problemBatches.length,commentsPerBatch:60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
+        providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
+        usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
+      }
       try{generated=await (selectedProvider==="gemini"?this.options.gemini:this.options.openAI).generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});}
       catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`;this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,error instanceof Error?error.name:"generation_error",message,now,now);throw error;}
       output = generated.output;
-      usage = generated.usage;
+      usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
-    if (key === "problems") output = qualityProblems(this.db, projectId, output);
+    if (key === "problems") output = qualityProblems(this.db, projectId, output,problemMetrics?{metrics:problemMetrics}:undefined);
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
         SELECT

@@ -15,6 +15,11 @@ import type {
   ProjectSettings,
   RunModuleInput,
   Workflow,
+  KnowledgeLibrary,
+  KnowledgeDocument,
+  KnowledgeChunkResult,
+  CreateKnowledgeLibraryInput,
+  ImportKnowledgeDocumentInput,
 } from "@our-platform/shared";
 
 export class ApiClientError extends Error {
@@ -25,8 +30,9 @@ export class ApiClientError extends Error {
 }
 
 export interface ProviderStatus { openai:{configured:boolean;economyModel:string;powerfulModel:string};defaultProvider:"mock"|"openai" }
-export interface TraceabilityNode { id:string;kind:"artifact"|"evidence"|"source";label:string;subtitle:string|null;artifactType:string|null;versionNumber:number|null;status:string|null;freshness:string|null;provenance:string|null }
-export interface TraceabilityGraph { rootId:string;nodes:TraceabilityNode[];edges:Array<{from:string;to:string;relation:string}>;evidenceCount:number;sourceCount:number }
+export interface TraceabilityNode { id:string;kind:"artifact"|"evidence"|"source"|"knowledge"|"memory";label:string;subtitle:string|null;artifactType:string|null;versionNumber:number|null;status:string|null;freshness:string|null;provenance:string|null }
+export interface TraceabilityGraph { rootId:string;nodes:TraceabilityNode[];edges:Array<{from:string;to:string;relation:string}>;evidenceCount:number;sourceCount:number;knowledgeCount:number;memoryCount:number }
+export interface KnowledgeUsed { id:string;query:string;agentKey:string;contextTokenEstimate:number;createdAt:string;items:Array<{kind:"PROJECT_KNOWLEDGE"|"GLOBAL_KNOWLEDGE"|"APPROVED_MEMORY";rank:number;rawScore:number;content:string|null;title:string|null;libraryName:string|null;heading:string|null;pageNumber:number|null}> }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -74,4 +80,14 @@ export const api = {
   approveModuleVersion:(id:string,key:ModuleKey,versionId:string)=>request<ModuleResult>(`/api/projects/${id}/modules/${key}/versions/${versionId}/approve`,json("POST")),
   traceability:(id:string,versionId:string)=>request<TraceabilityGraph>(`/api/projects/${id}/versions/${versionId}/traceability`),
   youtubeStatus:()=>request<{configured:boolean}>("/api/integrations/youtube/status"),
+  knowledgeLibraries:(id:string)=>request<{libraries:KnowledgeLibrary[]}>(`/api/projects/${id}/knowledge/libraries`),
+  createKnowledgeLibrary:(id:string,input:CreateKnowledgeLibraryInput)=>request<KnowledgeLibrary>(`/api/projects/${id}/knowledge/libraries`,json("POST",input)),
+  selectKnowledgeLibrary:(id:string,libraryId:string,enabled:boolean)=>request<KnowledgeLibrary>(`/api/projects/${id}/knowledge/libraries/${libraryId}/selection`,json("PUT",{enabled})),
+  knowledgeDocuments:(id:string,libraryId:string)=>request<{documents:KnowledgeDocument[]}>(`/api/projects/${id}/knowledge/libraries/${libraryId}/documents`),
+  importKnowledgeDocument:(id:string,libraryId:string,input:ImportKnowledgeDocumentInput)=>request<KnowledgeDocument>(`/api/projects/${id}/knowledge/libraries/${libraryId}/documents`,json("POST",input)),
+  deleteKnowledgeDocument:(id:string,documentId:string)=>request<{deleted:true}>(`/api/projects/${id}/knowledge/documents/${documentId}`,json("DELETE")),
+  searchKnowledge:(id:string,q:string,filters:{libraryId?:string;scope?:"GLOBAL"|"PROJECT";category?:string;tags?:string;fileType?:string}={})=>request<{results:KnowledgeChunkResult[];total:number}>(`/api/projects/${id}/knowledge/search?${new URLSearchParams({q,...filters})}`),
+  saveMemoryDecision:(id:string,versionId:string,input:{decision:"APPROVED"|"REJECTED";reusable?:boolean;preferred?:boolean;visibility?:"PROJECT"|"GLOBAL";notes?:string;editedOutput?:unknown})=>request<{memoryId:string}>(`/api/projects/${id}/knowledge/memory/${versionId}`,json("PUT",input)),
+  askKnowledge:(id:string,question:string)=>request<{answer:string;citations:KnowledgeChunkResult[];grounded:boolean;mode:"extractive"|"openai"}>(`/api/projects/${id}/knowledge/ask`,json("POST",{question})),
+  knowledgeUsed:(id:string,generationId:string)=>request<KnowledgeUsed>(`/api/projects/${id}/generations/${generationId}/knowledge`),
 };

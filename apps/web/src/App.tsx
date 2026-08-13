@@ -7,6 +7,7 @@ import { HistoryView, ModuleView } from "./features/modules/ModuleView";
 import { OverviewView } from "./features/overview/OverviewView";
 import { ProjectsView } from "./features/projects/ProjectsView";
 import { SettingsView } from "./features/settings/SettingsView";
+import { KnowledgeView } from "./features/knowledge/KnowledgeView";
 
 export function App() {
   const [projects,setProjects]=useState<Project[]>([]),[selected,setSelected]=useState<Project|null>(null),[active,setActive]=useState<NavigationKey>("overview");
@@ -36,10 +37,11 @@ export function App() {
     :active==="overview"?<OverviewView project={selected} workflow={workflow} artifacts={artifacts} onEdit={()=>setActive("settings")} onNavigate={(key)=>{if(isNavigationKey(key))setActive(key);}}/>
     :active==="settings"?<SettingsView settings={settings} providerStatus={providerStatus} setSettings={setSettings} onSave={saveSettings} backups={backups} onBackup={()=>void createBackup()} onRestore={(filename)=>void restoreBackup(filename)}/>
     :active==="history"?<HistoryView projectId={selected.id}/>
+    :active==="knowledge"?<KnowledgeView projectId={selected.id}/>
     :isModuleKey(active)?<ModuleView projectId={selected.id} moduleKey={active} evidenceFocus={evidenceFocus} onOpenEvidence={(commentId)=>{setEvidenceFocus(commentId);setActive("sources");}} onChanged={refresh}/>
     :<ScreenState title="Módulo no disponible" message="La ruta solicitada no forma parte del workflow."/>}
   </AppShell>;
 }
 
 function messageOf(reason:unknown){return reason instanceof Error?reason.message:"Ocurrió un error inesperado.";}
-function isNavigationKey(value:string):value is NavigationKey{return ["overview","research","sources","problems","opportunities","product","avatar","mechanism","beliefs","offer","landing","funnel","emails","content","final_product","history","settings"].includes(value);}
+function isNavigationKey(value:string):value is NavigationKey{return ["overview","research","sources","problems","opportunities","product","avatar","mechanism","beliefs","offer","landing","funnel","emails","content","final_product","knowledge","history","settings"].includes(value);}

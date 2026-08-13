@@ -1,6 +1,6 @@
 import type { ModuleKey } from "@our-platform/shared";
 
-export type NavigationKey = "overview" | ModuleKey | "history" | "settings";
+export type NavigationKey = "overview" | ModuleKey | "knowledge" | "history" | "settings";
 
 export const modules: readonly { key: NavigationKey; label: string; short: string; description: string }[] = [
   { key: "overview", label: "Overview", short: "O", description: "Resumen, workflow y versiones" },
@@ -18,10 +18,10 @@ export const modules: readonly { key: NavigationKey; label: string; short: strin
   { key: "emails", label: "Emails", short: "E", description: "Secuencias y mensajes" },
   { key: "content", label: "Contenido", short: "CO", description: "Piezas, hooks y calendario" },
   { key: "final_product", label: "Producto final", short: "PF", description: "Archivos generados y lineage" },
+  { key: "knowledge", label: "Biblioteca", short: "KB", description: "Documentos locales, búsqueda, citas y memoria aprobada" },
   { key: "history", label: "Historial", short: "H", description: "Generaciones, jobs, uso y coste" },
   { key: "settings", label: "Configuración", short: "⚙", description: "Preferencias y backups" },
 ] as const;
 
 export const moduleInfo = (key: NavigationKey) => modules.find((item) => item.key === key) ?? modules[0]!;
-export const isModuleKey = (key: NavigationKey): key is ModuleKey => key !== "overview" && key !== "history" && key !== "settings";
-
+export const isModuleKey = (key: NavigationKey): key is ModuleKey => key !== "overview" && key !== "knowledge" && key !== "history" && key !== "settings";

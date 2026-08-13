@@ -1,6 +1,6 @@
 # Plan de implementación incremental
 
-> **STATUS: IMPLEMENTED.** Este archivo conserva el plan incremental original; el cierre real está en [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PHASE_16_REFINEMENT_REPORT.md](docs/PHASE_16_REFINEMENT_REPORT.md).
+> **STATUS: IMPLEMENTED HASTA FASE 17.** El cierre real está en [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md), [docs/PHASE_16_REFINEMENT_REPORT.md](docs/PHASE_16_REFINEMENT_REPORT.md) y [docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md).
 
 **Estado histórico:** planificación; no se ha creado código de producción
 **Stack fijado:** React + TypeScript + Node.js + SQLite  

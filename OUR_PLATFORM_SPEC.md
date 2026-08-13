@@ -1,6 +1,6 @@
 # Especificación de la plataforma personal de investigación y creación de productos
 
-> **STATUS: IMPLEMENTED.** Este documento conserva la especificación original; el estado verificado está en [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PHASE_16_REFINEMENT_REPORT.md](docs/PHASE_16_REFINEMENT_REPORT.md).
+> **STATUS: IMPLEMENTED — PHASE 17.** Incluye Knowledge Engine local, RAG FTS5 y memoria aprobada. Estado verificado en [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md).
 
 **Estado histórico:** diseño aprobado para planificación; todavía no implementado
 **Fecha:** 12 de agosto de 2026  

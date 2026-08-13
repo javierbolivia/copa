@@ -42,6 +42,18 @@ En **Configuración → Backups**, pulsa **Crear backup**. Para restaurar, selec
 
 Las exportaciones viven en `data/generated/` y también aparecen dentro de Landing y Producto final con acciones de descarga. Landing puede exportar el copy editado como HTML; Emails y Content exportan Markdown.
 
+## Knowledge Engine local
+
+Abre **Biblioteca** dentro de un proyecto. Una biblioteca **privada** sólo pertenece a ese proyecto; una **global** es un pack compartido que cada proyecto debe seleccionar explícitamente. Puedes describirlas y ordenarlas con dominio, categoría, tags y prioridad.
+
+La importación acepta PDF, DOCX, TXT, Markdown, HTML y notas manuales. Cada documento puede llevar descripción, categoría, tags y prioridad. El sistema extrae el texto localmente, lo divide en fragmentos trazables y lo busca con FTS5/BM25. **Ask Knowledge** recupera esos fragmentos y siempre muestra sus citas: usa OpenAI sólo si está configurado y elegido; de lo contrario presenta una síntesis extractiva local claramente etiquetada.
+
+En generación, RAG significa que cada agente recibe sólo el contexto pertinente, dentro de límites distintos según su función. Evidence sigue teniendo prioridad y los documentos se tratan como datos no confiables. **Historial → Knowledge Used** permite ver exactamente qué fragmentos influyeron, con origen, ranking y ubicación.
+
+Aprobar una versión no la vuelve automáticamente un ejemplo reutilizable. En el editor puedes elegir explícitamente **Usar como ejemplo futuro**, **Usar globalmente** o **Marcar rechazado**. Los rechazados nunca sirven como referencia positiva. El toggle en **Configuración** desactiva o activa Knowledge para las generaciones del proyecto.
+
+Los originales viven en `data/knowledge/`, entran con checksum en backups y nunca ejecutan scripts. PDF escaneado sin texto queda `NEEDS_OCR`. Embeddings están deshabilitados: FTS5 local funciona sin servicios externos.
+
 ## Verificación para desarrollo
 
 ```powershell
@@ -58,6 +70,9 @@ Stack: React + Vite, Fastify, TypeScript y SQLite mediante `node:sqlite`. La apl
 
 - [Informe final](FINAL_BUILD_REPORT.md)
 - [Informe de Fase 16](docs/PHASE_16_REFINEMENT_REPORT.md)
+- [Informe de Fase 17](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md)
+- [Auditoría open source](docs/OPEN_SOURCE_AUDIT.md)
+- [Plan futuro de búsqueda vectorial](docs/VECTOR_SEARCH_FUTURE.md)
 - [Claves e integraciones](API_KEYS_TODO.md)
 - [Problemas conocidos](KNOWN_ISSUES.md)
 - [Backup previo a schema 5](docs/PRE_SCHEMA5_BACKUP.md)

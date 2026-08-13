@@ -1,6 +1,6 @@
 # Arquitectura técnica de la plataforma local
 
-> **STATUS: IMPLEMENTED.** Este documento conserva la propuesta original; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) para la arquitectura realizada.
+> **STATUS: IMPLEMENTED — SCHEMA 6.** La arquitectura realizada añade extractores seguros, FTS5, retrieval desacoplado, memoria y trazabilidad; consulta [docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md).
 
 **Estado histórico:** propuesta de diseño; sin implementación
 **Decisión principal:** React + TypeScript + Node.js + SQLite  

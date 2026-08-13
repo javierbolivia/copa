@@ -78,10 +78,10 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 | Verificación | Estado |
 |---|---|
 | TypeScript shared/server/web | PASS |
-| Unit + integration + E2E | PASS — 39/39 |
+| Unit + integration + E2E | PASS — 65/65 |
 | Build backend | PASS |
 | Build frontend | PASS |
-| Migraciones hasta schema 5 | PASS |
+| Migraciones hasta schema 6 | PASS |
 | Demo 14/14 módulos | PASS |
 | Persistencia tras reinicio | PASS |
 | Export HTML/final files | PASS |
@@ -89,6 +89,12 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 | QA visual — 17 pantallas y editores | PASS |
 | Consola browser | PASS — sin errores/warnings |
 | Responsive 390×844 | PASS — sin overflow horizontal |
+| Knowledge 100 documentos / 10k chunks | PASS |
+| Backup/restore documentos Knowledge | PASS |
+
+## Fase 17 — Knowledge Engine
+
+La plataforma ahora incluye bibliotecas privadas/globales, ingesta segura PDF/DOCX/TXT/Markdown/HTML/manual, chunking estructural, FTS5/BM25, Ask con citas, memoria aprobada/rechazada, contexto por agente, trazabilidad Knowledge Used y backups con originales/checksums. Consulta `docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md`.
 
 La revisión inicial encontró un defecto HIGH que permitía lineage cruzado entre proyectos; fue corregido y tiene test de regresión. Las rondas posteriores corrigieron salidas fijas, scoring, invalidación, backups y atomicidad. El reviewer de Fase 16 encontró dos HIGH adicionales —regeneración con draft intermedio y pérdida del contrato canónico al editar—; ambos fueron corregidos con tests de regresión. Gate independiente final: `PASS`, sin CRITICAL/HIGH.
 

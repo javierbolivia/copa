@@ -1,7 +1,7 @@
 # Modelo de datos local
 
 **Motor:** SQLite embebida  
-> **STATUS: IMPLEMENTED — SCHEMA 5.** Se conserva el diseño lógico original; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PRE_SCHEMA5_BACKUP.md](docs/PRE_SCHEMA5_BACKUP.md).
+> **STATUS: IMPLEMENTED — SCHEMA 6.** Añade bibliotecas, documentos, chunks/FTS, memoria y logs de retrieval. Consulta [docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md).
 
 **Estado histórico:** modelo lógico; las migraciones todavía no existen
 **Objetivo:** datos normalizados, versionados y trazables sin convertir SQLite en un almacén de JSON opaco.

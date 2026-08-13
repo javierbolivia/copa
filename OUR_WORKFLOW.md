@@ -1,6 +1,6 @@
 # Workflow de proyecto y transferencia automática de contexto
 
-> **STATUS: IMPLEMENTED.** El workflow de 14 etapas, versioning, lineage y stale están operativos; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md).
+> **STATUS: IMPLEMENTED.** El workflow de 14 etapas incorpora contexto Knowledge opcional antes de generar y persiste Knowledge Used sin alterar lineage ni Evidence.
 
 **Estado histórico:** especificación operativa; sin implementación
 **Objetivo:** definir exactamente cómo pasan datos por IDs, versiones y evidencia, sin copiar/pegar.

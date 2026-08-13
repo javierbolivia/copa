@@ -9,6 +9,8 @@
 - Dominio Research → Final Product: `COMPLETED` en recorrido Demo estructurado.
 - Frontend modular y refinamiento especializado Fase 16: `COMPLETED`.
 - E2E Demo, reinicio, build, visual QA: `PASS`.
+- Fase 17, Knowledge Engine + RAG local: `COMPLETED` (schema 6).
+- Bibliotecas, extractores, FTS5, Ask, citas, memoria aprobada, Knowledge Used y backup: `PASS`.
 
 ## Trabajo multiagente
 
@@ -21,11 +23,11 @@
 ## Verificaciones finales
 
 - TypeScript: PASS.
-- Tests: PASS, 39/39.
+- Tests: PASS, 65/65.
 - Build backend/frontend: PASS.
 - E2E Demo + persistencia tras reinicio: PASS.
 - npm audit: PASS, 0 vulnerabilidades conocidas.
 - QA visual desktop: PASS; 14/14 módulos completos, archivos visibles, consola sin errores.
 - Responsive 390×844: PASS, sin overflow horizontal.
-- Fresh install (`npm ci`), schema 5, Demo y reinicio: PASS.
+- Schema 6, integridad, FK, corpus 100/10k y restore Knowledge: PASS.
 - QA independiente: primer y segundo gate detectaron HIGH; fueron corregidos. Tercer gate: PASS, sin CRITICAL/HIGH.

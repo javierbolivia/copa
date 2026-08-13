@@ -19,6 +19,8 @@ const ParamsSchema = Type.Object({
   id: Type.String({ format: "uuid" }),
   key: ModuleKeySchema,
 });
+const VersionParamsSchema=Type.Object({id:Type.String({format:"uuid"}),key:ModuleKeySchema,versionId:Type.String({format:"uuid"})});
+const EditModuleSchema=Type.Object({outputData:Type.Unknown()},{additionalProperties:false});
 
 interface Params { id: string; key: ModuleKey }
 
@@ -52,13 +54,44 @@ export function registerModuleRoutes(
         return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
       }
       try {
-        return modules.run(request.params.id, request.params.key, request.body.provider ?? "mock",request.body.instructions);
+        return await modules.run(request.params.id, request.params.key, request.body.provider,request.body.instructions);
       } catch (error) {
         return reply.code(409).send({
           error: "module_blocked",
           message: error instanceof Error ? error.message : "No se pudo ejecutar el módulo.",
         });
       }
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/providers/status",
+    { schema: { params: Type.Object({ id: Type.String({ format: "uuid" }) }) } },
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) {
+        return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
+      }
+      return modules.providerStatus(request.params.id);
+    },
+  );
+
+  app.post<{Params:Params;Body:{outputData:unknown};Reply:ModuleResult|ApiError}>(
+    "/api/projects/:id/modules/:key/drafts",
+    {schema:{params:ParamsSchema,body:EditModuleSchema,response:{201:ModuleResultSchema,404:ApiErrorSchema,409:ApiErrorSchema}}},
+    async(request,reply)=>{
+      if(!projects.get(request.params.id))return reply.code(404).send({error:"not_found",message:"El proyecto no existe."});
+      try{return reply.code(201).send(modules.saveDraft(request.params.id,request.params.key,request.body.outputData));}
+      catch(error){return reply.code(409).send({error:"edit_blocked",message:error instanceof Error?error.message:"No se pudo guardar el borrador."});}
+    },
+  );
+
+  app.post<{Params:{id:string;key:ModuleKey;versionId:string};Reply:ModuleResult|ApiError}>(
+    "/api/projects/:id/modules/:key/versions/:versionId/approve",
+    {schema:{params:VersionParamsSchema,response:{200:ModuleResultSchema,404:ApiErrorSchema,409:ApiErrorSchema}}},
+    async(request,reply)=>{
+      try{return modules.approve(request.params.id,request.params.key,request.params.versionId)
+        ?? reply.code(404).send({error:"not_found",message:"La versión no existe en este módulo."});}
+      catch(error){return reply.code(409).send({error:"approval_blocked",message:error instanceof Error?error.message:"No se pudo aprobar la versión."});}
     },
   );
 }

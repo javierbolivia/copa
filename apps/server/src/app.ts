@@ -22,11 +22,17 @@ import { ModuleService } from "./services/module-service.js";
 import { registerModuleRoutes } from "./routes/modules.js";
 import { registerDemoRoutes } from "./routes/demo.js";
 import { registerFileRoutes } from "./routes/files.js";
+import { OpenAIProvider, type OpenAIProviderOptions } from "./integrations/openai-provider.js";
+import type { ModuleServiceOptions } from "./services/module-service.js";
+import { TraceabilityService } from "./services/traceability-service.js";
+import { registerTraceabilityRoutes } from "./routes/traceability.js";
 
 export interface CreateAppOptions {
   readonly databasePath: string;
   readonly logger?: boolean;
   readonly serveFrontend?: boolean;
+  readonly openAI?: OpenAIProviderOptions;
+  readonly llm?: Omit<ModuleServiceOptions, "openAI">;
 }
 
 export async function createApp(
@@ -43,7 +49,17 @@ export async function createApp(
   const backups = new BackupService(database);
   const dataRoot = options.databasePath === ":memory:" ? resolve(tmpdir(),"our-platform-test-files") : resolve(options.databasePath, "..");
   const exporter = new FileExporterService(database, dataRoot);
-  const modules = new ModuleService(database, artifacts, workflow, exporter);
+  const openAI = new OpenAIProvider({
+    ...(process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : {}),
+    ...options.openAI,
+  });
+  const modules = new ModuleService(database, artifacts, workflow, exporter, settings, {
+    openAI,
+    ...(process.env.OPENAI_ECONOMY_MODEL ? { economyModel: process.env.OPENAI_ECONOMY_MODEL } : {}),
+    ...(process.env.OPENAI_POWERFUL_MODEL ? { powerfulModel: process.env.OPENAI_POWERFUL_MODEL } : {}),
+    ...options.llm,
+  });
+  const traceability = new TraceabilityService(database);
 
   app.addHook("onClose", async () => {
     database.close();
@@ -57,6 +73,7 @@ export async function createApp(
   registerModuleRoutes(app, projects, modules);
   registerDemoRoutes(app, projects, sources, modules);
   registerFileRoutes(app, projects, exporter);
+  registerTraceabilityRoutes(app, traceability);
   youtubeImports.resumePending();
 
   if (options.serveFrontend ?? true) {

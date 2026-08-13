@@ -1,12 +1,26 @@
-import type { ModuleKey, ModuleResult } from "@our-platform/shared";
+import type { LlmGenerateResult, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
 import { createDemoOutput } from "../domain/demo-outputs.js";
 import { getModule } from "../domain/module-registry.js";
 import type { ArtifactRepository } from "../repositories/artifact-repository.js";
+import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
 import type { WorkflowRepository } from "../repositories/workflow-repository.js";
+import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { FileExporterService } from "./file-exporter-service.js";
+import { MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
+import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
+
+export interface ModuleServiceOptions {
+  readonly openAI: OpenAIProvider;
+  readonly economyModel?: string;
+  readonly powerfulModel?: string;
+  readonly economyInputCostPerMillion?: number;
+  readonly economyOutputCostPerMillion?: number;
+  readonly powerfulInputCostPerMillion?: number;
+  readonly powerfulOutputCostPerMillion?: number;
+}
 
 export class ModuleService {
   constructor(
@@ -14,7 +28,21 @@ export class ModuleService {
     private readonly artifacts: ArtifactRepository,
     private readonly workflow: WorkflowRepository,
     private readonly exporter: FileExporterService,
+    private readonly settings: ProjectSettingsRepository,
+    private readonly options: ModuleServiceOptions,
   ) {}
+
+  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; defaultProvider: "mock" | "openai" } {
+    const projectSettings = projectId ? this.settings.get(projectId) : undefined;
+    return {
+      openai: {
+        configured: this.options.openAI.configured,
+        economyModel: projectSettings?.economyModel?.trim() || this.options.economyModel || "gpt-5-mini",
+        powerfulModel: projectSettings?.powerfulModel?.trim() || this.options.powerfulModel || "gpt-5",
+      },
+      defaultProvider: projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
+    };
+  }
 
   get(projectId: string, key: ModuleKey): ModuleResult | undefined {
     const row = this.db.connection.prepare(`
@@ -46,12 +74,32 @@ export class ModuleService {
       .map((version) => this.toResult(version));
   }
 
-  run(projectId: string, key: ModuleKey, provider = "mock", instructions?:string): ModuleResult {
+  saveDraft(projectId:string,key:ModuleKey,outputData:unknown):ModuleResult {
+    const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
+    const current=this.get(projectId,key);if(!current)throw new Error("Genera una versión antes de editarla.");
+    const parentIds=this.db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE project_id=? AND child_version_id=? ORDER BY created_at").all(projectId,current.versionId) as unknown as Array<{parent_version_id:string}>;
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{editedFromVersionId:current.versionId,source:"user"},outputData,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    return this.toResult(version);
+  }
+
+  approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
+    const version=this.artifacts.getVersion(versionId);if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
+    const approved=this.artifacts.approveVersion(projectId,versionId);return approved?this.toResult(approved):undefined;
+  }
+
+  async run(projectId: string, key: ModuleKey, provider?: string, instructions?:string): Promise<ModuleResult> {
     const definition = getModule(key);
     if (!definition) throw new Error("Módulo desconocido.");
-    if (provider !== "mock") {
-      throw new Error("La ejecución OpenAI requiere configuración explícita; usa Demo/Mock sin claves.");
+    const projectSettings = this.settings.get(projectId);
+    const requestedProvider = provider ?? projectSettings?.preferredLlmProvider ?? "mock";
+    if (requestedProvider !== "mock" && requestedProvider !== "openai") {
+      throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
     }
+    const selectedProvider = key === "sources" ? "mock" : requestedProvider;
+    if (selectedProvider === "openai" && !this.options.openAI.configured) {
+      throw new Error("OpenAI no esta configurado. Define OPENAI_API_KEY o ejecuta con el proveedor Mock.");
+    }
+    const startedAt = Date.now();
 
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
     for (const parentKey of definition.parents) {
@@ -60,7 +108,7 @@ export class ModuleService {
         const sourceCount = (this.db.connection.prepare(
           "SELECT COUNT(*) AS total FROM sources WHERE project_id = ? AND status IN ('ready', 'completed')",
         ).get(projectId) as { total: number }).total;
-        if (sourceCount > 0) parent = this.run(projectId, "sources", provider);
+        if (sourceCount > 0) parent = await this.run(projectId, "sources", "mock");
       }
       if (!parent) throw new Error(`Falta completar ${parentKey}.`);
       if (parent.freshness === "stale") throw new Error(`${parentKey} está obsoleto.`);
@@ -79,8 +127,42 @@ export class ModuleService {
     const evidenceIds = evidence.map((row) => row.id);
     const project = this.db.connection.prepare("SELECT name,niche FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string };
     const base=project.name.startsWith("DEMO")?createDemoOutput(key,evidenceIds):createContextOutput(key,project.niche,evidence,parentOutputs);
-    const output = contextualize(base, key, project.niche, evidence);
-    if(instructions?.trim())output.additionalInstructionsApplied=instructions.trim();
+    let output = contextualize(base, key, project.niche, evidence);
+    let agentKey: string = key;
+    let promptVersion = "demo-v1";
+    let promptHash: string | undefined;
+    let promptPath: string | undefined;
+    let model = "demo-deterministic-v1";
+    let usage: LlmGenerateResult<Record<string, unknown>>["usage"] = {
+      inputTokens: 0, outputTokens: 0, estimatedCost: 0, currency: "USD", usageKind: "estimated",
+    };
+    let reportedModel: string | undefined;
+    let providerInput: Record<string, unknown> | undefined;
+    if (selectedProvider === "openai" && key !== "sources") {
+      const prompt = getModulePrompt(key);
+      if (!prompt) throw new Error(`No existe un prompt activo para el modulo ${key}.`);
+      agentKey = prompt.agentKey;
+      promptVersion = prompt.versionHash;
+      promptHash = prompt.hash;
+      promptPath = prompt.relativePath;
+      model = resolveModel(prompt.modelTier, projectSettings, this.options);
+      providerInput = {
+        project: { name: project.name, niche: project.niche }, settings: projectSettings,
+        moduleKey: key, parentOutputs, evidence,
+        additionalInstructions: instructions?.trim() || null,
+      };
+      const generated = await this.options.openAI.generate<Record<string, unknown>>({
+        provider: "openai",
+        model,
+        systemInstructions: `${prompt.instructions}\n\nReglas de ejecucion: conserva evidenceIds validos; distingue evidencia de inferencias; no inventes cifras, testimonios, ventas ni credenciales.`,
+        input: JSON.stringify(providerInput),
+        structuredOutput: { name: `${key}_output`, jsonSchema: MODULE_OUTPUT_SCHEMAS[key] },
+        maxOutputTokens: 8_000,
+      });
+      output = generated.output;
+      usage = generated.usage;
+      reportedModel = generated.reportedModel;
+    } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
         SELECT
@@ -96,11 +178,16 @@ export class ModuleService {
       output.commentCount = counts.commentCount;
       output.isDemo = counts.allDemo === 1;
     }
-    const startedAt = Date.now();
     const generationId = uuidv7();
-    const inputSnapshot = { parentVersionIds: parentIds, evidenceIds, moduleKey: key, ...(instructions?.trim()?{instructions:instructions.trim()}: {}) };
-    const inputTokens = Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
-    const outputTokens = Math.ceil(JSON.stringify(output).length / 4);
+    const inputSnapshot = {
+      parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
+      ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
+      ...(providerInput ? { context: providerInput } : {}),
+      ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
+    };
+    const inputTokens = usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
+    const outputTokens = usage.outputTokens || Math.ceil(JSON.stringify(output).length / 4);
+    const estimatedCost = usage.estimatedCost ?? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options);
     const now = new Date().toISOString();
 
     const existing = this.db.connection.prepare(
@@ -125,18 +212,18 @@ export class ModuleService {
         id, project_id, agent_key, provider, model, status, input_snapshot,
         output_data, prompt_version, input_tokens, output_tokens,
         estimated_cost, duration_ms, created_at, completed_at
-      ) VALUES (?, ?, ?, 'mock', 'demo-deterministic-v1', 'COMPLETED', ?, ?,
-        'demo-v1', ?, ?, 0, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      generationId, projectId, key, JSON.stringify(inputSnapshot), JSON.stringify(output),
-      inputTokens, outputTokens, Date.now() - startedAt, now, now,
+      generationId, projectId, agentKey, selectedProvider, model, JSON.stringify(inputSnapshot), JSON.stringify(output),
+      promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, now, now,
     );
     this.db.connection.prepare(`
       INSERT INTO llm_usage (
         id, project_id, generation_id, provider, model, input_tokens,
         output_tokens, estimated_cost, currency, is_estimate, recorded_at
-      ) VALUES (?, ?, ?, 'mock', 'demo-deterministic-v1', ?, ?, 0, 'USD', 1, ?)
-    `).run(uuidv7(), projectId, generationId, inputTokens, outputTokens, now);
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?)
+    `).run(uuidv7(), projectId, generationId, selectedProvider, model, inputTokens, outputTokens, estimatedCost, usage.usageKind === "provider_reported" ? 0 : 1, now);
 
     for(const evidenceId of referencedEvidenceIds(output,evidenceIds)){
       this.db.connection.prepare(`INSERT OR IGNORE INTO evidence_links(id,project_id,target_type,target_id,source_type,source_id,relation,created_at) VALUES(?,?,'artifact_version',?,'evidence_snippet',?,'supports',?)`).run(uuidv7(),projectId,version.id,evidenceId,now);
@@ -162,6 +249,25 @@ export class ModuleService {
       createdAt: version.createdAt,
     };
   }
+}
+
+function modelTierFor(key: ModuleKey): ModelTier {
+  return getModulePrompt(key)?.modelTier ?? "economy";
+}
+
+function resolveModel(tier: ModelTier, settings: ProjectSettings | undefined, options: ModuleServiceOptions): string {
+  if (tier === "powerful") return settings?.powerfulModel?.trim() || options.powerfulModel || "gpt-5";
+  return settings?.economyModel?.trim() || options.economyModel || "gpt-5-mini";
+}
+
+function estimateCost(tier: ModelTier, inputTokens: number, outputTokens: number, options: ModuleServiceOptions): number {
+  const inputRate = tier === "powerful"
+    ? options.powerfulInputCostPerMillion ?? 1.25
+    : options.economyInputCostPerMillion ?? 0.25;
+  const outputRate = tier === "powerful"
+    ? options.powerfulOutputCostPerMillion ?? 10
+    : options.economyOutputCostPerMillion ?? 2;
+  return Number(((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000).toFixed(8));
 }
 
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{

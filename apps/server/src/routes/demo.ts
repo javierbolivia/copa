@@ -30,11 +30,11 @@ export function registerDemoRoutes(
       });
 
       const results: ModuleResult[] = [];
-      results.push(modules.run(project.id, "research", "mock"));
+      results.push(await modules.run(project.id, "research", "mock"));
       sources.createDemo(project.id, "Comentarios DEMO · organización de fotografías");
       for (const definition of MODULES) {
         if (definition.key === "research") continue;
-        results.push(modules.run(project.id, definition.key, "mock"));
+        results.push(await modules.run(project.id, definition.key, "mock"));
       }
       return reply.code(201).send({ project: projects.get(project.id)!, results });
     },

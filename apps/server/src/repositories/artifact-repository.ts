@@ -2,7 +2,7 @@ import type { ArtifactVersion } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
 
-interface CreateVersionInput { projectId:string; artifactType:string; name:string; artifactId?:string; inputSnapshot:unknown; outputData:unknown; parentVersionIds?:string[]; }
+interface CreateVersionInput { projectId:string; artifactType:string; name:string; artifactId?:string; inputSnapshot:unknown; outputData:unknown; parentVersionIds?:string[]; status?:"draft"|"approved"; }
 
 export class ArtifactRepository {
   constructor(private readonly database: AppDatabase) {}
@@ -19,15 +19,30 @@ export class ArtifactRepository {
       }
       for(const parentId of input.parentVersionIds??[]){const parent=db.prepare("SELECT project_id FROM artifact_versions WHERE id=?").get(parentId) as {project_id:string}|undefined;if(!parent||parent.project_id!==input.projectId)throw new Error("La versión padre no pertenece al proyecto.");}
       const previous=db.prepare("SELECT id,version_number FROM artifact_versions WHERE artifact_id=? ORDER BY version_number DESC LIMIT 1").get(artifactId) as {id:string;version_number:number}|undefined;
-      const id=uuidv7(), versionNumber=(previous?.version_number??0)+1;
-      if(previous) db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(previous.id);
-      db.prepare(`INSERT INTO artifact_versions (id,project_id,artifact_id,version_number,status,freshness,input_snapshot,output_data,supersedes_version_id,created_at) VALUES (?,?,?,?, 'approved','fresh',?,?,?,?)`)
-        .run(id,input.projectId,artifactId,versionNumber,JSON.stringify(input.inputSnapshot),JSON.stringify(input.outputData),previous?.id??null,now);
-      db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=?").run(id,artifactId);
+      const id=uuidv7(), versionNumber=(previous?.version_number??0)+1, status=input.status??"approved";
+      if(previous&&status==="approved") db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(previous.id);
+      db.prepare(`INSERT INTO artifact_versions (id,project_id,artifact_id,version_number,status,freshness,input_snapshot,output_data,supersedes_version_id,created_at) VALUES (?,?,?,?,?,'fresh',?,?,?,?)`)
+        .run(id,input.projectId,artifactId,versionNumber,status,JSON.stringify(input.inputSnapshot),JSON.stringify(input.outputData),previous?.id??null,now);
+      if(status==="approved")db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=?").run(id,artifactId);
       for(const parentId of input.parentVersionIds??[]) db.prepare("INSERT INTO lineage_edges (id,project_id,parent_version_id,child_version_id,relation,created_at) VALUES (?,?,?,?, 'derived_from',?)").run(uuidv7(),input.projectId,parentId,id,now);
-      if(previous) this.propagateStale(previous.id,id,input.projectId,now);
+      if(previous&&status==="approved") this.propagateStale(previous.id,id,input.projectId,now);
       if(ownsTransaction)db.exec("COMMIT"); return this.getVersion(id)!;
     } catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
+  }
+  approveVersion(projectId:string,id:string):ArtifactVersion|undefined {
+    const db=this.database.connection,version=db.prepare(`SELECT v.id,v.artifact_id,v.status,a.active_version_id,a.artifact_type FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.id=? AND v.project_id=?`).get(id,projectId) as {id:string;artifact_id:string;status:string;active_version_id:string|null;artifact_type:string}|undefined;
+    if(!version)return undefined;
+    if(version.status==="approved"&&version.active_version_id===id)return this.getVersion(id);
+    if(version.status!=="draft")throw new Error("Sólo una versión draft puede aprobarse.");
+    const now=new Date().toISOString();db.exec("BEGIN IMMEDIATE");
+    try{
+      if(version.active_version_id){db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(version.active_version_id);}
+      db.prepare("UPDATE artifact_versions SET status='approved' WHERE id=?").run(id);
+      db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=? AND project_id=?").run(id,version.artifact_id,projectId);
+      if(version.active_version_id)this.propagateStale(version.active_version_id,id,projectId,now);
+      this.database.connection.prepare("UPDATE workflow_steps SET state='COMPLETED',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key=?").run(now,projectId,version.artifact_type);
+      db.exec("COMMIT");return this.getVersion(id);
+    }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   private propagateStale(oldId:string,newId:string,projectId:string,now:string):void {
     const descendants=this.database.connection.prepare(`WITH RECURSIVE d(id) AS (SELECT child_version_id FROM lineage_edges WHERE parent_version_id=? UNION SELECT le.child_version_id FROM lineage_edges le JOIN d ON le.parent_version_id=d.id) SELECT DISTINCT d.id,a.artifact_type FROM d JOIN artifact_versions v ON v.id=d.id JOIN artifacts a ON a.id=v.artifact_id`).all(oldId) as unknown as Array<{id:string;artifact_type:string}>;

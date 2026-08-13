@@ -1,0 +1,87 @@
+import type { GeneratedFile, ModuleKey, ModuleResult } from "@our-platform/shared";
+import { useEffect, useMemo, useState } from "react";
+import type { TraceabilityGraph } from "../../api/client";
+import { api } from "../../api/client";
+import { AvatarEditor, BeliefsEditor, LandingBuilder, MechanismEditor, OfferEditor, ProductEditor } from "./index";
+import type { AvatarEditorValue, BeliefsEditorValue, LandingEditorValue, LandingVersion, MechanismEditorValue, OfferEditorValue, ProductEditorValue } from "./types";
+import { ContentWorkspace, EmailsWorkspace, FunnelWorkspace, ProductFinalWorkspace, type CampaignContent, type CampaignEmail, type FunnelNode, type ProductFile } from "./CampaignWorkspaces";
+
+export interface RefinedModuleOutputProps {
+  projectId:string;
+  moduleKey:ModuleKey;
+  selected:ModuleResult;
+  versions:ModuleResult[];
+  files:GeneratedFile[];
+  onVersionCreated:(version:ModuleResult)=>void;
+  onSelectVersion:(versionId:string)=>void;
+}
+
+export function RefinedModuleOutput(props:RefinedModuleOutputProps) {
+  const {moduleKey,selected}=props;
+  const [saving,setSaving]=useState(false),[message,setMessage]=useState<string|null>(null),[trace,setTrace]=useState<TraceabilityGraph|null>(null);
+  const save=async(outputData:unknown)=>{setSaving(true);setMessage(null);try{const draft=await api.saveModuleDraft(props.projectId,moduleKey,outputData);props.onVersionCreated(draft);setMessage("Borrador guardado. Revísalo y apruébalo cuando esté listo.");}finally{setSaving(false);}};
+  const approve=async()=>{setSaving(true);setMessage(null);try{const approved=await api.approveModuleVersion(props.projectId,moduleKey,selected.versionId);props.onVersionCreated(approved);setMessage("Versión aprobada y disponible para módulos posteriores.");}finally{setSaving(false);}};
+  const openTrace=async()=>setTrace(await api.traceability(props.projectId,selected.versionId));
+  return <>
+    {message&&<div className="refinement-feedback" role="status">{message}</div>}
+    <div className="refinement-approval-bar"><span>v{selected.versionNumber} · {selected.status} · {selected.freshness}</span><button className="button secondary" type="button" onClick={()=>void openTrace()}>Ver origen</button>{selected.status==="draft"&&<button className="button primary" disabled={saving} type="button" onClick={()=>void approve()}>Aprobar versión</button>}</div>
+    <Specialized moduleKey={moduleKey} selected={selected} versions={props.versions} files={props.files} saving={saving} onSave={save} onSelectVersion={props.onSelectVersion} onTrace={()=>void openTrace()} />
+    {trace&&<TraceDialog graph={trace} onClose={()=>setTrace(null)}/>} 
+  </>;
+}
+
+function Specialized({moduleKey,selected,versions,files,saving,onSave,onSelectVersion,onTrace}:{moduleKey:ModuleKey;selected:ModuleResult;versions:ModuleResult[];files:GeneratedFile[];saving:boolean;onSave:(value:unknown)=>Promise<void>;onSelectVersion:(id:string)=>void;onTrace:()=>void}) {
+  const output=record(selected.outputData);
+  if(moduleKey==="product")return <ProductEditor value={toProduct(output)} onSave={onSave} saving={saving} onOpenTraceability={onTrace}/>;
+  if(moduleKey==="avatar")return <AvatarEditor value={toAvatar(output)} onSave={onSave} saving={saving} onOpenTraceability={onTrace}/>;
+  if(moduleKey==="mechanism")return <MechanismEditor value={toMechanism(output)} onSave={onSave} saving={saving} onOpenTraceability={onTrace}/>;
+  if(moduleKey==="beliefs")return <BeliefsEditor value={toBeliefs(output)} onSave={onSave} saving={saving} onOpenTraceability={onTrace}/>;
+  if(moduleKey==="offer")return <OfferEditor value={toOffer(output)} onSave={onSave} saving={saving} onOpenTraceability={onTrace}/>;
+  if(moduleKey==="landing"){
+    const landingVersions:LandingVersion[]=versions.map(item=>({id:item.versionId,versionNumber:item.versionNumber,createdAt:item.createdAt,status:item.status,value:toLanding(record(item.outputData))}));
+    return <LandingBuilder value={toLanding(output)} versions={landingVersions} selectedVersionId={selected.versionId} saving={saving} onSave={onSave} onSelectVersion={onSelectVersion} onExportHtml={exportLandingHtml} onOpenTraceability={onTrace}/>;
+  }
+  if(moduleKey==="funnel")return <FunnelAdapter output={output} onSave={onSave}/>;
+  if(moduleKey==="emails")return <EmailsAdapter output={output} onSave={onSave}/>;
+  if(moduleKey==="content")return <ContentAdapter output={output} onSave={onSave}/>;
+  if(moduleKey==="final_product")return <ProductFinalWorkspace files={toFiles(files.filter(file=>file.artifactVersionId===selected.versionId),selected.versionNumber)} onOpen={(id)=>openFile(files,id)} onExport={(id)=>openFile(files,id)} onRegenerate={()=>void onSave(output)} onViewSource={onTrace}/>;
+  return null;
+}
+
+function FunnelAdapter({output,onSave}:{output:Record<string,unknown>;onSave:(value:unknown)=>Promise<void>}){
+  const initial=toFunnel(output),[nodes,setNodes]=useState(initial);useEffect(()=>setNodes(initial),[JSON.stringify(output)]);
+  const update=(node:FunnelNode)=>setNodes(current=>current.map(item=>item.id===node.id?node:item));
+  return <><FunnelWorkspace nodes={nodes} onUpdate={update} onReorder={(ids)=>setNodes(ids.map(id=>nodes.find(item=>item.id===id)!).filter(Boolean))}/><SaveBar onSave={()=>onSave({...output,nodes:nodes.map(node=>({id:node.id,type:node.stage,label:node.name,description:node.description,active:node.active,linkedArtifact:node.linkedArtifact}))})}/></>;
+}
+function EmailsAdapter({output,onSave}:{output:Record<string,unknown>;onSave:(value:unknown)=>Promise<void>}){
+  const initial=toEmails(output),[items,setItems]=useState(initial);useEffect(()=>setItems(initial),[JSON.stringify(output)]);
+  const exportItems=(ids:string[])=>downloadText("emails.md",items.filter(item=>ids.includes(item.id)).map((item,index)=>`# Email ${index+1}: ${item.subject}\n\nDelay: ${item.delay}\n\n${item.body}\n\nCTA: ${item.cta}`).join("\n\n---\n\n"));
+  return <><EmailsWorkspace emails={items} onUpdate={(item)=>setItems(current=>current.map(value=>value.id===item.id?item:value))} onReorder={(ids)=>setItems(ids.map(id=>items.find(item=>item.id===id)!).filter(Boolean))} onExport={exportItems}/><SaveBar onSave={()=>onSave({...output,sequences:[{type:"edited",emails:items}]})}/></>;
+}
+function ContentAdapter({output,onSave}:{output:Record<string,unknown>;onSave:(value:unknown)=>Promise<void>}){
+  const initial=toContent(output),[items,setItems]=useState(initial);useEffect(()=>setItems(initial),[JSON.stringify(output)]);
+  const exportItems=(ids:string[])=>downloadText("content.md",items.filter(item=>ids.includes(item.id)).map(item=>`# ${item.title}\n\n${item.body}`).join("\n\n---\n\n"));
+  return <><ContentWorkspace items={items} onUpdate={(item)=>setItems(current=>current.map(value=>value.id===item.id?item:value))} onDuplicate={(id)=>setItems(current=>{const source=current.find(item=>item.id===id);return source?[...current,{...source,id:crypto.randomUUID(),title:`${source.title} (copia)`}]:current;})} onDelete={(id)=>setItems(current=>current.filter(item=>item.id!==id))} onExport={exportItems}/><SaveBar onSave={()=>onSave({...output,calendar:items})}/></>;
+}
+function SaveBar({onSave}:{onSave:()=>Promise<void>}){return <div className="refinement-save-bar"><span>Los cambios se guardan como una nueva versión draft.</span><button className="button primary" type="button" onClick={()=>void onSave()}>Guardar cambios</button></div>}
+
+function TraceDialog({graph,onClose}:{graph:TraceabilityGraph;onClose:()=>void}){const artifacts=graph.nodes.filter(node=>node.kind==="artifact"),evidence=graph.nodes.filter(node=>node.kind==="evidence"),sources=graph.nodes.filter(node=>node.kind==="source");return <div className="refinement-dialog-backdrop" onMouseDown={onClose}><section className="refinement-dialog" role="dialog" aria-modal="true" aria-label="Trazabilidad" onMouseDown={event=>event.stopPropagation()}><header><div><span className="eyebrow">TRACEABILITY</span><h2>¿De dónde sale esto?</h2><p>{artifacts.length} versiones · {graph.evidenceCount} evidencias · {graph.sourceCount} fuentes</p></div><button aria-label="Cerrar" onClick={onClose}>×</button></header><div className="refinement-trace-chain">{artifacts.map(node=><article className={node.id===graph.rootId?"current":""} key={node.id}><span>{node.artifactType}</span><strong>{node.label}</strong><small>{node.status} · {node.freshness}</small></article>)}</div>{sources.length>0&&<div className="refinement-trace-sources"><h3>Fuentes</h3>{sources.map(node=><p key={node.id}><strong>{node.label}</strong> · {node.subtitle}</p>)}</div>}{evidence.length>0&&<div className="refinement-trace-evidence"><h3>Evidencia vinculada</h3>{evidence.slice(0,20).map(node=><blockquote key={node.id}>“{node.label}”<footer>{node.subtitle}</footer></blockquote>)}</div>}</section></div>}
+
+const record=(value:unknown):Record<string,unknown>=>value&&typeof value==="object"&&!Array.isArray(value)?value as Record<string,unknown>:{};
+const strings=(value:unknown):string[]=>Array.isArray(value)?value.map(item=>typeof item==="string"?item:typeof item==="object"&&item!==null?String((item as Record<string,unknown>).text??(item as Record<string,unknown>).name??""):String(item)).filter(Boolean):[];
+const text=(value:unknown)=>typeof value==="string"?value:"";
+function toProduct(value:Record<string,unknown>):ProductEditorValue{const proposal=record((Array.isArray(value.proposals)?value.proposals[0]:value));return{name:text(proposal.name),promise:text(proposal.promise),format:text(proposal.format),modules:strings(proposal.modules).map((name,index)=>({id:`module-${index}`,name,outcome:""})),deliverables:strings(proposal.deliverables),bonuses:strings(proposal.bonuses)}}
+function toAvatar(value:Record<string,unknown>):AvatarEditorValue{return{situation:strings(value.currentSituation)[0]??"",pains:strings(value.pains),desires:[...strings(value.desires),...strings(value.desiredOutcome)],objections:strings(value.objections),language:strings(value.language),evidence:strings(value.evidenceIds)}}
+function toMechanism(value:Record<string,unknown>):MechanismEditorValue{return{name:text(value.mechanism),problem:text(value.perceivedProblem),oldWay:text(value.apparentCause),uniqueMechanism:text(value.solutionMechanism)||text(value.mechanism),whyItWorks:text(value.detailedExplanation)||text(value.simpleExplanation),steps:strings(value.alternatives),proof:strings(value.evidenceIds)}}
+function toBeliefs(value:Record<string,unknown>):BeliefsEditorValue{return{bigIdea:text(value.centralThesis),currentBeliefs:strings(value.currentBeliefs),bridgeBeliefs:strings(value.arguments),requiredBeliefs:strings(value.requiredBeliefs),objections:strings(value.objections)}}
+function component(value:unknown){const item=record(value);return{name:text(item.name),description:text(item.description)}}
+function toOffer(value:Record<string,unknown>):OfferEditorValue{const price=record(value.pricingSuggestion);return{mainOffer:text(value.promise)||text(value.name),pricing:{amount:price.amount==null?"":String(price.amount),currency:text(price.currency)||"USD",terms:text(price.rationale)},bonuses:strings(value.bonuses).map(name=>({name,description:""})),guarantee:text(value.guaranteeSuggestion),orderBump:component(value.orderBump),upsell:component(value.upsell),downsell:component(value.downsell)}}
+function section(value:Record<string,unknown>,type:string){const item=(Array.isArray(value.sections)?value.sections:[]).map(record).find(entry=>entry.type===type)??{};return{eyebrow:type.toUpperCase(),headline:text(item.headline)||text(item.subheadline),body:text(item.body)}}
+function toLanding(value:Record<string,unknown>):LandingEditorValue{return{pageName:text(value.title)||"Landing",hero:section(value,"hero"),problem:section(value,"problem"),solution:section(value,"mechanism"),benefits:strings((Array.isArray(value.sections)?value.sections:[]).map(record).find(item=>item.type==="benefits")?.items),offer:section(value,"offer"),guarantee:text((Array.isArray(value.sections)?value.sections:[]).map(record).find(item=>item.type==="guarantee")?.body),ctaLabel:text((Array.isArray(value.sections)?value.sections:[]).map(record).find(item=>item.type==="cta")?.cta)||"Comenzar",footerNote:"Sin testimonios ni métricas inventadas."}}
+function toFunnel(value:Record<string,unknown>):FunnelNode[]{return (Array.isArray(value.nodes)?value.nodes:[]).map(record).map((node,index)=>({id:text(node.id)||`node-${index}`,name:text(node.label)||text(node.type),stage:text(node.type),description:text(node.description),active:node.active!==false,linkedArtifact:text(node.linkedArtifact)}))}
+function toEmails(value:Record<string,unknown>):CampaignEmail[]{const result:CampaignEmail[]=[];(Array.isArray(value.sequences)?value.sequences:[]).map(record).forEach((sequence,sequenceIndex)=>(Array.isArray(sequence.emails)?sequence.emails:[]).map(record).forEach((email,index)=>result.push({id:`${sequenceIndex}-${index}`,name:text(sequence.type)||`Email ${index+1}`,subject:text(email.subject),previewText:text(email.preheader),body:text(email.body),cta:text(email.cta),delay:text(email.delay)||(index===0?"Inmediato":`+${index} día`),status:"READY"})));return result}
+function toContent(value:Record<string,unknown>):CampaignContent[]{return (Array.isArray(value.calendar)?value.calendar:[]).map(record).map((item,index)=>({id:`content-${index}`,title:text(item.hook)||`Contenido ${index+1}`,format:text(item.type)||"Educational",channel:text(item.channel)||"Facebook",status:"READY",body:text(item.body),updatedAt:new Date().toISOString()}))}
+function toFiles(files:GeneratedFile[],version:number):ProductFile[]{return files.map(file=>({id:file.id,name:file.fileRole.replaceAll("_"," "),format:file.format,status:"READY",sizeLabel:`${file.bytes.toLocaleString("es")} bytes`,updatedAt:file.createdAt,version}))}
+function openFile(files:GeneratedFile[],id:string){const file=files.find(item=>item.id===id);if(file)window.open(file.downloadUrl,"_blank","noopener,noreferrer")}
+function downloadText(name:string,content:string){const url=URL.createObjectURL(new Blob([content],{type:"text/markdown;charset=utf-8"}));const anchor=document.createElement("a");anchor.href=url;anchor.download=name;anchor.click();URL.revokeObjectURL(url)}
+function exportLandingHtml(value:LandingEditorValue){const escape=(item:string)=>item.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");const sections=[value.hero,value.problem,value.solution,value.offer];const html=`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(value.pageName)}</title><style>body{font-family:system-ui,sans-serif;max-width:800px;margin:auto;padding:48px 24px;line-height:1.6;color:#18222d}section{padding:32px 0;border-bottom:1px solid #dfe5ea}.eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#657381}h1,h2{line-height:1.15}button{background:#176b5b;color:white;border:0;border-radius:8px;padding:14px 22px;font-weight:700}</style></head><body><main><h1>${escape(value.pageName)}</h1>${sections.map((section,index)=>`<section><span class="eyebrow">${escape(section.eyebrow)}</span><h${index===0?"1":"2"}>${escape(section.headline)}</h${index===0?"1":"2"}><p>${escape(section.body)}</p></section>`).join("")}<section><h2>Beneficios</h2><ul>${value.benefits.map(item=>`<li>${escape(item)}</li>`).join("")}</ul></section><section><h2>Garantía</h2><p>${escape(value.guarantee)}</p><button>${escape(value.ctaLabel)}</button></section></main><footer><small>${escape(value.footerNote)}</small></footer></body></html>`;const url=URL.createObjectURL(new Blob([html],{type:"text/html;charset=utf-8"}));const anchor=document.createElement("a");anchor.href=url;anchor.download="landing.html";anchor.click();URL.revokeObjectURL(url)}

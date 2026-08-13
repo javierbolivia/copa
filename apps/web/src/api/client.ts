@@ -24,6 +24,10 @@ export class ApiClientError extends Error {
   }
 }
 
+export interface ProviderStatus { openai:{configured:boolean;economyModel:string;powerfulModel:string};defaultProvider:"mock"|"openai" }
+export interface TraceabilityNode { id:string;kind:"artifact"|"evidence"|"source";label:string;subtitle:string|null;artifactType:string|null;versionNumber:number|null;status:string|null;freshness:string|null;provenance:string|null }
+export interface TraceabilityGraph { rootId:string;nodes:TraceabilityNode[];edges:Array<{from:string;to:string;relation:string}>;evidenceCount:number;sourceCount:number }
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   if (!response.ok) {
@@ -65,4 +69,9 @@ export const api = {
   evidence: (id: string, evidenceId: string) => request<EvidenceSnippet>(`/api/projects/${id}/evidence/${evidenceId}`),
   moduleResults: (id: string, key: ModuleKey) => request<{ results: ModuleResult[] }>(`/api/projects/${id}/modules/${key}`),
   runModule: (id: string, key: ModuleKey, input: RunModuleInput) => request<ModuleResult>(`/api/projects/${id}/modules/${key}/run`, json("POST", input)),
+  providerStatus:(id:string)=>request<ProviderStatus>(`/api/projects/${id}/providers/status`),
+  saveModuleDraft:(id:string,key:ModuleKey,outputData:unknown)=>request<ModuleResult>(`/api/projects/${id}/modules/${key}/drafts`,json("POST",{outputData})),
+  approveModuleVersion:(id:string,key:ModuleKey,versionId:string)=>request<ModuleResult>(`/api/projects/${id}/modules/${key}/versions/${versionId}/approve`,json("POST")),
+  traceability:(id:string,versionId:string)=>request<TraceabilityGraph>(`/api/projects/${id}/versions/${versionId}/traceability`),
+  youtubeStatus:()=>request<{configured:boolean}>("/api/integrations/youtube/status"),
 };

@@ -70,7 +70,7 @@ describe("OpenAIProvider", () => {
     expect(calls[0]!.url).toBe("https://api.openai.com/v1/responses");
     const body = JSON.parse(String(calls[0]!.init?.body));
     expect(body).toMatchObject({ model: "demo-model", instructions: request.systemInstructions, input: request.input, max_output_tokens: 250 });
-    expect(body.text.format).toMatchObject({ type: "json_schema", name: "demo", strict: true });
+    expect(body.text.format).toMatchObject({ type: "json_schema", name: "demo", strict: false });
   });
 
   it("falla localmente sin clave y tipa rate limits", async () => {

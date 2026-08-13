@@ -70,6 +70,18 @@ export class OpenAIProvider implements LlmProvider {
   }
 
   async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
+    try {
+      return await this.requestOnce<TOutput>(request);
+    } catch (error) {
+      if (!(error instanceof IntegrationError) || error.code !== "schema_mismatch" || !request.structuredOutput) throw error;
+      return this.requestOnce<TOutput>({
+        ...request,
+        input: `${request.input}\n\nREPARACION DE FORMATO (unico reintento): la respuesta anterior no cumplio el JSON Schema. Devuelve solamente un objeto JSON valido que cumpla exactamente el schema solicitado. No agregues markdown ni comentarios.`,
+      });
+    }
+  }
+
+  private async requestOnce<TOutput>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "OpenAI no está configurado.");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
@@ -77,7 +89,9 @@ export class OpenAIProvider implements LlmProvider {
       format: {
         type: "json_schema",
         name: request.structuredOutput.name,
-        strict: true,
+        // Non-strict provider decoding permits additive module fields; the complete
+        // response is still validated locally and gets one repair attempt.
+        strict: false,
         schema: request.structuredOutput.jsonSchema,
       },
     } : undefined;

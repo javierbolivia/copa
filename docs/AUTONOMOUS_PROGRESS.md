@@ -4,7 +4,7 @@
 
 - Fase 1, base local: `COMPLETED`.
 - Fase 2, proyectos/workflow/versioning/lineage/backups: `COMPLETED`.
-- Sources + evidencia + YouTube + jobs: `COMPLETED` (schema 5).
+- Sources + evidencia + YouTube + jobs: `COMPLETED` (schema 5); Mini Fase 18.2 verificó una importación pública real y aplica un máximo de 500 comentarios top-level por job.
 - Integraciones Mock/OpenAI/YouTube: `COMPLETED`; OpenAI conectado al pipeline y APIs externas `IMPLEMENTED_NOT_LIVE_VERIFIED`.
 - Dominio Research → Final Product: `COMPLETED` en recorrido Demo estructurado.
 - Frontend modular y refinamiento especializado Fase 16: `COMPLETED`.
@@ -25,7 +25,7 @@
 ## Verificaciones finales
 
 - TypeScript: PASS.
-- Tests: PASS, 74/74.
+- Tests: PASS, 76/76.
 - Build backend/frontend: PASS.
 - E2E Demo + persistencia tras reinicio: PASS.
 - npm audit: PASS, 0 vulnerabilidades conocidas.

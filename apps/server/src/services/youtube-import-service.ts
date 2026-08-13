@@ -11,6 +11,7 @@ export class YouTubeImportError extends Error {
 }
 
 export class YouTubeImportService {
+  static readonly MAX_TOP_LEVEL_COMMENTS = 500;
   private readonly adapter:YouTubeAdapter;
   constructor(private readonly sources:SourceRepository,private readonly jobs:JobRepository,apiKey:string|undefined=process.env.YOUTUBE_API_KEY,adapter?:YouTubeAdapter){this.adapter=adapter??new YouTubeAdapter(apiKey===undefined?{}:{apiKey});}
   isConfigured():boolean{return this.adapter.configured;}
@@ -35,18 +36,20 @@ export class YouTubeImportService {
     try{
       const video=await this.adapter.getVideo(videoId);if(this.cancelled(projectId,jobId,job.sourceId))return;if(!video)throw new IntegrationError("invalid_response","El video no existe, no es público o no está disponible.");
       let token=typeof job.payload.pageToken==="string"?job.payload.pageToken:undefined,pageCount=typeof job.payload.pageCount==="number"?job.payload.pageCount:0,savedCount=typeof job.payload.savedCount==="number"?job.payload.savedCount:0,threadCount=typeof job.payload.threadCount==="number"?job.payload.threadCount:0;
-      do{
+      while(threadCount<YouTubeImportService.MAX_TOP_LEVEL_COMMENTS){
         if(this.jobs.isCancellationRequested(projectId,jobId)){this.sources.markImportCancelled(projectId,job.sourceId);return;}
-        const page=await this.adapter.listCommentThreads({videoId,maxResults:100,order:"relevance",...(token===undefined?{}:{pageToken:token})});if(this.cancelled(projectId,jobId,job.sourceId))return;pageCount++;const extraReplies=new Map<string,YouTubeComment[]>();
-        for(const thread of page.items){
+        const remaining=YouTubeImportService.MAX_TOP_LEVEL_COMMENTS-threadCount;
+        const page=await this.adapter.listCommentThreads({videoId,maxResults:Math.min(100,remaining),order:"relevance",...(token===undefined?{}:{pageToken:token})});if(this.cancelled(projectId,jobId,job.sourceId))return;pageCount++;const threads=page.items.slice(0,remaining),extraReplies=new Map<string,YouTubeComment[]>();
+        for(const thread of threads){
           if(thread.totalReplyCount<=thread.embeddedReplies.length)continue;
           let replyToken:string|undefined;const replies:YouTubeComment[]=[];
           do{if(this.cancelled(projectId,jobId,job.sourceId))return;const replyPage=await this.adapter.listReplies({parentCommentId:thread.topLevelComment.commentId,maxResults:100,...(replyToken===undefined?{}:{pageToken:replyToken})});if(this.cancelled(projectId,jobId,job.sourceId))return;replies.push(...replyPage.items);replyToken=replyPage.nextPageToken;}while(replyToken);
           extraReplies.set(thread.topLevelComment.commentId,replies);
         }
-        savedCount+=this.sources.finishYouTubeImport(projectId,job.sourceId,video,page.items,extraReplies);threadCount+=page.items.length;token=page.nextPageToken;
+        savedCount+=this.sources.finishYouTubeImport(projectId,job.sourceId,video,threads,extraReplies);threadCount+=threads.length;token=threadCount<YouTubeImportService.MAX_TOP_LEVEL_COMMENTS?page.nextPageToken:undefined;
         this.jobs.checkpoint(projectId,jobId,{url:job.payload.url,...(token?{pageToken:token}:{}),pageCount,savedCount,threadCount},Math.min(95,10+pageCount*7),`${threadCount} hilos guardados`);
-      }while(token);
+        if(!token)break;
+      }
       if(!this.cancelled(projectId,jobId,job.sourceId))this.jobs.complete(projectId,jobId,{videoId,count:savedCount,threadCount});
     }catch(error){if(this.cancelled(projectId,jobId,job.sourceId))return;const code=error instanceof IntegrationError?error.code:"database_error",message=error instanceof Error?error.message:"La importación falló.";this.fail(projectId,jobId,job.sourceId,code,message);}
   }

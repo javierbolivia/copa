@@ -41,6 +41,23 @@ describe("Sources API",()=>{
     expect((await app.inject({method:"GET",url:`/api/projects/${other.id}/sources/${bundle.sources[0]!.id}`})).statusCode).toBe(404);
     expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",text:"  "}})).statusCode).toBe(400);
   });
+
+  it("limita a 500 hilos top-level y conserva las replies de esos hilos",async()=>{
+    const top=(page:number,index:number):YouTubeComment=>({commentId:`top-${page}-${index}`,parentCommentId:null,author:"Autor",text:"Top",likes:0,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:false});
+    const reply=(parent:string):YouTubeComment=>({commentId:`reply-${parent}`,parentCommentId:parent,author:"Reply",text:"Respuesta",likes:0,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:true});
+    class FakeYouTube extends YouTubeAdapter {
+      calls:Array<{maxResults?:number}>=[];
+      constructor(){super({apiKey:"demo"});}
+      override async getVideo(){return {videoId:"dQw4w9WgXcQ",title:"Video",channelId:"channel",channelTitle:"Canal",publishedAt:"2026-01-01T00:00:00Z",commentCount:900};}
+      override async listCommentThreads(input:{videoId:string;pageToken?:string;maxResults?:number}){this.calls.push(input);const page=Number(input.pageToken??"0"),items=Array.from({length:100},(_,index):YouTubeThread=>{const comment=top(page,index);return {threadId:`thread-${page}-${index}`,topLevelComment:comment,totalReplyCount:index===0?1:0,embeddedReplies:index===0?[reply(comment.commentId)]:[]};});return {items,nextPageToken:String(page+1)};}
+    }
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),jobs=new JobRepository(db),adapter=new FakeYouTube(),project=projects.create({name:"YT cap",niche:"N"}),service=new YouTubeImportService(sources,jobs,"demo",adapter),queued=service.queue(project.id,"https://youtu.be/dQw4w9WgXcQ");
+    for(let i=0;i<100&&jobs.get(project.id,queued.job.id)?.status!=="COMPLETED";i++)await new Promise(resolve=>setImmediate(resolve));
+    expect(jobs.get(project.id,queued.job.id)?.status).toBe("COMPLETED");
+    expect(sources.listComments(project.id,{sourceId:queued.source.id,replies:false,limit:1000})).toHaveLength(500);
+    expect(sources.listComments(project.id,{sourceId:queued.source.id,replies:true,limit:1000})).toHaveLength(5);
+    expect(adapter.calls).toHaveLength(5);expect(adapter.calls.every(call=>call.maxResults===100)).toBe(true);db.close();
+  });
 });
 
 describe("constraints Sources",()=>{

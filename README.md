@@ -38,6 +38,12 @@ Añade `YOUTUBE_API_KEY=` en `.env` y reinicia. La pantalla Fuentes mostrará si
 
 En **Configuración → Backups**, pulsa **Crear backup**. Para restaurar, selecciona un backup y confirma. Antes del restore se crea una copia de seguridad del estado actual. Los backups están en `data/backups/` y no contienen `.env` ni claves.
 
+## Visual Product Studio
+
+Abre **Producto final** y crea un Ebook, Guía, Workbook, Checklist o Lead Magnet. El flujo es outline → capítulos por bloques → edición/autosave → portada/assets → validación → export. Mock funciona sin claves; si el proyecto elige OpenAI y existe `OPENAI_API_KEY`, outline y capítulos usan salida estructurada, RAG, presupuesto y registro de coste.
+
+Los archivos reales `.html`, `.docx` y `.pdf` se guardan bajo `data/generated/<projectId>/product-studio/`; las imágenes y diagramas bajo `data/assets/<projectId>/`. El historial conserva versión, tamaño y SHA-256. Backup/restore incluye ambos directorios.
+
 ## Outputs
 
 Las exportaciones viven en `data/generated/` y también aparecen dentro de Landing y Producto final con acciones de descarga. Landing puede exportar el copy editado como HTML; Emails y Content exportan Markdown.
@@ -71,6 +77,9 @@ Stack: React + Vite, Fastify, TypeScript y SQLite mediante `node:sqlite`. La apl
 - [Informe final](FINAL_BUILD_REPORT.md)
 - [Informe de Fase 16](docs/PHASE_16_REFINEMENT_REPORT.md)
 - [Informe de Fase 17](docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md)
+- [Informe de Fase 18](docs/PHASE_18_PRODUCT_STUDIO_REPORT.md)
+- [Arquitectura de exportación](docs/PRODUCT_EXPORT_ARCHITECTURE.md)
+- [Auditoría open source Fase 18](docs/PHASE18_OPEN_SOURCE_AUDIT.md)
 - [Auditoría open source](docs/OPEN_SOURCE_AUDIT.md)
 - [Plan futuro de búsqueda vectorial](docs/VECTOR_SEARCH_FUTURE.md)
 - [Claves e integraciones](API_KEYS_TODO.md)

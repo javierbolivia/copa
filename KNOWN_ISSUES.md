@@ -17,6 +17,11 @@ Ninguno conocido.
 - Embeddings y sqlite-vec están deshabilitados; FTS5/BM25 es el retrieval soportado y funcional.
 - El campo `total` de búsqueda refleja actualmente el tamaño de la página devuelta, no un conteo global separado.
 
+### Product Studio
+
+- Product Studio usa un editor ligero propio; BlockNote core fue auditado pero se difirió para evitar una migración innecesaria del block model estable.
+- El layout final de DOCX depende de Word/LibreOffice; se valida OpenXML, contenido y assets, pero la paginación puede variar ligeramente entre visores.
+
 ## LOW
 
 - Los jobs YouTube recuperados tras reinicio no tienen un límite global de concurrencia.

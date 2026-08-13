@@ -11,6 +11,8 @@
 - E2E Demo, reinicio, build, visual QA: `PASS`.
 - Fase 17, Knowledge Engine + RAG local: `COMPLETED` (schema 6).
 - Bibliotecas, extractores, FTS5, Ask, citas, memoria aprobada, Knowledge Used y backup: `PASS`.
+- Fase 18, Visual Product Studio + exports físicos HTML/DOCX/PDF: `COMPLETED` (schema 7).
+- Wizard, outline, capítulos, editor de 17 bloques, autosave, RAG, portada, assets, Mermaid, validación, historial y reinicio: `PASS`.
 
 ## Trabajo multiagente
 
@@ -23,11 +25,11 @@
 ## Verificaciones finales
 
 - TypeScript: PASS.
-- Tests: PASS, 65/65.
+- Tests: PASS, 74/74.
 - Build backend/frontend: PASS.
 - E2E Demo + persistencia tras reinicio: PASS.
 - npm audit: PASS, 0 vulnerabilidades conocidas.
 - QA visual desktop: PASS; 14/14 módulos completos, archivos visibles, consola sin errores.
 - Responsive 390×844: PASS, sin overflow horizontal.
-- Schema 6, integridad, FK, corpus 100/10k y restore Knowledge: PASS.
+- Schema 7, migración 6→7, datos previos, integridad, FK, corpus 100/10k y restore Knowledge/Product assets: PASS.
 - QA independiente: primer y segundo gate detectaron HIGH; fueron corregidos. Tercer gate: PASS, sin CRITICAL/HIGH.

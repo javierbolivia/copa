@@ -1,6 +1,6 @@
 ﻿# Informe final de construcción
 
-**STATUS: IMPLEMENTED — FASE 16 COMPLETED (2026-08-13)**
+**STATUS: IMPLEMENTED — FASE 18 COMPLETED (2026-08-13)**
 
 ## Resultado
 
@@ -78,17 +78,17 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 | Verificación | Estado |
 |---|---|
 | TypeScript shared/server/web | PASS |
-| Unit + integration + E2E | PASS — 65/65 |
+| Unit + integration + E2E | PASS — 74/74 |
 | Build backend | PASS |
 | Build frontend | PASS |
-| Migraciones hasta schema 6 | PASS |
+| Migraciones hasta schema 7 | PASS — datos schema 6 preservados, FK 0 |
 | Demo 14/14 módulos | PASS |
 | Persistencia tras reinicio | PASS |
 | Export HTML/final files | PASS |
 | npm audit | PASS — 0 vulnerabilidades |
-| QA visual — 17 pantallas y editores | PASS |
+| QA visual — Product Studio + pantallas previas | PASS |
 | Consola browser | PASS — sin errores/warnings |
-| Responsive 390×844 | PASS — sin overflow horizontal |
+| Responsive 390×844 | PASS — tabs/paneles usables |
 | Knowledge 100 documentos / 10k chunks | PASS |
 | Backup/restore documentos Knowledge | PASS |
 
@@ -97,6 +97,10 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 La plataforma ahora incluye bibliotecas privadas/globales, ingesta segura PDF/DOCX/TXT/Markdown/HTML/manual, chunking estructural, FTS5/BM25, Ask con citas, memoria aprobada/rechazada, contexto por agente, trazabilidad Knowledge Used y backups con originales/checksums. Consulta `docs/PHASE_17_KNOWLEDGE_ENGINE_REPORT.md`.
 
 La revisión inicial encontró un defecto HIGH que permitía lineage cruzado entre proyectos; fue corregido y tiene test de regresión. Las rondas posteriores corrigieron salidas fijas, scoring, invalidación, backups y atomicidad. El reviewer de Fase 16 encontró dos HIGH adicionales —regeneración con draft intermedio y pérdida del contrato canónico al editar—; ambos fueron corregidos con tests de regresión. Gate independiente final: `PASS`, sin CRITICAL/HIGH.
+
+## Fase 18 — Visual Product Studio
+
+Product Final incorpora documentos estructurados versionados, outline primero, capítulos independientes/reanudables, editor de 17 bloques con autosave, RAG y Knowledge Used, portada/themes, assets seguros, diagramas Mermaid, validación de claims y exports físicos HTML/DOCX/PDF. Schema 7 es aditivo; backup/restore y borrado permanente abarcan assets/exports. Mock sigue en `$0 Demo`; OpenAI estructurado está implementado y validado con transporte simulado, `IMPLEMENTED_NOT_LIVE_VERIFIED` sin clave real.
 
 ## Multiagente
 

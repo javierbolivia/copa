@@ -102,4 +102,14 @@ describe("pipeline real de modulos con OpenAI", () => {
     expect(repairBody.input).toContain("REPARACION DE FORMATO");
     expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/generations` })).json<{ generations: unknown[] }>().generations).toHaveLength(1);
   });
+
+  it("registra un intento fallido sin crear un artefacto parcial",async()=>{
+    const fetchMock=vi.fn(async()=>new Response(JSON.stringify({error:{type:"server_error"}}),{status:500,headers:{"content-type":"application/json"}}));
+    app=await createApp({databasePath:":memory:",serveFrontend:false,openAI:{apiKey:"test-key",fetch:fetchMock as typeof fetch}});
+    const project=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Failure",niche:"Prueba"}})).json<Project>();
+    expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/research/run`,payload:{provider:"openai"}})).statusCode).toBe(409);
+    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{status:string;artifactVersionId:string|null}>}>().generations;
+    expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({status:"FAILED",artifactVersionId:null});
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/modules/research`})).json()).toEqual({results:[]});
+  });
 });

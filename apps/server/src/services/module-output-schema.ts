@@ -28,3 +28,24 @@ export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
   content: object({ schemaVersion: { type: "integer" }, calendar: { type: "array", items: object({ day: { type: "integer" }, type: string, hook: string, body: string }) }, hooks: stringArray, channels: stringArray, evidenceIds }),
   final_product: object({ schemaVersion: { type: "integer" }, files: { type: "array", items: string }, guide: object({ title: string, chapters: stringArray }), checklist: stringArray, workbook: stringArray, miniTool: object({ title: string, fields: stringArray }), evidenceIds }),
 };
+
+export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
+  if(typeof value!=="object"||value===null||Array.isArray(value))return false;
+  const output=value as Record<string,unknown>;
+  if(typeof output.schemaVersion!=="number")return false;
+  switch(key){
+    case "research":return typeof output.summary==="string";
+    case "sources":return typeof output.sourceCount==="number"&&typeof output.commentCount==="number";
+    case "problems":case "opportunities":return Array.isArray(output.items);
+    case "product":return Array.isArray(output.proposals);
+    case "avatar":return Array.isArray(output.currentSituation)&&Array.isArray(output.desiredOutcome);
+    case "mechanism":return typeof output.mechanism==="string"&&typeof output.solutionMechanism==="string";
+    case "beliefs":return Array.isArray(output.currentBeliefs)&&Array.isArray(output.requiredBeliefs);
+    case "offer":return typeof output.promise==="string"&&Array.isArray(output.deliverables);
+    case "landing":return typeof output.title==="string"&&Array.isArray(output.sections);
+    case "funnel":return Array.isArray(output.nodes)&&Array.isArray(output.edges);
+    case "emails":return Array.isArray(output.sequences);
+    case "content":return Array.isArray(output.calendar);
+    case "final_product":return typeof output.guide==="object"&&Array.isArray(output.checklist)&&Array.isArray(output.workbook);
+  }
+}

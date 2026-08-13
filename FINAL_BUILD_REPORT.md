@@ -1,4 +1,6 @@
-# Informe final de construcción
+﻿# Informe final de construcción
+
+**STATUS: IMPLEMENTED — FASE 16 COMPLETED (2026-08-13)**
 
 ## Resultado
 
@@ -13,7 +15,7 @@ flowchart TD
   Services --> Repos[Repositories]
   Repos --> DB[(SQLite / node:sqlite)]
   Services --> Mock[Mock LLM determinista]
-  Services -. configuración futura .-> OpenAI[OpenAI Responses API adapter]
+  Services --> OpenAI[OpenAI Responses API]
   Services -. YOUTUBE_API_KEY .-> YouTube[YouTube Data API v3]
   Services --> Files[data/generated]
   DB --> Backups[data/backups]
@@ -49,9 +51,9 @@ Cada módulo obtiene automáticamente las versiones padre requeridas, rechaza de
 
 Las relaciones compuestas y los guards de schema impiden cruzar entidades entre proyectos. El borrado permanente requiere confirmación exacta y utiliza cascadas. Backups validan integridad y versión antes de restaurar, crean primero una copia de seguridad del estado actual e incluyen un sidecar de `data/generated`.
 
-## Versioning, lineage y stale
+## Versioning, edición, lineage y stale
 
-Los outputs se guardan como `ArtifactVersion`. Una nueva versión conserva la anterior como `superseded`; sus descendientes se marcan `stale` con causa persistida. Se admiten múltiples padres. La validación bloquea artefactos o padres pertenecientes a otro proyecto.
+Los outputs se guardan como `ArtifactVersion`. La edición humana crea una versión `draft` sin reemplazar la activa; Aprobar la activa, conserva la anterior como `superseded` y marca descendientes `stale` con causa persistida. Se admiten múltiples padres. La validación bloquea artefactos o padres pertenecientes a otro proyecto. La UI permite abrir una cadena de trazabilidad con artefactos, evidencia y fuentes.
 
 ## Evidence
 
@@ -60,12 +62,12 @@ Cada comentario Demo, manual o YouTube produce un `evidence_snippet` con procede
 ## Integraciones
 
 - Mock LLM: `PASS`. Determinista, sin red, tokens estimados y coste cero.
-- OpenAI Responses API: `IMPLEMENTED_NOT_LIVE_VERIFIED`. Maneja timeout, red, auth, rate limit, cuota, JSON inválido y schema mismatch. No se conecta automáticamente desde UI sin configuración explícita.
+- OpenAI Responses API: `IMPLEMENTED_NOT_LIVE_VERIFIED`. Está conectado al pipeline y a la selección UI; maneja timeout, red, auth, rate limit, cuota, JSON inválido, un intento de reparación y schema mismatch sin persistencia parcial.
 - YouTube Data API: `IMPLEMENTED_NOT_LIVE_VERIFIED` en vivo; recorrido completo `PASS` con adaptador simulado. Pagina sin límite artificial de 500, recupera replies faltantes, deduplica y persiste progreso.
 
 ## Jobs, historial y costes
 
-YouTube utiliza jobs `QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED`, con checkpoint por página, cancelación cooperativa, retry y recuperación tras reinicio. Cada generación persiste provider, model, tokens, coste estimado, duración, agente y proyecto. Historial muestra generaciones y jobs.
+YouTube utiliza jobs `QUEUED/RUNNING/COMPLETED/FAILED/CANCELLED`, con checkpoint por página, cancelación cooperativa, retry y recuperación tras reinicio. Cada generación persiste provider, model, tokens, coste estimado, duración, agente, prompt versionado y snapshot. Historial permite filtros y muestra distribuciones de tokens/coste; Mock se identifica como `DEMO · $0`.
 
 ## Archivos generados
 
@@ -76,7 +78,7 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 | Verificación | Estado |
 |---|---|
 | TypeScript shared/server/web | PASS |
-| Unit + integration + E2E | PASS — 32/32 |
+| Unit + integration + E2E | PASS — 39/39 |
 | Build backend | PASS |
 | Build frontend | PASS |
 | Migraciones hasta schema 5 | PASS |
@@ -84,11 +86,11 @@ Landing exporta HTML/CSS portable y escapado. Final Product exporta cuatro archi
 | Persistencia tras reinicio | PASS |
 | Export HTML/final files | PASS |
 | npm audit | PASS — 0 vulnerabilidades |
-| QA visual desktop | PASS |
+| QA visual — 17 pantallas y editores | PASS |
 | Consola browser | PASS — sin errores/warnings |
 | Responsive 390×844 | PASS — sin overflow horizontal |
 
-La revisión inicial encontró un defecto HIGH que permitía lineage cruzado entre proyectos; fue corregido y tiene test de regresión. La revisión independiente final rechazó primero el release por salidas fijas, trazabilidad débil, scoring no reproducible, invalidación incompleta, backups parciales y falta de atomicidad. Tras dos rondas de corrección, el tercer gate independiente terminó `PASS`, sin CRITICAL/HIGH ni regresiones nuevas.
+La revisión inicial encontró un defecto HIGH que permitía lineage cruzado entre proyectos; fue corregido y tiene test de regresión. Las rondas posteriores corrigieron salidas fijas, scoring, invalidación, backups y atomicidad. El reviewer de Fase 16 encontró dos HIGH adicionales —regeneración con draft intermedio y pérdida del contrato canónico al editar—; ambos fueron corregidos con tests de regresión. Gate independiente final: `PASS`, sin CRITICAL/HIGH.
 
 ## Multiagente
 
@@ -123,3 +125,5 @@ npm.cmd start
 ```
 
 Abrir `http://127.0.0.1:4310`.
+
+En Windows también puede hacerse doble clic en `start-app.cmd`. El detalle de migración y refinamiento está en [docs/PHASE_16_REFINEMENT_REPORT.md](docs/PHASE_16_REFINEMENT_REPORT.md).

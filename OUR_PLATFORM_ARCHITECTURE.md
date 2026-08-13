@@ -1,6 +1,8 @@
 # Arquitectura técnica de la plataforma local
 
-**Estado:** propuesta de diseño; sin implementación  
+> **STATUS: IMPLEMENTED.** Este documento conserva la propuesta original; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) para la arquitectura realizada.
+
+**Estado histórico:** propuesta de diseño; sin implementación
 **Decisión principal:** React + TypeScript + Node.js + SQLite  
 **Entorno verificado:** Windows, Node.js 24.15.0, npm 11.12.1 mediante `npm.cmd`, pnpm 11.16.0 y Git 2.55; Python y `sqlite3` CLI no instalados.
 

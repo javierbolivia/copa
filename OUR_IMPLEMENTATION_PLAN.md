@@ -1,6 +1,8 @@
 # Plan de implementación incremental
 
-**Estado:** planificación; no se ha creado código de producción  
+> **STATUS: IMPLEMENTED.** Este archivo conserva el plan incremental original; el cierre real está en [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PHASE_16_REFINEMENT_REPORT.md](docs/PHASE_16_REFINEMENT_REPORT.md).
+
+**Estado histórico:** planificación; no se ha creado código de producción
 **Stack fijado:** React + TypeScript + Node.js + SQLite  
 **Criterio:** cada fase debe dejar una capacidad pequeña, demostrable y probada antes de empezar la siguiente.
 

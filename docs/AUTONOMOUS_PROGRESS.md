@@ -1,13 +1,13 @@
-# Progreso autónomo consolidado
+﻿# Progreso autónomo consolidado
 
-## Estado final
+## Estado final — actualizado 2026-08-13
 
 - Fase 1, base local: `COMPLETED`.
 - Fase 2, proyectos/workflow/versioning/lineage/backups: `COMPLETED`.
 - Sources + evidencia + YouTube + jobs: `COMPLETED` (schema 5).
-- Integraciones Mock/OpenAI/YouTube: `COMPLETED` a nivel adaptador; APIs externas `IMPLEMENTED_NOT_LIVE_VERIFIED`.
+- Integraciones Mock/OpenAI/YouTube: `COMPLETED`; OpenAI conectado al pipeline y APIs externas `IMPLEMENTED_NOT_LIVE_VERIFIED`.
 - Dominio Research → Final Product: `COMPLETED` en recorrido Demo estructurado.
-- Frontend modular: `COMPLETED`.
+- Frontend modular y refinamiento especializado Fase 16: `COMPLETED`.
 - E2E Demo, reinicio, build, visual QA: `PASS`.
 
 ## Trabajo multiagente
@@ -21,7 +21,7 @@
 ## Verificaciones finales
 
 - TypeScript: PASS.
-- Tests: PASS, 32/32.
+- Tests: PASS, 39/39.
 - Build backend/frontend: PASS.
 - E2E Demo + persistencia tras reinicio: PASS.
 - npm audit: PASS, 0 vulnerabilidades conocidas.

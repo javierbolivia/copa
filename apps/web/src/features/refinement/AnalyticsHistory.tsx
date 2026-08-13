@@ -20,6 +20,7 @@ export interface GenerationHistoryItem {
   outputTokens: number;
   estimatedCost: number;
   durationMs: number;
+  versionNumber?: number;
   result?: HistoryResult;
 }
 
@@ -72,7 +73,7 @@ export function AnalyticsHistory({ generations, demoMode = false, onOpenGenerati
         <div className="refinement-history-count">{filtered.length} resultados</div>
         {filtered.length === 0 ? <div className="refinement-empty">No hay generaciones que coincidan con los filtros.</div> : <div className="refinement-generation-list">
           {filtered.map((item) => <button className={selected?.id === item.id ? "is-selected" : ""} key={item.id} onClick={() => { setSelectedId(item.id); onOpenGeneration?.(item.id); }} type="button">
-            <span><strong>{item.moduleName}</strong><small>{item.projectName} · {formatDateTime(item.createdAt)}</small></span>
+            <span><strong>{item.moduleName}{item.versionNumber?` · v${item.versionNumber}`:""}</strong><small>{item.projectName} · {formatDateTime(item.createdAt)}</small></span>
             <span><b>{item.model}</b><small>{(item.inputTokens + item.outputTokens).toLocaleString("es")} tokens · {formatCost(demoMode ? 0 : item.estimatedCost)}</small></span>
             <span className={`refinement-status is-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</span>
           </button>)}
@@ -87,7 +88,7 @@ function HistoryResultPanel({ item, demoMode }: { item: GenerationHistoryItem | 
   if (!item) return <aside className="refinement-history-result"><div className="refinement-empty">Selecciona una generación para ver su resultado histórico.</div></aside>;
   return <aside className="refinement-history-result">
     <header><span>RESULTADO HISTÓRICO</span><h3>{item.result?.title ?? item.moduleName}</h3><p>{item.result?.summary ?? "Esta generación no incluye una vista previa estructurada."}</p></header>
-    <dl><div><dt>Proyecto</dt><dd>{item.projectName}</dd></div><div><dt>Proveedor</dt><dd>{item.provider}</dd></div><div><dt>Modelo</dt><dd>{item.model}</dd></div><div><dt>Duración</dt><dd>{formatDuration(item.durationMs)}</dd></div><div><dt>Tokens</dt><dd>{(item.inputTokens + item.outputTokens).toLocaleString("es")}</dd></div><div><dt>Coste</dt><dd>{formatCost(demoMode ? 0 : item.estimatedCost)}</dd></div></dl>
+    <dl><div><dt>Proyecto</dt><dd>{item.projectName}</dd></div>{item.versionNumber&&<div><dt>Versión</dt><dd>v{item.versionNumber}</dd></div>}<div><dt>Proveedor</dt><dd>{item.provider}</dd></div><div><dt>Modelo</dt><dd>{item.model}</dd></div><div><dt>Duración</dt><dd>{formatDuration(item.durationMs)}</dd></div><div><dt>Tokens</dt><dd>{(item.inputTokens + item.outputTokens).toLocaleString("es")}</dd></div><div><dt>Coste</dt><dd>{formatCost(demoMode ? 0 : item.estimatedCost)}</dd></div></dl>
     {item.result && item.result.fields.length > 0 && <div className="refinement-result-fields">{item.result.fields.map((field) => <section key={field.label}><span>{field.label}</span><p>{field.value}</p></section>)}</div>}
   </aside>;
 }

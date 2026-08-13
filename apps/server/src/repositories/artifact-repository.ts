@@ -19,13 +19,14 @@ export class ArtifactRepository {
       }
       for(const parentId of input.parentVersionIds??[]){const parent=db.prepare("SELECT project_id FROM artifact_versions WHERE id=?").get(parentId) as {project_id:string}|undefined;if(!parent||parent.project_id!==input.projectId)throw new Error("La versión padre no pertenece al proyecto.");}
       const previous=db.prepare("SELECT id,version_number FROM artifact_versions WHERE artifact_id=? ORDER BY version_number DESC LIMIT 1").get(artifactId) as {id:string;version_number:number}|undefined;
+      const active=db.prepare("SELECT active_version_id id FROM artifacts WHERE id=?").get(artifactId) as {id:string|null}|undefined;
       const id=uuidv7(), versionNumber=(previous?.version_number??0)+1, status=input.status??"approved";
-      if(previous&&status==="approved") db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(previous.id);
+      if(active?.id&&status==="approved") db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(active.id);
       db.prepare(`INSERT INTO artifact_versions (id,project_id,artifact_id,version_number,status,freshness,input_snapshot,output_data,supersedes_version_id,created_at) VALUES (?,?,?,?,?,'fresh',?,?,?,?)`)
-        .run(id,input.projectId,artifactId,versionNumber,status,JSON.stringify(input.inputSnapshot),JSON.stringify(input.outputData),previous?.id??null,now);
+        .run(id,input.projectId,artifactId,versionNumber,status,JSON.stringify(input.inputSnapshot),JSON.stringify(input.outputData),status==="approved"?(active?.id??null):(previous?.id??null),now);
       if(status==="approved")db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=?").run(id,artifactId);
       for(const parentId of input.parentVersionIds??[]) db.prepare("INSERT INTO lineage_edges (id,project_id,parent_version_id,child_version_id,relation,created_at) VALUES (?,?,?,?, 'derived_from',?)").run(uuidv7(),input.projectId,parentId,id,now);
-      if(previous&&status==="approved") this.propagateStale(previous.id,id,input.projectId,now);
+      if(active?.id&&status==="approved") this.propagateStale(active.id,id,input.projectId,now);
       if(ownsTransaction)db.exec("COMMIT"); return this.getVersion(id)!;
     } catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }

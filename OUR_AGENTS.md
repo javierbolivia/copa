@@ -1,6 +1,8 @@
 # Catálogo y contratos de agentes
 
-**Estado:** diseño funcional; prompts y código todavía no implementados  
+> **STATUS: IMPLEMENTED.** Los agentes, prompts versionados y contratos estructurados están conectados; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md).
+
+**Estado histórico:** diseño funcional; prompts y código todavía no implementados
 **Regla:** “agente” significa una capacidad con contrato explícito. Puede ser LLM, determinista o híbrida; no implica autonomía abierta.
 
 ## 1. Convenciones comunes

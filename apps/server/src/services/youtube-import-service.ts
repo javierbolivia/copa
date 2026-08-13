@@ -25,7 +25,7 @@ export class YouTubeImportService {
 
   cancel(projectId:string,jobId:string):Job|undefined{const record=this.jobs.getRecord(projectId,jobId);const job=this.jobs.cancel(projectId,jobId);if(job?.status==="CANCELLED"&&record?.sourceId)this.sources.markImportCancelled(projectId,record.sourceId);return job;}
   retry(projectId:string,jobId:string):Job|undefined{const record=this.jobs.getRecord(projectId,jobId),job=this.jobs.retry(projectId,jobId);if(job?.status==="QUEUED"&&record?.sourceId){this.sources.markImportPending(projectId,record.sourceId);this.schedule(projectId,jobId);}return job;}
-  resumePending():void{const pending=this.jobs.recoverYouTubeImports();if(!this.isConfigured())return;for(const job of pending)this.schedule(job.projectId,job.jobId);}
+  resumePending():void{const pending=this.jobs.recoverYouTubeImports();if(!this.isConfigured()){this.jobs.failPendingYouTubeWithoutProvider();return;}for(const job of pending)this.schedule(job.projectId,job.jobId);}
 
   private schedule(projectId:string,jobId:string):void{queueMicrotask(()=>{void this.run(projectId,jobId);});}
   private async run(projectId:string,jobId:string):Promise<void>{
@@ -33,22 +33,23 @@ export class YouTubeImportService {
     const videoId=typeof job.payload.url==="string"?extractYouTubeVideoId(job.payload.url):undefined;
     if(!videoId){this.fail(projectId,jobId,job.sourceId,"invalid_youtube_url","La URL del job dejó de ser válida.");return;}
     try{
-      const video=await this.adapter.getVideo(videoId);if(!video)throw new IntegrationError("invalid_response","El video no existe, no es público o no está disponible.");
+      const video=await this.adapter.getVideo(videoId);if(this.cancelled(projectId,jobId,job.sourceId))return;if(!video)throw new IntegrationError("invalid_response","El video no existe, no es público o no está disponible.");
       let token=typeof job.payload.pageToken==="string"?job.payload.pageToken:undefined,pageCount=typeof job.payload.pageCount==="number"?job.payload.pageCount:0,savedCount=typeof job.payload.savedCount==="number"?job.payload.savedCount:0,threadCount=typeof job.payload.threadCount==="number"?job.payload.threadCount:0;
       do{
         if(this.jobs.isCancellationRequested(projectId,jobId)){this.sources.markImportCancelled(projectId,job.sourceId);return;}
-        const page=await this.adapter.listCommentThreads({videoId,maxResults:100,order:"relevance",...(token===undefined?{}:{pageToken:token})});pageCount++;const extraReplies=new Map<string,YouTubeComment[]>();
+        const page=await this.adapter.listCommentThreads({videoId,maxResults:100,order:"relevance",...(token===undefined?{}:{pageToken:token})});if(this.cancelled(projectId,jobId,job.sourceId))return;pageCount++;const extraReplies=new Map<string,YouTubeComment[]>();
         for(const thread of page.items){
           if(thread.totalReplyCount<=thread.embeddedReplies.length)continue;
           let replyToken:string|undefined;const replies:YouTubeComment[]=[];
-          do{if(this.jobs.isCancellationRequested(projectId,jobId)){this.sources.markImportCancelled(projectId,job.sourceId);return;}const replyPage=await this.adapter.listReplies({parentCommentId:thread.topLevelComment.commentId,maxResults:100,...(replyToken===undefined?{}:{pageToken:replyToken})});replies.push(...replyPage.items);replyToken=replyPage.nextPageToken;}while(replyToken);
+          do{if(this.cancelled(projectId,jobId,job.sourceId))return;const replyPage=await this.adapter.listReplies({parentCommentId:thread.topLevelComment.commentId,maxResults:100,...(replyToken===undefined?{}:{pageToken:replyToken})});if(this.cancelled(projectId,jobId,job.sourceId))return;replies.push(...replyPage.items);replyToken=replyPage.nextPageToken;}while(replyToken);
           extraReplies.set(thread.topLevelComment.commentId,replies);
         }
         savedCount+=this.sources.finishYouTubeImport(projectId,job.sourceId,video,page.items,extraReplies);threadCount+=page.items.length;token=page.nextPageToken;
         this.jobs.checkpoint(projectId,jobId,{url:job.payload.url,...(token?{pageToken:token}:{}),pageCount,savedCount,threadCount},Math.min(95,10+pageCount*7),`${threadCount} hilos guardados`);
       }while(token);
-      this.jobs.complete(projectId,jobId,{videoId,count:savedCount,threadCount});
-    }catch(error){const code=error instanceof IntegrationError?error.code:"database_error",message=error instanceof Error?error.message:"La importación falló.";this.fail(projectId,jobId,job.sourceId,code,message);}
+      if(!this.cancelled(projectId,jobId,job.sourceId))this.jobs.complete(projectId,jobId,{videoId,count:savedCount,threadCount});
+    }catch(error){if(this.cancelled(projectId,jobId,job.sourceId))return;const code=error instanceof IntegrationError?error.code:"database_error",message=error instanceof Error?error.message:"La importación falló.";this.fail(projectId,jobId,job.sourceId,code,message);}
   }
+  private cancelled(projectId:string,jobId:string,sourceId:string):boolean{if(!this.jobs.isCancellationRequested(projectId,jobId))return false;this.sources.markImportCancelled(projectId,sourceId);return true;}
   private fail(projectId:string,jobId:string,sourceId:string,code:string,message:string):void{this.sources.markImportFailed(projectId,sourceId,code,message);this.jobs.fail(projectId,jobId,code,message);}
 }

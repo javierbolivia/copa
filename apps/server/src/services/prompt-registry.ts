@@ -36,7 +36,7 @@ const PROMPT_FILES: Partial<Record<ModuleKey, string>> = {
 
 // Work that combines or synthesizes many upstream artifacts gets the powerful model.
 const POWERFUL_MODULES = new Set<ModuleKey>([
-  "research", "problems", "opportunities", "product", "mechanism", "offer", "landing", "final_product",
+  "research", "problems", "opportunities", "product", "avatar", "mechanism", "beliefs", "offer", "landing", "content", "final_product",
 ]);
 
 const promptCache = new Map<ModuleKey, ModulePrompt>();
@@ -71,4 +71,3 @@ export function getModulePrompt(key: ModuleKey): ModulePrompt | undefined {
   promptCache.set(key, prompt);
   return prompt;
 }
-

@@ -9,7 +9,7 @@ import type { ProjectSettingsRepository } from "../repositories/project-settings
 import type { WorkflowRepository } from "../repositories/workflow-repository.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { FileExporterService } from "./file-exporter-service.js";
-import { MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
+import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
 
 export interface ModuleServiceOptions {
@@ -76,6 +76,7 @@ export class ModuleService {
 
   saveDraft(projectId:string,key:ModuleKey,outputData:unknown):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
+    if(!isCanonicalModuleOutput(key,outputData))throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
     const current=this.get(projectId,key);if(!current)throw new Error("Genera una versión antes de editarla.");
     const parentIds=this.db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE project_id=? AND child_version_id=? ORDER BY created_at").all(projectId,current.versionId) as unknown as Array<{parent_version_id:string}>;
     const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{editedFromVersionId:current.versionId,source:"user"},outputData,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
@@ -84,7 +85,10 @@ export class ModuleService {
 
   approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
     const version=this.artifacts.getVersion(versionId);if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
-    const approved=this.artifacts.approveVersion(projectId,versionId);return approved?this.toResult(approved):undefined;
+    const approved=this.artifacts.approveVersion(projectId,versionId);if(!approved)return undefined;
+    if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
+    if(key==="final_product")this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData);
+    return this.toResult(approved);
   }
 
   async run(projectId: string, key: ModuleKey, provider?: string, instructions?:string): Promise<ModuleResult> {
@@ -138,6 +142,7 @@ export class ModuleService {
     };
     let reportedModel: string | undefined;
     let providerInput: Record<string, unknown> | undefined;
+    const generationId = uuidv7();
     if (selectedProvider === "openai" && key !== "sources") {
       const prompt = getModulePrompt(key);
       if (!prompt) throw new Error(`No existe un prompt activo para el modulo ${key}.`);
@@ -151,14 +156,9 @@ export class ModuleService {
         moduleKey: key, parentOutputs, evidence,
         additionalInstructions: instructions?.trim() || null,
       };
-      const generated = await this.options.openAI.generate<Record<string, unknown>>({
-        provider: "openai",
-        model,
-        systemInstructions: `${prompt.instructions}\n\nReglas de ejecucion: conserva evidenceIds validos; distingue evidencia de inferencias; no inventes cifras, testimonios, ventas ni credenciales.`,
-        input: JSON.stringify(providerInput),
-        structuredOutput: { name: `${key}_output`, jsonSchema: MODULE_OUTPUT_SCHEMAS[key] },
-        maxOutputTokens: 8_000,
-      });
+      let generated:LlmGenerateResult<Record<string,unknown>>;
+      try{generated=await this.options.openAI.generate<Record<string, unknown>>({provider:"openai",model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecucion: conserva evidenceIds validos; distingue evidencia de inferencias; no inventes cifras, testimonios, ventas ni credenciales.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});}
+      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:"La generación OpenAI falló.";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,error instanceof Error?error.name:"generation_error",message,now,now);throw error;}
       output = generated.output;
       usage = generated.usage;
       reportedModel = generated.reportedModel;
@@ -178,9 +178,8 @@ export class ModuleService {
       output.commentCount = counts.commentCount;
       output.isDemo = counts.allDemo === 1;
     }
-    const generationId = uuidv7();
     const inputSnapshot = {
-      parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
+      generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
@@ -223,7 +222,7 @@ export class ModuleService {
         id, project_id, generation_id, provider, model, input_tokens,
         output_tokens, estimated_cost, currency, is_estimate, recorded_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?)
-    `).run(uuidv7(), projectId, generationId, selectedProvider, model, inputTokens, outputTokens, estimatedCost, usage.usageKind === "provider_reported" ? 0 : 1, now);
+    `).run(uuidv7(), projectId, generationId, selectedProvider, model, inputTokens, outputTokens, estimatedCost, usage.estimatedCost!==undefined&&usage.usageKind === "provider_reported" ? 0 : 1, now);
 
     for(const evidenceId of referencedEvidenceIds(output,evidenceIds)){
       this.db.connection.prepare(`INSERT OR IGNORE INTO evidence_links(id,project_id,target_type,target_id,source_type,source_id,relation,created_at) VALUES(?,?,'artifact_version',?,'evidence_snippet',?,'supports',?)`).run(uuidv7(),projectId,version.id,evidenceId,now);

@@ -7,4 +7,4 @@
 
 No se necesita ninguna clave para el flujo Demo completo. `.env` está ignorado por Git y no debe compartirse ni incluirse en backups.
 
-Los perfiles opcionales `LLM_ECONOMY_MODEL`, `LLM_BALANCED_MODEL` y `LLM_POWERFUL_MODEL` permiten declarar nombres de modelos sin fijarlos en el código. La ejecución de módulos de la UI permanece deliberadamente en Mock hasta que se implemente la selección explícita del proveedor real.
+Los perfiles opcionales `OPENAI_ECONOMY_MODEL` y `OPENAI_POWERFUL_MODEL` permiten declarar nombres de modelos sin fijarlos en el frontend. También pueden configurarse por proyecto. La UI permite elegir Demo/OpenAI; sin clave, OpenAI aparece deshabilitado y no se inicia ninguna generación.

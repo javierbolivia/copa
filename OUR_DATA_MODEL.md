@@ -1,7 +1,9 @@
 # Modelo de datos local
 
 **Motor:** SQLite embebida  
-**Estado:** modelo lógico; las migraciones todavía no existen  
+> **STATUS: IMPLEMENTED — SCHEMA 5.** Se conserva el diseño lógico original; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md) y [docs/PRE_SCHEMA5_BACKUP.md](docs/PRE_SCHEMA5_BACKUP.md).
+
+**Estado histórico:** modelo lógico; las migraciones todavía no existen
 **Objetivo:** datos normalizados, versionados y trazables sin convertir SQLite en un almacén de JSON opaco.
 
 ## 1. Convenciones

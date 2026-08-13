@@ -1,6 +1,8 @@
 # Workflow de proyecto y transferencia automática de contexto
 
-**Estado:** especificación operativa; sin implementación  
+> **STATUS: IMPLEMENTED.** El workflow de 14 etapas, versioning, lineage y stale están operativos; consulta [FINAL_BUILD_REPORT.md](FINAL_BUILD_REPORT.md).
+
+**Estado histórico:** especificación operativa; sin implementación
 **Objetivo:** definir exactamente cómo pasan datos por IDs, versiones y evidencia, sin copiar/pegar.
 
 ## 1. Regla central

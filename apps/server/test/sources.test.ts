@@ -29,6 +29,17 @@ describe("Sources API",()=>{
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/comments`})).json().comments).toEqual([]);
   });
 
+  it("elimina una fuente con comentarios sin afectar otras fuentes",async()=>{
+    const demo=(await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}})).json<SourceBundle>();
+    const created=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",title:"Eliminar",text:"Uno.\n\nDos."}});
+    const removed=created.json<SourceBundle>().sources[0]!;
+    expect((await app.inject({method:"DELETE",url:`/api/projects/${project.id}/sources/${removed.id}`})).statusCode).toBe(200);
+    const remaining=(await app.inject({method:"GET",url:`/api/projects/${project.id}/sources`})).json().sources;
+    expect(remaining).toHaveLength(1);expect(remaining[0].id).toBe(demo.sources[0]!.id);
+    const comments=(await app.inject({method:"GET",url:`/api/projects/${project.id}/comments`})).json().comments;
+    expect(comments).toHaveLength(10);expect(comments.every((comment:{sourceId:string})=>comment.sourceId===demo.sources[0]!.id)).toBe(true);
+  });
+
   it("no crea import YouTube sin clave y no acepta URLs ajenas",async()=>{
     expect((await app.inject({method:"GET",url:"/api/integrations/youtube/status"})).json()).toEqual({configured:false});
     const response=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"youtube",url:"https://youtu.be/dQw4w9WgXcQ"}});expect(response.statusCode).toBe(503);expect(response.json()).toMatchObject({error:"youtube_not_configured"});
@@ -66,6 +77,19 @@ describe("constraints Sources",()=>{
     expect(db.connection.prepare("SELECT count(*) count FROM evidence_snippets WHERE project_id=?").get(a.id)).toMatchObject({count:10});
     const sourceId=bundle.sources[0]!.id,now=new Date().toISOString();expect(()=>db.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,created_at) VALUES(?,?,?,?,?,?,?)`).run("01911111-1111-7111-8111-111111111111",b.id,sourceId,"foreign","X","Y",now)).toThrow();
     expect(()=>db.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,created_at) VALUES(?,?,?,?,?,?,?)`).run("01922222-2222-7222-8222-222222222222",a.id,sourceId,"demo-1","X","Y",now)).toThrow();db.close();
+  });
+
+  it("borra enlaces de evidencia derivados sin dejar huérfanos",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"A",niche:"N"});
+    const preserved=sources.createDemo(project.id),removed=sources.createManual(project.id,{sourceType:"manual",title:"Eliminar",text:"Fuente descartada."});
+    const evidence=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? AND source_id=? LIMIT 1").get(project.id,removed.sources[0]!.id) as {id:string};
+    db.connection.prepare("INSERT INTO evidence_links(id,project_id,target_type,target_id,source_type,source_id,relation,created_at) VALUES(?,?,?,?,?,?,?,?)").run("01933333-3333-7333-8333-333333333333",project.id,"artifact_version","derived-artifact","evidence_snippet",evidence.id,"supports",new Date().toISOString());
+    expect(sources.delete(project.id,removed.sources[0]!.id)).toBe(true);
+    expect(sources.list(project.id)).toHaveLength(1);expect(sources.list(project.id)[0]!.id).toBe(preserved.sources[0]!.id);
+    expect(db.connection.prepare("SELECT count(*) count FROM comments WHERE project_id=? AND source_id=?").get(project.id,removed.sources[0]!.id)).toMatchObject({count:0});
+    expect(db.connection.prepare("SELECT count(*) count FROM evidence_snippets WHERE project_id=? AND source_id=?").get(project.id,removed.sources[0]!.id)).toMatchObject({count:0});
+    expect(db.connection.prepare("SELECT count(*) count FROM evidence_links WHERE project_id=? AND source_type='evidence_snippet' AND source_id=?").get(project.id,evidence.id)).toMatchObject({count:0});
+    expect(db.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);db.close();
   });
 
   it("pagina YouTube, recupera replies faltantes y deduplica antes de persistir",async()=>{

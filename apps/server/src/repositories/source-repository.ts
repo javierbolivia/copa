@@ -130,9 +130,15 @@ export class SourceRepository {
   markImportPending(projectId:string,sourceId:string):void{this.database.connection.prepare("UPDATE sources SET status='pending',error_code=NULL,error_message=NULL,updated_at=? WHERE project_id=? AND id=?").run(new Date().toISOString(),projectId,sourceId);}
 
   delete(projectId:string,sourceId:string):boolean {
+    this.database.connection.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.connection.prepare(`DELETE FROM evidence_links WHERE project_id=? AND source_type='evidence_snippet' AND source_id IN (SELECT id FROM evidence_snippets WHERE project_id=? AND source_id=?)`).run(projectId,projectId,sourceId);
     const result=this.database.connection.prepare("DELETE FROM sources WHERE project_id=? AND id=?").run(projectId,sourceId) as StatementResultingChanges;
     if(result.changes===1)this.invalidateSourceArtifacts(projectId,"Se eliminó una fuente de evidencia.",new Date().toISOString());
-    return result.changes===1;
+      const deleted=result.changes===1;
+      this.database.connection.exec("COMMIT");
+      return deleted;
+    }catch(error){this.database.connection.exec("ROLLBACK");throw error;}
   }
 
   listComments(projectId:string,filter:CommentListFilter={}):Comment[] {

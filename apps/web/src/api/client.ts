@@ -196,6 +196,8 @@ export const api = {
       | import("@our-platform/shared").SourceBundle
       | { source: import("@our-platform/shared").Source; job: Job }
     >(`/api/projects/${id}/sources`, json("POST", input)),
+  deleteSource: (id: string, sourceId: string) =>
+    request<{ deleted: true }>(`/api/projects/${id}/sources/${sourceId}`, { method: "DELETE" }),
   jobs: (id: string) => request<{ jobs: Job[] }>(`/api/projects/${id}/jobs`),
   cancelJob: (id: string, jobId: string) =>
     request<Job>(`/api/projects/${id}/jobs/${jobId}/cancel`, json("POST")),

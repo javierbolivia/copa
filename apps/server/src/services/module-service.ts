@@ -14,6 +14,7 @@ import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
 import type { KnowledgeRepository } from "../repositories/knowledge-repository.js";
 import { getAgentKnowledgePolicy } from "./knowledge/index.js";
+import { qualityProblems } from "./problem-quality-engine.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -180,6 +181,7 @@ export class ModuleService {
       usage = generated.usage;
       reportedModel = generated.reportedModel;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
+    if (key === "problems") output = qualityProblems(this.db, projectId, output);
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
         SELECT

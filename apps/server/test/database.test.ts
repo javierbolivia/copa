@@ -21,7 +21,7 @@ describe("AppDatabase", () => {
 
     const first = new AppDatabase(path);
     expect(first.check()).toBe(true);
-    expect(first.getSchemaVersion()).toBe(6);
+    expect(first.getSchemaVersion()).toBe(7);
     first.connection
       .prepare(`
         INSERT INTO projects (
@@ -37,7 +37,7 @@ describe("AppDatabase", () => {
       .prepare("SELECT name FROM projects WHERE id = ?")
       .get("01912345-6789-7abc-8def-0123456789ab") as { name: string };
     expect(row.name).toBe("Persistente");
-    expect(reopened.getSchemaVersion()).toBe(6);
+    expect(reopened.getSchemaVersion()).toBe(7);
     reopened.close();
   });
 });

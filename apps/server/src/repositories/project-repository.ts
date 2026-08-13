@@ -58,43 +58,70 @@ export class ProjectRepository {
     const now = new Date().toISOString();
     this.database.connection.exec("BEGIN IMMEDIATE");
     try {
-    this.database.connection
-      .prepare(`
+      this.database.connection
+        .prepare(
+          `
         INSERT INTO projects (
           id, name, niche, description, status, language, currency,
           created_at, updated_at
         ) VALUES (?, ?, ?, ?, 'active', 'es', 'USD', ?, ?)
-      `)
-      .run(
-        id,
-        input.name.trim(),
-        input.niche.trim(),
-        normalizeDescription(input.description),
-        now,
-        now,
-      );
+      `,
+        )
+        .run(
+          id,
+          input.name.trim(),
+          input.niche.trim(),
+          normalizeDescription(input.description),
+          now,
+          now,
+        );
 
-    this.database.connection.prepare(`
+      this.database.connection
+        .prepare(
+          `
       INSERT INTO project_settings (project_id, language, currency, content_language, updated_at)
       VALUES (?, 'es', 'USD', 'es', ?)
-    `).run(id, now);
-    const workflowSteps = [
-      ["research","Investigación"],["sources","Fuentes"],["problems","Problemas"],
-      ["opportunities","Oportunidades"],["product","Producto"],["avatar","Avatar"],
-      ["mechanism","Mecanismo"],["beliefs","Creencias"],["offer","Oferta"],
-      ["landing","Landing"],["funnel","Funnel"],["emails","Emails"],
-      ["content","Contenido"],["final_product","Producto final"],
-    ];
-    const insertStep = this.database.connection.prepare(`
+    `,
+        )
+        .run(id, now);
+      const workflowSteps = [
+        ["research", "Investigación"],
+        ["sources", "Fuentes"],
+        ["problems", "Problemas"],
+        ["opportunities", "Oportunidades"],
+        ["product", "Producto"],
+        ["avatar", "Avatar"],
+        ["mechanism", "Mecanismo"],
+        ["beliefs", "Creencias"],
+        ["offer", "Oferta"],
+        ["landing", "Landing"],
+        ["funnel", "Funnel"],
+        ["emails", "Emails"],
+        ["content", "Contenido"],
+        ["final_product", "Producto final"],
+      ];
+      const insertStep = this.database.connection.prepare(`
       INSERT INTO workflow_steps (id, project_id, step_key, label, position, state, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
-    for (const [index, [stepKey, label]] of workflowSteps.entries()) {
-      insertStep.run(uuidv7(), id, stepKey!, label!, index + 1, index === 0 ? "READY" : "PENDING", now);
+      for (const [index, [stepKey, label]] of workflowSteps.entries()) {
+        insertStep.run(
+          uuidv7(),
+          id,
+          stepKey!,
+          label!,
+          index + 1,
+          index === 0 ? "READY" : "PENDING",
+          now,
+        );
+      }
+      this.database.connection.exec("COMMIT");
+      return this.getRequired(id);
+    } catch (error) {
+      if (this.database.connection.isTransaction)
+        this.database.connection.exec("ROLLBACK");
+      throw error;
     }
-    this.database.connection.exec("COMMIT");
-    return this.getRequired(id);
-    } catch(error){if(this.database.connection.isTransaction)this.database.connection.exec("ROLLBACK");throw error;}
   }
 
   list(includeArchived = false): Project[] {
@@ -106,7 +133,9 @@ export class ProjectRepository {
           "SELECT * FROM projects WHERE status = 'active' ORDER BY updated_at DESC",
         );
 
-    return (statement.all() as unknown as ProjectRow[]).map((row) => this.withWorkflow(toProject(row)));
+    return (statement.all() as unknown as ProjectRow[]).map((row) =>
+      this.withWorkflow(toProject(row)),
+    );
   }
 
   get(id: string): Project | undefined {
@@ -150,11 +179,13 @@ export class ProjectRepository {
   archive(id: string): Project | undefined {
     const now = new Date().toISOString();
     const result = this.database.connection
-      .prepare(`
+      .prepare(
+        `
         UPDATE projects
         SET status = 'archived', archived_at = ?, updated_at = ?
         WHERE id = ? AND status = 'active'
-      `)
+      `,
+      )
       .run(now, now, id) as StatementResultingChanges;
 
     if (result.changes === 0) {
@@ -165,24 +196,71 @@ export class ProjectRepository {
 
   restore(id: string): Project | undefined {
     const now = new Date().toISOString();
-    this.database.connection.prepare(`UPDATE projects SET status='active', archived_at=NULL, updated_at=? WHERE id=?`).run(now, id);
+    this.database.connection
+      .prepare(
+        `UPDATE projects SET status='active', archived_at=NULL, updated_at=? WHERE id=?`,
+      )
+      .run(now, id);
     return this.get(id);
   }
 
   deletePermanently(id: string, confirmedName: string): boolean {
     const project = this.get(id);
     if (project === undefined || project.name !== confirmedName) return false;
-    const rawFiles=this.database.connection.prepare(`SELECT document.stored_relative_path path FROM knowledge_documents document JOIN knowledge_libraries library ON library.id=document.library_id WHERE library.scope='PROJECT' AND library.project_id=? AND document.stored_relative_path IS NOT NULL`).all(id) as unknown as Array<{path:string}>;
-    const result = this.database.connection.prepare("DELETE FROM projects WHERE id = ?").run(id) as StatementResultingChanges;
-    if(result.changes===1&&this.database.path!==":memory:"){const root=resolve(dirname(this.database.path));for(const item of rawFiles){const absolute=resolve(root,item.path);if(absolute.startsWith(`${root}\\knowledge\\`))rmSync(absolute,{force:true});}}
+    const rawFiles = this.database.connection
+      .prepare(
+        `
+      SELECT document.stored_relative_path path
+      FROM knowledge_documents document
+      JOIN knowledge_libraries library ON library.id=document.library_id
+      WHERE library.scope='PROJECT' AND library.project_id=? AND document.stored_relative_path IS NOT NULL
+      UNION
+      SELECT relative_path path FROM product_assets WHERE project_id=?
+      UNION
+      SELECT relative_path path FROM generated_files WHERE project_id=?
+    `,
+      )
+      .all(id, id, id) as unknown as Array<{ path: string }>;
+    const result = this.database.connection
+      .prepare("DELETE FROM projects WHERE id = ?")
+      .run(id) as StatementResultingChanges;
+    if (result.changes === 1 && this.database.path !== ":memory:") {
+      const root = resolve(dirname(this.database.path));
+      const allowedRoots = [
+        resolve(root, "knowledge"),
+        resolve(root, "assets"),
+        resolve(root, "generated"),
+      ];
+      for (const item of rawFiles) {
+        const absolute = resolve(root, item.path);
+        if (
+          allowedRoots.some(
+            (base) => absolute === base || absolute.startsWith(`${base}\\`),
+          )
+        )
+          rmSync(absolute, { force: true });
+      }
+      rmSync(resolve(root, "assets", id), { recursive: true, force: true });
+      rmSync(resolve(root, "generated", id), { recursive: true, force: true });
+    }
     return result.changes === 1;
   }
 
   private withWorkflow(project: Project): Project {
-    const rows = this.database.connection.prepare(`SELECT label, state FROM workflow_steps WHERE project_id=? ORDER BY position`).all(project.id) as unknown as Array<{label:string;state:string}>;
+    const rows = this.database.connection
+      .prepare(
+        `SELECT label, state FROM workflow_steps WHERE project_id=? ORDER BY position`,
+      )
+      .all(project.id) as unknown as Array<{ label: string; state: string }>;
     const completed = rows.filter((row) => row.state === "COMPLETED").length;
-    const current = rows.find((row) => row.state !== "COMPLETED")?.label ?? "Completado";
-    return { ...project, workflowStage: current, workflowCompletedSteps: completed, workflowTotalSteps: rows.length || 14 };
+    const current =
+      rows.find((row) => row.state !== "COMPLETED")?.label ?? "Completado";
+    return {
+      ...project,
+      workflowStage: current,
+      workflowCompletedSteps: completed,
+      workflowTotalSteps: rows.length || 14,
+    };
   }
 
   private getRequired(id: string): Project {

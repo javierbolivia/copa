@@ -10,6 +10,7 @@ const toGeneration=(r:GenerationRow):Generation=>({id:r.id,projectId:r.project_i
 
 export class JobRepository {
   constructor(private readonly database:AppDatabase){}
+  createGeneric(projectId:string,jobType:string,payload:Record<string,unknown>,message="Esperando procesamiento"):Job {const id=uuidv7(),now=new Date().toISOString();this.database.connection.prepare(`INSERT INTO jobs(id,project_id,job_type,status,progress,message,payload_json,created_at,updated_at) VALUES(?,?,?,'QUEUED',0,?,?,?,?)`).run(id,projectId,jobType,message,JSON.stringify(payload),now,now);return this.get(projectId,id)!;}
   createYouTube(projectId:string,sourceId:string,url:string):Job {const id=uuidv7(),now=new Date().toISOString();this.database.connection.prepare(`INSERT INTO jobs(id,project_id,source_id,job_type,status,progress,message,payload_json,created_at,updated_at) VALUES(?,?,?,'youtube_import','QUEUED',0,'Esperando importación',?,?,?)`).run(id,projectId,sourceId,JSON.stringify({url}),now,now);return this.get(projectId,id)!;}
   list(projectId:string):Job[]{return (this.database.connection.prepare("SELECT * FROM jobs WHERE project_id=? ORDER BY created_at DESC").all(projectId) as unknown as JobRow[]).map(toJob);}
   get(projectId:string,id:string):Job|undefined{const r=this.database.connection.prepare("SELECT * FROM jobs WHERE project_id=? AND id=?").get(projectId,id) as JobRow|undefined;return r?toJob(r):undefined;}

@@ -672,6 +672,177 @@ export const migrations: readonly Migration[] = [
       BEGIN SELECT RAISE(ABORT,'knowledge_retrieval_item_project_mismatch'); END;
     `,
   },
+  {
+    version: 7,
+    name: "007_visual_product_studio",
+    sql: `
+      CREATE TABLE product_documents (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        document_artifact_id TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+        product_artifact_version_id TEXT NOT NULL REFERENCES artifact_versions(id) ON DELETE RESTRICT,
+        opportunity_artifact_version_id TEXT REFERENCES artifact_versions(id) ON DELETE RESTRICT,
+        mechanism_artifact_version_id TEXT REFERENCES artifact_versions(id) ON DELETE RESTRICT,
+        document_type TEXT NOT NULL CHECK (document_type IN ('ebook','guide','workbook','checklist','lead_magnet')),
+        title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+        subtitle TEXT CHECK (subtitle IS NULL OR length(subtitle) <= 500),
+        language TEXT NOT NULL CHECK (length(trim(language)) BETWEEN 2 AND 16),
+        length TEXT NOT NULL CHECK (length IN ('short','medium','long')),
+        level TEXT NOT NULL CHECK (level IN ('beginner','intermediate','advanced')),
+        status TEXT NOT NULL DEFAULT 'DRAFT'
+          CHECK (status IN ('DRAFT','OUTLINE_READY','OUTLINE_APPROVED','IN_PROGRESS','APPROVED','STALE')),
+        active_version_id TEXT,
+        outline_approved_at TEXT,
+        approved_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id,id),
+        UNIQUE(document_artifact_id)
+      ) STRICT;
+
+      CREATE TABLE product_document_versions (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES product_documents(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        artifact_version_id TEXT NOT NULL REFERENCES artifact_versions(id) ON DELETE CASCADE,
+        version_number INTEGER NOT NULL CHECK (version_number > 0),
+        blocks_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(blocks_json) AND json_type(blocks_json)='array'),
+        outline_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(outline_json) AND json_type(outline_json)='array'),
+        theme_json TEXT NOT NULL CHECK (json_valid(theme_json) AND json_type(theme_json)='object'),
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json)='object'),
+        revision_kind TEXT NOT NULL CHECK (revision_kind IN ('WIZARD','OUTLINE','AUTOSAVE','CHAPTER','APPROVAL')),
+        idempotency_key TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(document_id,version_number),
+        UNIQUE(artifact_version_id),
+        UNIQUE(document_id,idempotency_key),
+        UNIQUE(project_id,id)
+      ) STRICT;
+
+      CREATE TABLE product_chapters (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES product_documents(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+        objective TEXT NOT NULL DEFAULT '' CHECK (length(objective) <= 2000),
+        position INTEGER NOT NULL CHECK (position >= 0),
+        target_words INTEGER NOT NULL CHECK (target_words BETWEEN 50 AND 50000),
+        status TEXT NOT NULL DEFAULT 'PENDING'
+          CHECK (status IN ('PENDING','GENERATING','DRAFT','APPROVED','FAILED','STALE')),
+        active_version_id TEXT,
+        approved_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(document_id,id),
+        UNIQUE(document_id,position)
+      ) STRICT;
+
+      CREATE TABLE product_chapter_versions (
+        id TEXT PRIMARY KEY,
+        chapter_id TEXT NOT NULL REFERENCES product_chapters(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES product_documents(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        version_number INTEGER NOT NULL CHECK (version_number > 0),
+        blocks_json TEXT NOT NULL CHECK (json_valid(blocks_json) AND json_type(blocks_json)='array'),
+        generation_id TEXT REFERENCES generations(id) ON DELETE SET NULL,
+        retrieval_log_id TEXT REFERENCES knowledge_retrieval_logs(id) ON DELETE SET NULL,
+        prompt_version TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('DRAFT','APPROVED','SUPERSEDED')),
+        created_at TEXT NOT NULL,
+        UNIQUE(chapter_id,version_number),
+        UNIQUE(project_id,id)
+      ) STRICT;
+
+      CREATE TABLE product_assets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        document_id TEXT REFERENCES product_documents(id) ON DELETE CASCADE,
+        asset_type TEXT NOT NULL CHECK (asset_type IN ('IMAGE','DIAGRAM','COVER')),
+        original_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        relative_path TEXT NOT NULL CHECK (relative_path LIKE 'assets/%' AND instr(relative_path,'..')=0 AND substr(relative_path,1,1)<>'/'),
+        checksum TEXT NOT NULL CHECK (length(checksum)=64),
+        bytes INTEGER NOT NULL CHECK (bytes >= 0),
+        width INTEGER CHECK (width IS NULL OR width > 0),
+        height INTEGER CHECK (height IS NULL OR height > 0),
+        metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json)='object'),
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id,relative_path),
+        UNIQUE(project_id,id)
+      ) STRICT;
+
+      CREATE TABLE product_exports (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        document_id TEXT NOT NULL REFERENCES product_documents(id) ON DELETE CASCADE,
+        document_version_id TEXT NOT NULL REFERENCES product_document_versions(id) ON DELETE RESTRICT,
+        generated_file_id TEXT REFERENCES generated_files(id) ON DELETE SET NULL,
+        format TEXT NOT NULL CHECK (format IN ('html','docx','pdf')),
+        relative_path TEXT NOT NULL CHECK (relative_path LIKE 'generated/%' AND instr(relative_path,'..')=0 AND substr(relative_path,1,1)<>'/'),
+        checksum TEXT NOT NULL CHECK (length(checksum)=64),
+        bytes INTEGER NOT NULL CHECK (bytes > 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id,relative_path),
+        UNIQUE(project_id,id)
+      ) STRICT;
+
+      CREATE INDEX product_documents_project_updated_idx ON product_documents(project_id,updated_at DESC);
+      CREATE INDEX product_document_versions_document_idx ON product_document_versions(document_id,version_number DESC);
+      CREATE INDEX product_chapters_document_idx ON product_chapters(document_id,position);
+      CREATE INDEX product_chapter_versions_chapter_idx ON product_chapter_versions(chapter_id,version_number DESC);
+      CREATE INDEX product_assets_project_idx ON product_assets(project_id,created_at DESC);
+      CREATE INDEX product_exports_document_idx ON product_exports(document_id,created_at DESC);
+
+      CREATE TRIGGER product_document_parent_guard_insert BEFORE INSERT ON product_documents
+      WHEN NOT EXISTS (SELECT 1 FROM artifacts artifact WHERE artifact.id=NEW.document_artifact_id AND artifact.project_id=NEW.project_id AND artifact.artifact_type='product_document')
+        OR NOT EXISTS (SELECT 1 FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id WHERE version.id=NEW.product_artifact_version_id AND version.project_id=NEW.project_id AND artifact.artifact_type='product')
+        OR (NEW.opportunity_artifact_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id WHERE version.id=NEW.opportunity_artifact_version_id AND version.project_id=NEW.project_id AND artifact.artifact_type='opportunities'))
+        OR (NEW.mechanism_artifact_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id WHERE version.id=NEW.mechanism_artifact_version_id AND version.project_id=NEW.project_id AND artifact.artifact_type='mechanism'))
+      BEGIN SELECT RAISE(ABORT,'product_document_parent_mismatch'); END;
+
+      CREATE TRIGGER product_document_version_guard_insert BEFORE INSERT ON product_document_versions
+      WHEN NOT EXISTS (SELECT 1 FROM product_documents document WHERE document.id=NEW.document_id AND document.project_id=NEW.project_id)
+        OR NOT EXISTS (SELECT 1 FROM artifact_versions version JOIN product_documents document ON document.document_artifact_id=version.artifact_id WHERE version.id=NEW.artifact_version_id AND version.project_id=NEW.project_id AND document.id=NEW.document_id)
+      BEGIN SELECT RAISE(ABORT,'product_document_version_mismatch'); END;
+
+      CREATE TRIGGER product_document_active_guard_update BEFORE UPDATE OF active_version_id ON product_documents
+      WHEN NEW.active_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM product_document_versions version WHERE version.id=NEW.active_version_id AND version.document_id=NEW.id AND version.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'product_document_active_version_mismatch'); END;
+
+      CREATE TRIGGER product_chapter_guard_insert BEFORE INSERT ON product_chapters
+      WHEN NOT EXISTS (SELECT 1 FROM product_documents document WHERE document.id=NEW.document_id AND document.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'product_chapter_project_mismatch'); END;
+
+      CREATE TRIGGER product_chapter_version_guard_insert BEFORE INSERT ON product_chapter_versions
+      WHEN NOT EXISTS (SELECT 1 FROM product_chapters chapter WHERE chapter.id=NEW.chapter_id AND chapter.document_id=NEW.document_id AND chapter.project_id=NEW.project_id)
+        OR (NEW.generation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generations generation WHERE generation.id=NEW.generation_id AND generation.project_id=NEW.project_id))
+        OR (NEW.retrieval_log_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM knowledge_retrieval_logs log WHERE log.id=NEW.retrieval_log_id AND log.project_id=NEW.project_id AND (NEW.generation_id IS NULL OR log.generation_id=NEW.generation_id)))
+      BEGIN SELECT RAISE(ABORT,'product_chapter_version_mismatch'); END;
+
+      CREATE TRIGGER product_chapter_active_guard_update BEFORE UPDATE OF active_version_id ON product_chapters
+      WHEN NEW.active_version_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM product_chapter_versions version WHERE version.id=NEW.active_version_id AND version.chapter_id=NEW.id AND version.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'product_chapter_active_version_mismatch'); END;
+
+      CREATE TRIGGER product_export_guard_insert BEFORE INSERT ON product_exports
+      WHEN NOT EXISTS (SELECT 1 FROM product_document_versions version WHERE version.id=NEW.document_version_id AND version.document_id=NEW.document_id AND version.project_id=NEW.project_id)
+        OR (NEW.generated_file_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generated_files file WHERE file.id=NEW.generated_file_id AND file.project_id=NEW.project_id))
+      BEGIN SELECT RAISE(ABORT,'product_export_project_mismatch'); END;
+
+      CREATE TRIGGER product_asset_guard_insert BEFORE INSERT ON product_assets
+      WHEN NEW.document_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM product_documents document WHERE document.id=NEW.document_id AND document.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'product_asset_project_mismatch'); END;
+      CREATE TRIGGER product_asset_guard_update BEFORE UPDATE OF project_id,document_id ON product_assets
+      WHEN NEW.document_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM product_documents document WHERE document.id=NEW.document_id AND document.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'product_asset_project_mismatch'); END;
+
+      CREATE TRIGGER product_export_guard_update BEFORE UPDATE OF project_id,document_id,document_version_id,generated_file_id ON product_exports
+      WHEN NOT EXISTS (SELECT 1 FROM product_document_versions version WHERE version.id=NEW.document_version_id AND version.document_id=NEW.document_id AND version.project_id=NEW.project_id)
+        OR (NEW.generated_file_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generated_files file WHERE file.id=NEW.generated_file_id AND file.project_id=NEW.project_id))
+      BEGIN SELECT RAISE(ABORT,'product_export_project_mismatch'); END;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

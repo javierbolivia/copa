@@ -180,8 +180,25 @@ export class TraceabilityService {
       LEFT JOIN approved_output_memory memory ON memory.id=item.memory_id
       WHERE item.project_id=? AND version.id IN (${placeholders}) ORDER BY item.rank_position
     `).all(projectId,...artifactIds) as unknown as Array<{id:string;knowledge_kind:string;chunk_id:string|null;memory_id:string|null;target_id:string;content_text:string|null;heading:string|null;page_number:number|null;document_title:string|null;library_name:string|null;artifact_type:string|null}>;
+    const chapterKnowledgeRows=artifactIds.length===0?[]:this.database.connection.prepare(`
+      SELECT item.id,item.knowledge_kind,item.chunk_id,item.memory_id,
+        document_version.artifact_version_id target_id,chunk.content_text,chunk.heading,chunk.page_number,
+        knowledge_document.title document_title,library.name library_name,memory.artifact_type
+      FROM knowledge_retrieval_items item
+      JOIN knowledge_retrieval_logs log ON log.id=item.retrieval_log_id AND log.project_id=item.project_id
+      JOIN product_chapter_versions chapter_version ON chapter_version.retrieval_log_id=log.id AND chapter_version.project_id=log.project_id
+      JOIN product_document_versions document_version
+        ON json_extract(document_version.metadata_json,'$.sourceChapterVersionId')=chapter_version.id
+        AND document_version.project_id=chapter_version.project_id
+      LEFT JOIN knowledge_chunks chunk ON chunk.id=item.chunk_id
+      LEFT JOIN knowledge_documents knowledge_document ON knowledge_document.id=chunk.document_id
+      LEFT JOIN knowledge_libraries library ON library.id=chunk.library_id
+      LEFT JOIN approved_output_memory memory ON memory.id=item.memory_id
+      WHERE item.project_id=? AND document_version.artifact_version_id IN (${placeholders})
+      ORDER BY item.rank_position
+    `).all(projectId,...artifactIds) as unknown as typeof knowledgeRows;
     const knowledgeIds=new Set<string>(),memoryIds=new Set<string>();
-    for(const item of knowledgeRows){const nodeId=item.chunk_id??item.memory_id??item.id;if(item.memory_id){if(!memoryIds.has(nodeId)){memoryIds.add(nodeId);nodes.push({id:nodeId,kind:"memory",label:`Memoria aprobada · ${item.artifact_type??"artefacto"}`,subtitle:"Output aprobado reutilizable",artifactType:item.artifact_type,versionNumber:null,status:"approved",freshness:null,provenance:"APPROVED_MEMORY"});}}else if(!knowledgeIds.has(nodeId)){knowledgeIds.add(nodeId);nodes.push({id:nodeId,kind:"knowledge",label:item.document_title??"Documento local",subtitle:[item.library_name,item.heading,item.page_number?`pág. ${item.page_number}`:null].filter(Boolean).join(" · ")||null,artifactType:null,versionNumber:null,status:"READY",freshness:null,provenance:item.knowledge_kind});}graphEdges.push({from:nodeId,to:item.target_id,relation:"influenced"});}
+    for(const item of [...knowledgeRows,...chapterKnowledgeRows]){const nodeId=item.chunk_id??item.memory_id??item.id;if(item.memory_id){if(!memoryIds.has(nodeId)){memoryIds.add(nodeId);nodes.push({id:nodeId,kind:"memory",label:`Memoria aprobada · ${item.artifact_type??"artefacto"}`,subtitle:"Output aprobado reutilizable",artifactType:item.artifact_type,versionNumber:null,status:"approved",freshness:null,provenance:"APPROVED_MEMORY"});}}else if(!knowledgeIds.has(nodeId)){knowledgeIds.add(nodeId);nodes.push({id:nodeId,kind:"knowledge",label:item.document_title??"Documento local",subtitle:[item.library_name,item.heading,item.page_number?`pág. ${item.page_number}`:null].filter(Boolean).join(" · ")||null,artifactType:null,versionNumber:null,status:"READY",freshness:null,provenance:item.knowledge_kind});}if(!graphEdges.some(edge=>edge.from===nodeId&&edge.to===item.target_id&&edge.relation==="influenced"))graphEdges.push({from:nodeId,to:item.target_id,relation:"influenced"});}
 
     return {
       rootId: rootVersionId,

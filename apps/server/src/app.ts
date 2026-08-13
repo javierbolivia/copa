@@ -22,13 +22,21 @@ import { ModuleService } from "./services/module-service.js";
 import { registerModuleRoutes } from "./routes/modules.js";
 import { registerDemoRoutes } from "./routes/demo.js";
 import { registerFileRoutes } from "./routes/files.js";
-import { OpenAIProvider, type OpenAIProviderOptions } from "./integrations/openai-provider.js";
+import {
+  OpenAIProvider,
+  type OpenAIProviderOptions,
+} from "./integrations/openai-provider.js";
 import type { ModuleServiceOptions } from "./services/module-service.js";
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
 import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
 import { KnowledgeIngestionService } from "./services/knowledge-ingestion-service.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
+import { ProductDocumentRepository } from "./repositories/product-document-repository.js";
+import { ProductStudioService } from "./services/product-studio-service.js";
+import { registerProductStudioRoutes } from "./routes/product-studio.js";
+import { ProductExportService } from "./services/product-export-service.js";
+import { registerProductExportRoutes } from "./routes/product-exports.js";
 
 export interface CreateAppOptions {
   readonly databasePath: string;
@@ -41,7 +49,10 @@ export interface CreateAppOptions {
 export async function createApp(
   options: CreateAppOptions,
 ): Promise<FastifyInstance> {
-  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 75 * 1024 * 1024 });
+  const app = Fastify({
+    logger: options.logger ?? false,
+    bodyLimit: 75 * 1024 * 1024,
+  });
   const database = new AppDatabase(options.databasePath);
   const projects = new ProjectRepository(database);
   const settings = new ProjectSettingsRepository(database);
@@ -50,21 +61,57 @@ export async function createApp(
   const sources = new SourceRepository(database);
   const jobs = new JobRepository(database);
   const backups = new BackupService(database);
-  const dataRoot = options.databasePath === ":memory:" ? resolve(tmpdir(),"our-platform-test-files") : resolve(options.databasePath, "..");
+  const dataRoot =
+    options.databasePath === ":memory:"
+      ? resolve(tmpdir(), "our-platform-test-files")
+      : resolve(options.databasePath, "..");
   const exporter = new FileExporterService(database, dataRoot);
   const openAI = new OpenAIProvider({
-    ...(process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : {}),
+    ...(process.env.OPENAI_API_KEY
+      ? { apiKey: process.env.OPENAI_API_KEY }
+      : {}),
     ...options.openAI,
   });
   const knowledge = new KnowledgeRepository(database);
-  const modules = new ModuleService(database, artifacts, workflow, exporter, settings, knowledge, {
-    openAI,
-    ...(process.env.OPENAI_ECONOMY_MODEL ? { economyModel: process.env.OPENAI_ECONOMY_MODEL } : {}),
-    ...(process.env.OPENAI_POWERFUL_MODEL ? { powerfulModel: process.env.OPENAI_POWERFUL_MODEL } : {}),
-    ...options.llm,
-  });
+  const modules = new ModuleService(
+    database,
+    artifacts,
+    workflow,
+    exporter,
+    settings,
+    knowledge,
+    {
+      openAI,
+      ...(process.env.OPENAI_ECONOMY_MODEL
+        ? { economyModel: process.env.OPENAI_ECONOMY_MODEL }
+        : {}),
+      ...(process.env.OPENAI_POWERFUL_MODEL
+        ? { powerfulModel: process.env.OPENAI_POWERFUL_MODEL }
+        : {}),
+      ...options.llm,
+    },
+  );
   const traceability = new TraceabilityService(database);
-  const knowledgeIngestion = new KnowledgeIngestionService(database, knowledge, dataRoot);
+  const knowledgeIngestion = new KnowledgeIngestionService(
+    database,
+    knowledge,
+    dataRoot,
+  );
+  const productDocuments = new ProductDocumentRepository(database);
+  const productStudio = new ProductStudioService(
+    database,
+    productDocuments,
+    artifacts,
+    jobs,
+    knowledge,
+    settings,
+    openAI,
+  );
+  const productExports = new ProductExportService(
+    database,
+    productDocuments,
+    dataRoot,
+  );
 
   app.addHook("onClose", async () => {
     database.close();
@@ -80,6 +127,8 @@ export async function createApp(
   registerFileRoutes(app, projects, exporter);
   registerTraceabilityRoutes(app, traceability);
   registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings);
+  registerProductStudioRoutes(app, projects, productStudio);
+  registerProductExportRoutes(app, productExports);
   youtubeImports.resumePending();
 
   if (options.serveFrontend ?? true) {

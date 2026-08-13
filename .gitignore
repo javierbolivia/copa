@@ -15,6 +15,7 @@ backups/
 *.db
 *.db-shm
 *.db-wal
+*.rar
 
 .DS_Store
 Thumbs.db

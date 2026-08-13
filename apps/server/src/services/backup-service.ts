@@ -27,6 +27,7 @@ export class BackupService {
     const dataRoot = dirname(this.database.path);
     this.copyDirectoryIfPresent(join(dataRoot, "generated"), `${path}.files`);
     this.copyDirectoryIfPresent(join(dataRoot, "knowledge"), `${path}.knowledge`);
+    this.copyDirectoryIfPresent(join(dataRoot, "assets"), `${path}.assets`);
     return this.inspect(filename);
   }
 
@@ -44,14 +45,16 @@ export class BackupService {
     const restored = this.inspect(safe);
     if (restored.schemaVersion !== LATEST_SCHEMA_VERSION) throw new Error("Versión de backup incompatible.");
     const backupPath = join(this.directory, safe);
-    const generatedSidecar = `${backupPath}.files`, knowledgeSidecar = `${backupPath}.knowledge`;
+    const generatedSidecar = `${backupPath}.files`, knowledgeSidecar = `${backupPath}.knowledge`, assetsSidecar=`${backupPath}.assets`;
     this.validateGenerated(backupPath, generatedSidecar);
     this.validateKnowledge(backupPath, knowledgeSidecar);
+    this.validateAssets(backupPath, assetsSidecar);
     const safetyBackup = await this.create("pre-restore");
     this.database.restoreFrom(backupPath);
     const dataRoot = dirname(this.database.path);
     this.replaceDirectory(generatedSidecar, join(dataRoot, "generated"));
     this.replaceDirectory(knowledgeSidecar, join(dataRoot, "knowledge"));
+    this.replaceDirectory(assetsSidecar, join(dataRoot, "assets"));
     return { restored, safetyBackup };
   }
 
@@ -73,6 +76,10 @@ export class BackupService {
 
   private validateKnowledge(databasePath: string, sidecar: string): void {
     this.validateChecksums(databasePath, sidecar, "knowledge_documents", "stored_relative_path", "file_sha256", "knowledge/");
+  }
+
+  private validateAssets(databasePath:string,sidecar:string):void{
+    this.validateChecksums(databasePath,sidecar,"product_assets","relative_path","checksum","assets/");
   }
 
   private validateChecksums(databasePath: string, sidecar: string, tableName: string, pathColumn: string, hashColumn: string, prefix: string): void {

@@ -4,6 +4,8 @@ import type {
   UpdateProjectInput,
 } from "@our-platform/shared";
 import type { StatementResultingChanges } from "node:sqlite";
+import { rmSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -170,7 +172,9 @@ export class ProjectRepository {
   deletePermanently(id: string, confirmedName: string): boolean {
     const project = this.get(id);
     if (project === undefined || project.name !== confirmedName) return false;
+    const rawFiles=this.database.connection.prepare(`SELECT document.stored_relative_path path FROM knowledge_documents document JOIN knowledge_libraries library ON library.id=document.library_id WHERE library.scope='PROJECT' AND library.project_id=? AND document.stored_relative_path IS NOT NULL`).all(id) as unknown as Array<{path:string}>;
     const result = this.database.connection.prepare("DELETE FROM projects WHERE id = ?").run(id) as StatementResultingChanges;
+    if(result.changes===1&&this.database.path!==":memory:"){const root=resolve(dirname(this.database.path));for(const item of rawFiles){const absolute=resolve(root,item.path);if(absolute.startsWith(`${root}\\knowledge\\`))rmSync(absolute,{force:true});}}
     return result.changes === 1;
   }
 

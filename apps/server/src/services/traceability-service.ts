@@ -2,7 +2,7 @@ import type { AppDatabase } from "../database/database.js";
 
 export interface TraceabilityNode {
   readonly id: string;
-  readonly kind: "artifact" | "evidence" | "source";
+  readonly kind: "artifact" | "evidence" | "source" | "knowledge" | "memory";
   readonly label: string;
   readonly subtitle: string | null;
   readonly artifactType: string | null;
@@ -24,6 +24,8 @@ export interface TraceabilityGraph {
   readonly edges: readonly TraceabilityEdge[];
   readonly evidenceCount: number;
   readonly sourceCount: number;
+  readonly knowledgeCount: number;
+  readonly memoryCount: number;
 }
 
 interface ArtifactTraceRow {
@@ -164,12 +166,31 @@ export class TraceabilityService {
       graphEdges.push({ from: item.id, to: item.target_id, relation: "supports" });
     }
 
+    const knowledgeRows=artifactIds.length===0?[]:this.database.connection.prepare(`
+      SELECT item.id,item.knowledge_kind,item.chunk_id,item.memory_id,log.generation_id,
+        version.id target_id,chunk.content_text,chunk.heading,chunk.page_number,
+        document.title document_title,library.name library_name,memory.artifact_type
+      FROM knowledge_retrieval_items item
+      JOIN knowledge_retrieval_logs log ON log.id=item.retrieval_log_id AND log.project_id=item.project_id
+      JOIN generations generation ON generation.id=log.generation_id AND generation.project_id=log.project_id
+      JOIN artifact_versions version ON version.project_id=log.project_id AND json_extract(version.input_snapshot,'$.generationId')=generation.id
+      LEFT JOIN knowledge_chunks chunk ON chunk.id=item.chunk_id
+      LEFT JOIN knowledge_documents document ON document.id=chunk.document_id
+      LEFT JOIN knowledge_libraries library ON library.id=chunk.library_id
+      LEFT JOIN approved_output_memory memory ON memory.id=item.memory_id
+      WHERE item.project_id=? AND version.id IN (${placeholders}) ORDER BY item.rank_position
+    `).all(projectId,...artifactIds) as unknown as Array<{id:string;knowledge_kind:string;chunk_id:string|null;memory_id:string|null;target_id:string;content_text:string|null;heading:string|null;page_number:number|null;document_title:string|null;library_name:string|null;artifact_type:string|null}>;
+    const knowledgeIds=new Set<string>(),memoryIds=new Set<string>();
+    for(const item of knowledgeRows){const nodeId=item.chunk_id??item.memory_id??item.id;if(item.memory_id){if(!memoryIds.has(nodeId)){memoryIds.add(nodeId);nodes.push({id:nodeId,kind:"memory",label:`Memoria aprobada · ${item.artifact_type??"artefacto"}`,subtitle:"Output aprobado reutilizable",artifactType:item.artifact_type,versionNumber:null,status:"approved",freshness:null,provenance:"APPROVED_MEMORY"});}}else if(!knowledgeIds.has(nodeId)){knowledgeIds.add(nodeId);nodes.push({id:nodeId,kind:"knowledge",label:item.document_title??"Documento local",subtitle:[item.library_name,item.heading,item.page_number?`pág. ${item.page_number}`:null].filter(Boolean).join(" · ")||null,artifactType:null,versionNumber:null,status:"READY",freshness:null,provenance:item.knowledge_kind});}graphEdges.push({from:nodeId,to:item.target_id,relation:"influenced"});}
+
     return {
       rootId: rootVersionId,
       nodes,
       edges: graphEdges,
       evidenceCount: evidenceIds.size,
       sourceCount: sourceIds.size,
+      knowledgeCount: knowledgeIds.size,
+      memoryCount: memoryIds.size,
     };
   }
 }

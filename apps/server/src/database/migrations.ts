@@ -376,6 +376,302 @@ export const migrations: readonly Migration[] = [
       BEGIN SELECT RAISE(ABORT, 'staleness_project_mismatch'); END;
     `,
   },
+  {
+    version: 6,
+    name: "006_knowledge_engine_fts_memory",
+    sql: `
+      ALTER TABLE project_settings ADD COLUMN knowledge_enabled INTEGER NOT NULL DEFAULT 1
+        CHECK (knowledge_enabled IN (0,1));
+
+      CREATE TABLE knowledge_libraries (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL CHECK (scope IN ('GLOBAL','PROJECT')),
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 160),
+        description TEXT CHECK (description IS NULL OR length(description) <= 2000),
+        domain TEXT NOT NULL DEFAULT 'GENERAL' CHECK (length(trim(domain)) BETWEEN 1 AND 80),
+        category TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json) AND json_type(tags_json)='array'),
+        priority INTEGER NOT NULL DEFAULT 50 CHECK (priority BETWEEN 0 AND 100),
+        is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0,1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK ((scope='GLOBAL' AND project_id IS NULL) OR (scope='PROJECT' AND project_id IS NOT NULL))
+      ) STRICT;
+
+      CREATE UNIQUE INDEX knowledge_libraries_global_name_unique
+        ON knowledge_libraries(lower(name)) WHERE scope='GLOBAL';
+      CREATE UNIQUE INDEX knowledge_libraries_project_name_unique
+        ON knowledge_libraries(project_id, lower(name)) WHERE scope='PROJECT';
+      CREATE INDEX knowledge_libraries_scope_project_idx
+        ON knowledge_libraries(scope, project_id, is_enabled, priority DESC);
+
+      CREATE TABLE project_knowledge_libraries (
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        library_id TEXT NOT NULL REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+        is_enabled INTEGER NOT NULL DEFAULT 1 CHECK (is_enabled IN (0,1)),
+        priority INTEGER NOT NULL DEFAULT 50 CHECK (priority BETWEEN 0 AND 100),
+        selected_at TEXT NOT NULL,
+        PRIMARY KEY(project_id, library_id)
+      ) STRICT, WITHOUT ROWID;
+
+      CREATE TABLE knowledge_documents (
+        id TEXT PRIMARY KEY,
+        library_id TEXT NOT NULL REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+        scope TEXT NOT NULL CHECK (scope IN ('GLOBAL','PROJECT')),
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        import_job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+        title TEXT NOT NULL CHECK (length(trim(title)) BETWEEN 1 AND 300),
+        description TEXT CHECK (description IS NULL OR length(description) <= 4000),
+        document_type TEXT NOT NULL CHECK (document_type IN ('pdf','docx','txt','markdown','html','manual')),
+        mime_type TEXT,
+        original_filename TEXT,
+        stored_relative_path TEXT,
+        file_sha256 TEXT CHECK (file_sha256 IS NULL OR length(file_sha256)=64),
+        byte_size INTEGER NOT NULL DEFAULT 0 CHECK (byte_size >= 0),
+        category TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json) AND json_type(tags_json)='array'),
+        original_metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(original_metadata_json) AND json_type(original_metadata_json)='object'),
+        status TEXT NOT NULL DEFAULT 'PENDING'
+          CHECK (status IN ('PENDING','PROCESSING','READY','FAILED','NEEDS_OCR')),
+        chunk_count INTEGER NOT NULL DEFAULT 0 CHECK (chunk_count >= 0),
+        error_code TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK ((scope='GLOBAL' AND project_id IS NULL) OR (scope='PROJECT' AND project_id IS NOT NULL)),
+        CHECK (stored_relative_path IS NULL OR (stored_relative_path LIKE 'knowledge/%' AND instr(stored_relative_path,'..')=0 AND substr(stored_relative_path,1,1)<>'/'))
+      ) STRICT;
+
+      CREATE UNIQUE INDEX knowledge_documents_library_hash_unique
+        ON knowledge_documents(library_id, file_sha256) WHERE file_sha256 IS NOT NULL;
+      CREATE INDEX knowledge_documents_library_status_idx
+        ON knowledge_documents(library_id, status, updated_at DESC);
+      CREATE INDEX knowledge_documents_project_idx
+        ON knowledge_documents(project_id, updated_at DESC) WHERE project_id IS NOT NULL;
+
+      CREATE TABLE knowledge_chunks (
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL REFERENCES knowledge_documents(id) ON DELETE CASCADE,
+        library_id TEXT NOT NULL REFERENCES knowledge_libraries(id) ON DELETE CASCADE,
+        scope TEXT NOT NULL CHECK (scope IN ('GLOBAL','PROJECT')),
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+        title_text TEXT NOT NULL,
+        heading TEXT,
+        page_number INTEGER CHECK (page_number IS NULL OR page_number > 0),
+        content_text TEXT NOT NULL CHECK (length(trim(content_text)) > 0),
+        content_sha256 TEXT NOT NULL CHECK (length(content_sha256)=64),
+        tags_text TEXT NOT NULL DEFAULT '',
+        token_estimate INTEGER NOT NULL CHECK (token_estimate >= 0),
+        previous_chunk_id TEXT REFERENCES knowledge_chunks(id) ON DELETE SET NULL,
+        next_chunk_id TEXT REFERENCES knowledge_chunks(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(document_id, chunk_index),
+        CHECK ((scope='GLOBAL' AND project_id IS NULL) OR (scope='PROJECT' AND project_id IS NOT NULL))
+      ) STRICT;
+
+      CREATE INDEX knowledge_chunks_document_idx ON knowledge_chunks(document_id, chunk_index);
+      CREATE INDEX knowledge_chunks_visibility_idx ON knowledge_chunks(scope, project_id, library_id);
+      CREATE INDEX knowledge_chunks_hash_idx ON knowledge_chunks(content_sha256);
+
+      CREATE VIRTUAL TABLE knowledge_chunks_fts USING fts5(
+        title_text, heading, content_text, tags_text,
+        content='knowledge_chunks', content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+
+      CREATE TRIGGER knowledge_chunks_fts_insert AFTER INSERT ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(rowid,title_text,heading,content_text,tags_text)
+        VALUES(NEW.rowid,NEW.title_text,NEW.heading,NEW.content_text,NEW.tags_text);
+      END;
+      CREATE TRIGGER knowledge_chunks_fts_delete AFTER DELETE ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts,rowid,title_text,heading,content_text,tags_text)
+        VALUES('delete',OLD.rowid,OLD.title_text,OLD.heading,OLD.content_text,OLD.tags_text);
+      END;
+      CREATE TRIGGER knowledge_chunks_fts_update AFTER UPDATE OF title_text,heading,content_text,tags_text ON knowledge_chunks BEGIN
+        INSERT INTO knowledge_chunks_fts(knowledge_chunks_fts,rowid,title_text,heading,content_text,tags_text)
+        VALUES('delete',OLD.rowid,OLD.title_text,OLD.heading,OLD.content_text,OLD.tags_text);
+        INSERT INTO knowledge_chunks_fts(rowid,title_text,heading,content_text,tags_text)
+        VALUES(NEW.rowid,NEW.title_text,NEW.heading,NEW.content_text,NEW.tags_text);
+      END;
+      CREATE TRIGGER knowledge_document_title_chunks_update AFTER UPDATE OF title ON knowledge_documents BEGIN
+        UPDATE knowledge_chunks SET title_text=NEW.title WHERE document_id=NEW.id;
+      END;
+
+      CREATE TABLE approved_output_memory (
+        id TEXT PRIMARY KEY,
+        origin_project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        artifact_version_id TEXT NOT NULL REFERENCES artifact_versions(id) ON DELETE CASCADE,
+        generation_id TEXT REFERENCES generations(id) ON DELETE SET NULL,
+        artifact_type TEXT NOT NULL,
+        disposition TEXT NOT NULL CHECK (disposition IN ('APPROVED','REJECTED')),
+        visibility TEXT NOT NULL DEFAULT 'PROJECT' CHECK (visibility IN ('PROJECT','GLOBAL')),
+        reusable INTEGER NOT NULL DEFAULT 0 CHECK (reusable IN (0,1)),
+        preferred INTEGER NOT NULL DEFAULT 0 CHECK (preferred IN (0,1)),
+        original_output_json TEXT NOT NULL CHECK (json_valid(original_output_json)),
+        edited_output_json TEXT CHECK (edited_output_json IS NULL OR json_valid(edited_output_json)),
+        search_text TEXT NOT NULL DEFAULT '',
+        notes TEXT CHECK (notes IS NULL OR length(notes) <= 2000),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(artifact_version_id),
+        CHECK (disposition='APPROVED' OR (reusable=0 AND preferred=0)),
+        CHECK (reusable=1 OR preferred=0)
+      ) STRICT;
+
+      CREATE INDEX approved_output_memory_visibility_idx
+        ON approved_output_memory(visibility, origin_project_id, disposition, reusable, updated_at DESC);
+
+      CREATE VIRTUAL TABLE approved_output_memory_fts USING fts5(
+        artifact_type, search_text,
+        content='approved_output_memory', content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+      CREATE TRIGGER approved_output_memory_fts_insert AFTER INSERT ON approved_output_memory BEGIN
+        INSERT INTO approved_output_memory_fts(rowid,artifact_type,search_text)
+        VALUES(NEW.rowid,NEW.artifact_type,NEW.search_text);
+      END;
+      CREATE TRIGGER approved_output_memory_fts_delete AFTER DELETE ON approved_output_memory BEGIN
+        INSERT INTO approved_output_memory_fts(approved_output_memory_fts,rowid,artifact_type,search_text)
+        VALUES('delete',OLD.rowid,OLD.artifact_type,OLD.search_text);
+      END;
+      CREATE TRIGGER approved_output_memory_fts_update AFTER UPDATE OF artifact_type,search_text ON approved_output_memory BEGIN
+        INSERT INTO approved_output_memory_fts(approved_output_memory_fts,rowid,artifact_type,search_text)
+        VALUES('delete',OLD.rowid,OLD.artifact_type,OLD.search_text);
+        INSERT INTO approved_output_memory_fts(rowid,artifact_type,search_text)
+        VALUES(NEW.rowid,NEW.artifact_type,NEW.search_text);
+      END;
+
+      CREATE TABLE knowledge_retrieval_logs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        generation_id TEXT REFERENCES generations(id) ON DELETE SET NULL,
+        agent_key TEXT NOT NULL,
+        query_text TEXT NOT NULL CHECK (length(trim(query_text)) > 0),
+        policy_json TEXT NOT NULL CHECK (json_valid(policy_json) AND json_type(policy_json)='object'),
+        selected_libraries_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(selected_libraries_json) AND json_type(selected_libraries_json)='array'),
+        max_chunks INTEGER NOT NULL CHECK (max_chunks BETWEEN 0 AND 100),
+        max_context_tokens INTEGER NOT NULL CHECK (max_context_tokens >= 0),
+        context_token_estimate INTEGER NOT NULL DEFAULT 0 CHECK (context_token_estimate >= 0),
+        embedding_provider TEXT NOT NULL DEFAULT 'disabled' CHECK (embedding_provider='disabled'),
+        created_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE INDEX knowledge_retrieval_logs_project_idx
+        ON knowledge_retrieval_logs(project_id, created_at DESC);
+      CREATE INDEX knowledge_retrieval_logs_generation_idx
+        ON knowledge_retrieval_logs(generation_id) WHERE generation_id IS NOT NULL;
+
+      CREATE TABLE knowledge_retrieval_items (
+        id TEXT PRIMARY KEY,
+        retrieval_log_id TEXT NOT NULL REFERENCES knowledge_retrieval_logs(id) ON DELETE CASCADE,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        knowledge_kind TEXT NOT NULL CHECK (knowledge_kind IN ('PROJECT_KNOWLEDGE','GLOBAL_KNOWLEDGE','APPROVED_MEMORY')),
+        chunk_id TEXT REFERENCES knowledge_chunks(id) ON DELETE RESTRICT,
+        memory_id TEXT REFERENCES approved_output_memory(id) ON DELETE RESTRICT,
+        rank_position INTEGER NOT NULL CHECK (rank_position > 0),
+        raw_score REAL NOT NULL,
+        token_estimate INTEGER NOT NULL CHECK (token_estimate >= 0),
+        citation_json TEXT NOT NULL CHECK (json_valid(citation_json) AND json_type(citation_json)='object'),
+        created_at TEXT NOT NULL,
+        UNIQUE(retrieval_log_id, rank_position),
+        CHECK ((chunk_id IS NOT NULL AND memory_id IS NULL AND knowledge_kind IN ('PROJECT_KNOWLEDGE','GLOBAL_KNOWLEDGE')) OR
+               (chunk_id IS NULL AND memory_id IS NOT NULL AND knowledge_kind='APPROVED_MEMORY'))
+      ) STRICT;
+
+      CREATE INDEX knowledge_retrieval_items_chunk_idx ON knowledge_retrieval_items(chunk_id) WHERE chunk_id IS NOT NULL;
+      CREATE INDEX knowledge_retrieval_items_memory_idx ON knowledge_retrieval_items(memory_id) WHERE memory_id IS NOT NULL;
+
+      CREATE TRIGGER project_knowledge_library_guard_insert BEFORE INSERT ON project_knowledge_libraries
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_libraries library
+        WHERE library.id=NEW.library_id AND (library.scope='GLOBAL' OR library.project_id=NEW.project_id)
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_library_project_mismatch'); END;
+      CREATE TRIGGER project_knowledge_library_guard_update BEFORE UPDATE OF project_id,library_id ON project_knowledge_libraries
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_libraries library
+        WHERE library.id=NEW.library_id AND (library.scope='GLOBAL' OR library.project_id=NEW.project_id)
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_library_project_mismatch'); END;
+
+      CREATE TRIGGER knowledge_document_library_guard_insert BEFORE INSERT ON knowledge_documents
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_libraries library
+        WHERE library.id=NEW.library_id AND library.scope=NEW.scope AND library.project_id IS NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_document_library_mismatch'); END;
+      CREATE TRIGGER knowledge_document_library_guard_update BEFORE UPDATE OF library_id,scope,project_id ON knowledge_documents
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_libraries library
+        WHERE library.id=NEW.library_id AND library.scope=NEW.scope AND library.project_id IS NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_document_library_mismatch'); END;
+
+      CREATE TRIGGER knowledge_chunk_document_guard_insert BEFORE INSERT ON knowledge_chunks
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_documents document
+        WHERE document.id=NEW.document_id AND document.library_id=NEW.library_id
+          AND document.scope=NEW.scope AND document.project_id IS NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_chunk_document_mismatch'); END;
+      CREATE TRIGGER knowledge_chunk_document_guard_update BEFORE UPDATE OF document_id,library_id,scope,project_id ON knowledge_chunks
+      WHEN NOT EXISTS (
+        SELECT 1 FROM knowledge_documents document
+        WHERE document.id=NEW.document_id AND document.library_id=NEW.library_id
+          AND document.scope=NEW.scope AND document.project_id IS NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'knowledge_chunk_document_mismatch'); END;
+      CREATE TRIGGER knowledge_chunk_neighbors_guard_insert BEFORE INSERT ON knowledge_chunks
+      WHEN (NEW.previous_chunk_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM knowledge_chunks neighbor WHERE neighbor.id=NEW.previous_chunk_id AND neighbor.document_id=NEW.document_id))
+        OR (NEW.next_chunk_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM knowledge_chunks neighbor WHERE neighbor.id=NEW.next_chunk_id AND neighbor.document_id=NEW.document_id))
+      BEGIN SELECT RAISE(ABORT,'knowledge_chunk_neighbor_mismatch'); END;
+      CREATE TRIGGER knowledge_chunk_neighbors_guard_update BEFORE UPDATE OF previous_chunk_id,next_chunk_id,document_id ON knowledge_chunks
+      WHEN (NEW.previous_chunk_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM knowledge_chunks neighbor WHERE neighbor.id=NEW.previous_chunk_id AND neighbor.document_id=NEW.document_id))
+        OR (NEW.next_chunk_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM knowledge_chunks neighbor WHERE neighbor.id=NEW.next_chunk_id AND neighbor.document_id=NEW.document_id))
+      BEGIN SELECT RAISE(ABORT,'knowledge_chunk_neighbor_mismatch'); END;
+
+      CREATE TRIGGER approved_output_memory_project_guard_insert BEFORE INSERT ON approved_output_memory
+      WHEN NOT EXISTS (SELECT 1 FROM artifact_versions version WHERE version.id=NEW.artifact_version_id AND version.project_id=NEW.origin_project_id)
+        OR (NEW.generation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generations generation WHERE generation.id=NEW.generation_id AND generation.project_id=NEW.origin_project_id))
+      BEGIN SELECT RAISE(ABORT,'approved_memory_project_mismatch'); END;
+      CREATE TRIGGER approved_output_memory_project_guard_update BEFORE UPDATE OF origin_project_id,artifact_version_id,generation_id ON approved_output_memory
+      WHEN NOT EXISTS (SELECT 1 FROM artifact_versions version WHERE version.id=NEW.artifact_version_id AND version.project_id=NEW.origin_project_id)
+        OR (NEW.generation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generations generation WHERE generation.id=NEW.generation_id AND generation.project_id=NEW.origin_project_id))
+      BEGIN SELECT RAISE(ABORT,'approved_memory_project_mismatch'); END;
+
+      CREATE TRIGGER knowledge_retrieval_generation_guard_insert BEFORE INSERT ON knowledge_retrieval_logs
+      WHEN NEW.generation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generations generation WHERE generation.id=NEW.generation_id AND generation.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'knowledge_retrieval_generation_mismatch'); END;
+      CREATE TRIGGER knowledge_retrieval_generation_guard_update BEFORE UPDATE OF project_id,generation_id ON knowledge_retrieval_logs
+      WHEN NEW.generation_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM generations generation WHERE generation.id=NEW.generation_id AND generation.project_id=NEW.project_id)
+      BEGIN SELECT RAISE(ABORT,'knowledge_retrieval_generation_mismatch'); END;
+
+      CREATE TRIGGER knowledge_retrieval_item_guard_insert BEFORE INSERT ON knowledge_retrieval_items
+      WHEN NOT EXISTS (SELECT 1 FROM knowledge_retrieval_logs log WHERE log.id=NEW.retrieval_log_id AND log.project_id=NEW.project_id)
+        OR (NEW.chunk_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM knowledge_chunks chunk
+          JOIN knowledge_libraries library ON library.id=chunk.library_id
+          LEFT JOIN project_knowledge_libraries selected ON selected.library_id=library.id AND selected.project_id=NEW.project_id AND selected.is_enabled=1
+          WHERE chunk.id=NEW.chunk_id AND ((chunk.scope='PROJECT' AND chunk.project_id=NEW.project_id) OR (chunk.scope='GLOBAL' AND selected.library_id IS NOT NULL))
+        ))
+        OR (NEW.memory_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM approved_output_memory memory WHERE memory.id=NEW.memory_id
+            AND memory.disposition='APPROVED' AND memory.reusable=1
+            AND (memory.origin_project_id=NEW.project_id OR memory.visibility='GLOBAL')
+        ))
+      BEGIN SELECT RAISE(ABORT,'knowledge_retrieval_item_project_mismatch'); END;
+      CREATE TRIGGER knowledge_retrieval_item_guard_update BEFORE UPDATE OF retrieval_log_id,project_id,chunk_id,memory_id ON knowledge_retrieval_items
+      WHEN NOT EXISTS (SELECT 1 FROM knowledge_retrieval_logs log WHERE log.id=NEW.retrieval_log_id AND log.project_id=NEW.project_id)
+        OR (NEW.chunk_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM knowledge_chunks chunk
+          JOIN knowledge_libraries library ON library.id=chunk.library_id
+          LEFT JOIN project_knowledge_libraries selected ON selected.library_id=library.id AND selected.project_id=NEW.project_id AND selected.is_enabled=1
+          WHERE chunk.id=NEW.chunk_id AND ((chunk.scope='PROJECT' AND chunk.project_id=NEW.project_id) OR (chunk.scope='GLOBAL' AND selected.library_id IS NOT NULL))
+        ))
+        OR (NEW.memory_id IS NOT NULL AND NOT EXISTS (
+          SELECT 1 FROM approved_output_memory memory WHERE memory.id=NEW.memory_id
+            AND memory.disposition='APPROVED' AND memory.reusable=1
+            AND (memory.origin_project_id=NEW.project_id OR memory.visibility='GLOBAL')
+        ))
+      BEGIN SELECT RAISE(ABORT,'knowledge_retrieval_item_project_mismatch'); END;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

@@ -11,7 +11,7 @@ const ParamsSchema = Type.Object({
 
 const NodeSchema = Type.Object({
   id: Type.String(),
-  kind: Type.Union([Type.Literal("artifact"), Type.Literal("evidence"), Type.Literal("source")]),
+  kind: Type.Union([Type.Literal("artifact"), Type.Literal("evidence"), Type.Literal("source"), Type.Literal("knowledge"), Type.Literal("memory")]),
   label: Type.String(),
   subtitle: Type.Union([Type.String(), Type.Null()]),
   artifactType: Type.Union([Type.String(), Type.Null()]),
@@ -26,6 +26,8 @@ const GraphSchema = Type.Object({
   edges: Type.Array(Type.Object({ from: Type.String(), to: Type.String(), relation: Type.String() })),
   evidenceCount: Type.Integer({ minimum: 0 }),
   sourceCount: Type.Integer({ minimum: 0 }),
+  knowledgeCount: Type.Integer({ minimum: 0 }),
+  memoryCount: Type.Integer({ minimum: 0 }),
 });
 
 interface Params { id: string; versionId: string }

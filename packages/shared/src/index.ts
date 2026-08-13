@@ -6,3 +6,4 @@ export * from "./project.js";
 export * from "./workflow.js";
 export * from "./artifact.js";
 export * from "./backup.js";
+export * from "./knowledge.js";

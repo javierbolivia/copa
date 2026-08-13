@@ -21,7 +21,7 @@ describe("Fase 2",()=>{
       INSERT INTO schema_migrations VALUES(1,'001_initial','${now}');
       CREATE TABLE projects(id TEXT PRIMARY KEY,name TEXT NOT NULL,niche TEXT NOT NULL,description TEXT,status TEXT NOT NULL DEFAULT 'active',language TEXT NOT NULL DEFAULT 'es',region TEXT,currency TEXT NOT NULL DEFAULT 'USD',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,archived_at TEXT) STRICT;
       INSERT INTO projects VALUES('01912345-6789-7abc-8def-0123456789ab','Legado','Nicho',NULL,'active','es',NULL,'USD','${now}','${now}',NULL);`);old.close();
-    const db=new AppDatabase(path);expect(db.getSchemaVersion()).toBe(5);expect(db.connection.prepare("SELECT name FROM projects").get()).toMatchObject({name:"Legado"});
+    const db=new AppDatabase(path);expect(db.getSchemaVersion()).toBe(6);expect(db.connection.prepare("SELECT name FROM projects").get()).toMatchObject({name:"Legado"});
     expect(db.connection.prepare("SELECT count(*) count FROM workflow_steps").get()).toMatchObject({count:14});expect(db.connection.prepare("SELECT count(*) count FROM project_settings").get()).toMatchObject({count:1});db.close();
   });
 

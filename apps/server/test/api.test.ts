@@ -27,7 +27,7 @@ describe("API local", () => {
       sqlite: {
         status: "ok",
         implementation: "node:sqlite",
-        schemaVersion: 5,
+        schemaVersion: 6,
       },
     });
   });

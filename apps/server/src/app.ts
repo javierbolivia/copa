@@ -26,6 +26,9 @@ import { OpenAIProvider, type OpenAIProviderOptions } from "./integrations/opena
 import type { ModuleServiceOptions } from "./services/module-service.js";
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
+import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
+import { KnowledgeIngestionService } from "./services/knowledge-ingestion-service.js";
+import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 
 export interface CreateAppOptions {
   readonly databasePath: string;
@@ -38,7 +41,7 @@ export interface CreateAppOptions {
 export async function createApp(
   options: CreateAppOptions,
 ): Promise<FastifyInstance> {
-  const app = Fastify({ logger: options.logger ?? false });
+  const app = Fastify({ logger: options.logger ?? false, bodyLimit: 75 * 1024 * 1024 });
   const database = new AppDatabase(options.databasePath);
   const projects = new ProjectRepository(database);
   const settings = new ProjectSettingsRepository(database);
@@ -53,13 +56,15 @@ export async function createApp(
     ...(process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : {}),
     ...options.openAI,
   });
-  const modules = new ModuleService(database, artifacts, workflow, exporter, settings, {
+  const knowledge = new KnowledgeRepository(database);
+  const modules = new ModuleService(database, artifacts, workflow, exporter, settings, knowledge, {
     openAI,
     ...(process.env.OPENAI_ECONOMY_MODEL ? { economyModel: process.env.OPENAI_ECONOMY_MODEL } : {}),
     ...(process.env.OPENAI_POWERFUL_MODEL ? { powerfulModel: process.env.OPENAI_POWERFUL_MODEL } : {}),
     ...options.llm,
   });
   const traceability = new TraceabilityService(database);
+  const knowledgeIngestion = new KnowledgeIngestionService(database, knowledge, dataRoot);
 
   app.addHook("onClose", async () => {
     database.close();
@@ -74,6 +79,7 @@ export async function createApp(
   registerDemoRoutes(app, projects, sources, modules);
   registerFileRoutes(app, projects, exporter);
   registerTraceabilityRoutes(app, traceability);
+  registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings);
   youtubeImports.resumePending();
 
   if (options.serveFrontend ?? true) {

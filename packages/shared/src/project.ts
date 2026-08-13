@@ -66,12 +66,13 @@ export const ProjectSettingsSchema = Type.Object({
   powerfulModel: Type.Union([Type.String({ maxLength: 120 }), Type.Null()]),
   maxBudget: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
   contentLanguage: Type.String({ minLength: 2, maxLength: 16 }),
+  knowledgeEnabled: Type.Boolean(),
   updatedAt: Type.String({ format: "date-time" }),
 });
 
-export const UpdateProjectSettingsSchema = Type.Omit(ProjectSettingsSchema, [
-  "projectId",
-  "updatedAt",
+export const UpdateProjectSettingsSchema = Type.Intersect([
+  Type.Omit(ProjectSettingsSchema, ["projectId", "updatedAt", "knowledgeEnabled"]),
+  Type.Object({ knowledgeEnabled: Type.Optional(Type.Boolean()) }),
 ]);
 
 export const PermanentDeleteSchema = Type.Object({

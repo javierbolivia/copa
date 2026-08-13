@@ -415,6 +415,24 @@
   background: #eff8e6;
   font-weight: 800;
 }
+.ps-export-feedback {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #172033;
+}
+.ps-export-feedback.is-success {
+  background: #ecfdf3;
+  color: #166534;
+}
+.ps-export-feedback.is-error {
+  background: #fef2f2;
+  color: #991b1b;
+}
+.ps-export-feedback code {
+  overflow-wrap: anywhere;
+}
 .ps-export-row,
 .ps-version {
   display: grid;

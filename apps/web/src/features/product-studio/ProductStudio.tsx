@@ -40,6 +40,11 @@ const blockTypes: ProductBlockType[] = [
 ];
 type View = "studio" | "cover" | "assets" | "export" | "versions";
 type ProductMetadata = ProductDocumentVersion["metadata"];
+type ExportFormat = "html" | "docx" | "pdf";
+type ExportFeedback =
+  | { status: "exporting"; format: ExportFormat }
+  | { status: "success"; format: ExportFormat; item: ProductExport }
+  | { status: "error"; format: ExportFormat; message: string };
 
 export function ProductStudio({ projectId }: { projectId: string }) {
   const [documents, setDocuments] = useState<ProductDocument[]>([]),
@@ -60,6 +65,9 @@ export function ProductStudio({ projectId }: { projectId: string }) {
   const [context, setContext] = useState<KnowledgeUsed | null>(null),
     [generation, setGeneration] = useState<Generation | null>(null),
     [estimate, setEstimate] = useState<ProductGenerationEstimate | null>(null);
+  const [exportFeedback, setExportFeedback] = useState<ExportFeedback | null>(
+    null,
+  );
   const hydrated = useRef(false),
     saveTimer = useRef<number | undefined>(undefined),
     retryTimer = useRef<number | undefined>(undefined),
@@ -346,6 +354,26 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     ]);
     setAssets(assetResult.assets);
     setExports(exportResult.exports);
+  };
+  const exportDocument = async (format: ExportFormat) => {
+    setBusy(true);
+    setError(null);
+    setExportFeedback({ status: "exporting", format });
+    try {
+      const item = await api.exportProductDocument(
+        projectId,
+        document.id,
+        format,
+      );
+      await refreshFiles();
+      setExportFeedback({ status: "success", format, item });
+    } catch (cause) {
+      const detail = message(cause);
+      setError(detail);
+      setExportFeedback({ status: "error", format, message: detail });
+    } finally {
+      setBusy(false);
+    }
   };
   const refreshContext = async () => {
     if (!chapter) return;
@@ -671,25 +699,14 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           busy={busy}
           exports={exports}
           validation={validation}
+          feedback={exportFeedback}
           onValidate={() =>
             void api
               .validateProductDocument(projectId, document.id)
               .then(setValidation)
               .catch((e) => setError(message(e)))
           }
-          onExport={(format) =>
-            void (async () => {
-              setBusy(true);
-              try {
-                await api.exportProductDocument(projectId, document.id, format);
-                await refreshFiles();
-              } catch (e) {
-                setError(message(e));
-              } finally {
-                setBusy(false);
-              }
-            })
-          }
+          onExport={(format) => void exportDocument(format)}
         />
       )}
       {view === "versions" && <Versions versions={versions} />}
@@ -1206,20 +1223,22 @@ function ExportPanel({
   busy,
   exports,
   validation,
+  feedback,
   onValidate,
   onExport,
 }: {
   busy: boolean;
   exports: ProductExport[];
   validation: ProductValidation | null;
+  feedback: ExportFeedback | null;
   onValidate: () => void;
-  onExport: (format: "html" | "docx" | "pdf") => void;
+  onExport: (format: ExportFormat) => void;
 }) {
   return (
     <div className="ps-export">
       <article className="detail-card">
         <h3>Validación del producto</h3>
-        <button className="button secondary" onClick={onValidate}>
+        <button className="button secondary" type="button" onClick={onValidate}>
           Revisar antes de exportar
         </button>
         {validation && (
@@ -1249,20 +1268,46 @@ function ExportPanel({
       </article>
       <article className="detail-card">
         <h3>Exportar archivos reales</h3>
+        {feedback?.status === "exporting" && (
+          <p className="ps-export-feedback" role="status">
+            Exportando {feedback.format.toUpperCase()}…
+          </p>
+        )}
+        {feedback?.status === "success" && (
+          <p className="ps-export-feedback is-success" role="status">
+            {feedback.item.filename} listo. {formatLabel(feedback.format)} creado en{" "}
+            <code>{feedback.item.downloadUrl}</code>.{" "}
+            <a href={feedback.item.downloadUrl} download>
+              Descargar / abrir archivo
+            </a>
+          </p>
+        )}
+        {feedback?.status === "error" && (
+          <p className="ps-export-feedback is-error" role="alert">
+            No se pudo exportar {feedback.format.toUpperCase()}: {feedback.message}
+          </p>
+        )}
         <div className="ps-export-actions">
-          <button disabled={busy} onClick={() => onExport("html")}>
-            Export HTML
+          <button type="button" disabled={busy} onClick={() => onExport("html")}>
+            {feedback?.status === "exporting" && feedback.format === "html"
+              ? "Exportando HTML…"
+              : "Export HTML"}
           </button>
-          <button disabled={busy} onClick={() => onExport("docx")}>
-            Export DOCX
+          <button type="button" disabled={busy} onClick={() => onExport("docx")}>
+            {feedback?.status === "exporting" && feedback.format === "docx"
+              ? "Exportando DOCX…"
+              : "Export DOCX"}
           </button>
-          <button disabled={busy} onClick={() => onExport("pdf")}>
-            Export PDF
+          <button type="button" disabled={busy} onClick={() => onExport("pdf")}>
+            {feedback?.status === "exporting" && feedback.format === "pdf"
+              ? "Exportando PDF…"
+              : "Export PDF"}
           </button>
         </div>
       </article>
       <article className="detail-card">
         <h3>Historial</h3>
+        {!exports.length && <p>Aún no hay exports para este documento.</p>}
         {exports.map((item) => (
           <div className="ps-export-row" key={item.id}>
             <strong>{item.filename}</strong>
@@ -1271,7 +1316,7 @@ function ExportPanel({
               {(item.bytes / 1024).toFixed(1)} KB · SHA-256{" "}
               {item.checksum.slice(0, 12)}…
             </small>
-            <a className="button secondary" href={item.downloadUrl}>
+            <a className="button secondary" href={item.downloadUrl} download>
               Descargar
             </a>
           </div>
@@ -1279,6 +1324,9 @@ function ExportPanel({
       </article>
     </div>
   );
+}
+function formatLabel(format: ExportFormat) {
+  return format.toUpperCase();
 }
 function Versions({ versions }: { versions: ProductDocumentVersion[] }) {
   return (

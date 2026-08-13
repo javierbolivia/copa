@@ -122,6 +122,9 @@ export class ModuleService {
         ).get(projectId) as { total: number }).total;
         if (sourceCount > 0) parent = await this.run(projectId, "sources", "mock");
       }
+      if (parentKey === "sources" && parent?.freshness === "stale") {
+        parent = await this.run(projectId, "sources", "mock");
+      }
       if (!parent) throw new Error(`Falta completar ${parentKey}.`);
       if (parent.freshness === "stale") throw new Error(`${parentKey} está obsoleto.`);
       parentIds.push(parent.versionId);

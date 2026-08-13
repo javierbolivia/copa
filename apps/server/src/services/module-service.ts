@@ -45,7 +45,7 @@ export class ModuleService {
         economyModel: projectSettings?.economyModel?.trim() || this.options.economyModel || "gpt-5-mini",
         powerfulModel: projectSettings?.powerfulModel?.trim() || this.options.powerfulModel || "gpt-5",
       },
-      gemini:{configured:this.options.gemini.configured,economyModel:"gemini-2.5-flash",powerfulModel:"gemini-2.5-pro"},
+      gemini:{configured:this.options.gemini.configured,economyModel:"gemini-2.5-flash-lite",powerfulModel:"gemini-2.5-flash-lite"},
       defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
     };
   }
@@ -165,7 +165,7 @@ export class ModuleService {
       promptVersion = prompt.versionHash;
       promptHash = prompt.hash;
       promptPath = prompt.relativePath;
-      model = selectedProvider==="gemini"?(prompt.modelTier==="powerful"?"gemini-2.5-pro":"gemini-2.5-flash"):resolveModel(prompt.modelTier, projectSettings, this.options);
+      model = selectedProvider==="gemini"?"gemini-2.5-flash-lite":resolveModel(prompt.modelTier, projectSettings, this.options);
       providerInput = {
         project: { name: project.name, niche: project.niche }, settings: projectSettings,
         moduleKey: key, parentOutputs, evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},

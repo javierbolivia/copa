@@ -41,6 +41,7 @@ export interface ProviderStatus {
   openai: { configured: boolean; economyModel: string; powerfulModel: string };
   defaultProvider: "mock" | "openai";
 }
+export interface YouTubeResearchVideo {videoId:string;title:string;description?:string;channelId:string;channelTitle:string;publishedAt:string;thumbnailUrl?:string;duration?:string;viewCount?:number;likeCount?:number;commentCount?:number;researchScore:number;scoreExplanation:string;alreadyImported:boolean}
 export interface TraceabilityNode {
   id: string;
   kind: "artifact" | "evidence" | "source" | "knowledge" | "memory";
@@ -234,6 +235,10 @@ export const api = {
     ),
   youtubeStatus: () =>
     request<{ configured: boolean }>("/api/integrations/youtube/status"),
+  youtubeSearch: (id:string, query:string, pageToken?:string) => request<{items:YouTubeResearchVideo[];nextPageToken?:string}>(`/api/projects/${id}/youtube/search?q=${encodeURIComponent(query)}${pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:""}`),
+  importYouTubeResearch: (id:string,input:{videoId:string;title:string;topLevelLimit:number}) => request<{source:import("@our-platform/shared").Source;job:Job}>(`/api/projects/${id}/youtube/import`,json("POST",input)),
+  setSourceAnalysis: (id:string,sourceId:string,included:boolean) => request<import("@our-platform/shared").Source>(`/api/projects/${id}/sources/${sourceId}/analysis`,json("PUT",{included})),
+  analysisSet: (id:string) => request<{comments:import("@our-platform/shared").Comment[]}>(`/api/projects/${id}/analysis-set`),
   knowledgeLibraries: (id: string) =>
     request<{ libraries: KnowledgeLibrary[] }>(
       `/api/projects/${id}/knowledge/libraries`,

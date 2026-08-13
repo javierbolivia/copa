@@ -14,6 +14,9 @@ const CommentListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:3
 const SourcesResponse=Type.Object({sources:Type.Array(SourceSchema)}),CommentsResponse=Type.Object({comments:Type.Array(CommentSchema)}),JobsResponse=Type.Object({jobs:Type.Array(JobSchema)}),GenerationsResponse=Type.Object({generations:Type.Array(GenerationSchema)});
 const YouTubeQueuedResponse=Type.Object({source:SourceSchema,job:JobSchema});
 const EvidenceParams=Type.Object({id:Type.String({format:"uuid"}),evidenceId:Type.String({format:"uuid"})});
+const YouTubeSearchQuery=Type.Object({q:Type.String({minLength:2,maxLength:300}),pageToken:Type.Optional(Type.String({maxLength:500}))});
+const YouTubeImportBody=Type.Object({videoId:Type.String({minLength:11,maxLength:32}),title:Type.String({minLength:1,maxLength:300}),topLevelLimit:Type.Integer({minimum:1,maximum:2000})});
+const IncludeAnalysisBody=Type.Object({included:Type.Boolean()});
 
 type SourceListQueryType={query?:string;sourceType?:"youtube"|"manual"|"demo"};
 type CommentListQueryType={query?:string;sourceId?:string;replies?:boolean;minLikes?:number;limit?:number;offset?:number};
@@ -21,6 +24,15 @@ const missing=(message:string):ApiError=>({error:"not_found",message});
 
 export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepository,jobs:JobRepository,youtube:YouTubeImportService):void {
   app.get<{Reply:{configured:boolean}}>('/api/integrations/youtube/status',{schema:{response:{200:Type.Object({configured:Type.Boolean()})}}},async()=>({configured:youtube.isConfigured()}));
+  app.get<{Params:{id:string};Querystring:{q:string;pageToken?:string};Reply:unknown|ApiError}>("/api/projects/:id/youtube/search",{schema:{params:ProjectParams,querystring:YouTubeSearchQuery}},async(req,reply)=>{
+    if(!sources.projectExists(req.params.id))return reply.code(404).send(missing("El proyecto no existe."));
+    try{const result=await youtube.search(req.query.q.trim(),req.query.pageToken);return {...result,items:result.items.map(item=>({...item,alreadyImported:sources.findYouTubeByVideoId(req.params.id,item.videoId)!==undefined}))};}
+    catch(error){if(error instanceof YouTubeImportError)return reply.code(503).send({error:error.code,message:error.message});throw error;}
+  });
+  app.post<{Params:{id:string};Body:{videoId:string;title:string;topLevelLimit:number};Reply:{source:Source;job:Job}|ApiError}>("/api/projects/:id/youtube/import",{schema:{params:ProjectParams,body:YouTubeImportBody}},async(req,reply)=>{
+    try{return reply.code(202).send(youtube.queue(req.params.id,`https://www.youtube.com/watch?v=${req.body.videoId}`,req.body.title,req.body.topLevelLimit));}
+    catch(error){if(error instanceof YouTubeImportError)return reply.code(error.code==="youtube_not_configured"?503:400).send({error:error.code,message:error.message});throw error;}
+  });
   app.get<{Params:{id:string};Querystring:SourceListQueryType;Reply:{sources:Source[]}}>("/api/projects/:id/sources",{schema:{params:ProjectParams,querystring:SourceListQuery,response:{200:SourcesResponse}}},async(req)=>({sources:sources.list(req.params.id,req.query)}));
   app.get<{Params:{id:string;sourceId:string};Reply:SourceBundle|ApiError}>("/api/projects/:id/sources/:sourceId",{schema:{params:SourceParams,response:{200:SourceBundleSchema,404:ApiErrorSchema}}},async(req,reply)=>sources.getBundle(req.params.id,req.params.sourceId)??reply.code(404).send(missing("La fuente no existe en este proyecto.")));
   app.post<{Params:{id:string};Body:CreateSourceInput;Reply:SourceBundle|{source:Source;job:Job}|ApiError}>("/api/projects/:id/sources",{schema:{params:ProjectParams,body:CreateSourceSchema,response:{201:SourceBundleSchema,202:YouTubeQueuedResponse,400:ApiErrorSchema,404:ApiErrorSchema,503:ApiErrorSchema}}},async(req,reply)=>{
@@ -37,6 +49,8 @@ export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepositor
     }
   });
   app.delete<{Params:{id:string;sourceId:string};Reply:{deleted:true}|ApiError}>("/api/projects/:id/sources/:sourceId",{schema:{params:SourceParams}},async(req,reply)=>sources.delete(req.params.id,req.params.sourceId)?{deleted:true as const}:reply.code(404).send(missing("La fuente no existe en este proyecto.")));
+  app.put<{Params:{id:string;sourceId:string};Body:{included:boolean};Reply:Source|ApiError}>("/api/projects/:id/sources/:sourceId/analysis",{schema:{params:SourceParams,body:IncludeAnalysisBody}},async(req,reply)=>sources.setIncludedInAnalysis(req.params.id,req.params.sourceId,req.body.included)??reply.code(404).send(missing("La fuente no existe en este proyecto.")));
+  app.get<{Params:{id:string};Reply:{comments:Comment[]}}>("/api/projects/:id/analysis-set",{schema:{params:ProjectParams,response:{200:CommentsResponse}}},async(req)=>({comments:sources.analysisSet(req.params.id)}));
   app.get<{Params:{id:string};Querystring:CommentListQueryType;Reply:{comments:Comment[]}}>("/api/projects/:id/comments",{schema:{params:ProjectParams,querystring:CommentListQuery,response:{200:CommentsResponse}}},async(req)=>({comments:sources.listComments(req.params.id,req.query)}));
   app.get<{Params:{id:string};Reply:{jobs:Job[]}}>("/api/projects/:id/jobs",{schema:{params:ProjectParams,response:{200:JobsResponse}}},async(req)=>({jobs:jobs.list(req.params.id)}));
   app.get<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>jobs.get(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));

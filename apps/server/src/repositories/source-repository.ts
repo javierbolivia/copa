@@ -9,12 +9,12 @@ type SourceType = "youtube" | "manual" | "demo";
 
 interface SourceRow {
   id: string; project_id: string; source_type: SourceType; title: string;
-  url: string | null; status: string; metadata_json: string; created_at: string;
+  url: string | null; status: string; include_in_analysis:number; metadata_json: string; created_at: string;
 }
 interface CommentRow {
   id: string; project_id: string; source_id: string; platform_comment_id: string;
   author: string; text: string; likes: number; published_at: string | null;
-  thread_id: string | null; parent_comment_id: string | null; is_reply: number; is_demo: number;
+  thread_id: string | null; parent_comment_id: string | null; is_reply: number; is_demo: number; analysis_eligible:number;noise_reason:string|null;quality_score:number;
 }
 
 export interface SourceListFilter { query?: string; sourceType?: SourceType }
@@ -35,18 +35,27 @@ const DEMO_COMMENTS = [
   ["Raúl (DEMO)", "Quiero compartir álbumes familiares sin exponer todas mis fotos privadas.", 11],
 ] as const;
 
+function classifyComment(text:string,isReply:boolean):{eligible:boolean;reason:string|null;score:number}{
+  const normalized=text.trim(),letters=normalized.replace(/[^\p{L}\p{N}]/gu,"");
+  if(!letters)return{eligible:false,reason:"vacío o solo emojis",score:0};
+  if(/^https?:\/\/\S+$/i.test(normalized))return{eligible:false,reason:"URL sin contexto",score:10};
+  if(isReply&&letters.length<8)return{eligible:false,reason:"respuesta muy corta sin contexto",score:25};
+  if(/^(.)\1{7,}$/u.test(letters))return{eligible:false,reason:"texto repetitivo",score:10};
+  return{eligible:true,reason:null,score:Math.min(100,Math.max(55,70+Math.min(30,Math.floor(letters.length/12))))};
+}
+
 function parseMetadata(value: string): Record<string, unknown> {
   try { return JSON.parse(value) as Record<string, unknown>; } catch { return {}; }
 }
 function toSource(row: SourceRow): Source {
   return { id: row.id, projectId: row.project_id, sourceType: row.source_type, title: row.title,
-    url: row.url, status: row.status, metadata: parseMetadata(row.metadata_json), createdAt: row.created_at };
+    url: row.url, status: row.status, includeInAnalysis:row.include_in_analysis===1, metadata: parseMetadata(row.metadata_json), createdAt: row.created_at };
 }
 function toComment(row: CommentRow): Comment {
   return { id: row.id, projectId: row.project_id, sourceId: row.source_id,
     platformCommentId: row.platform_comment_id, author: row.author, text: row.text, likes: row.likes,
     publishedAt: row.published_at, threadId: row.thread_id, parentCommentId: row.parent_comment_id,
-    isReply: row.is_reply === 1, isDemo: row.is_demo === 1 };
+    isReply: row.is_reply === 1, isDemo: row.is_demo === 1,analysisEligible:row.analysis_eligible===1,noiseReason:row.noise_reason,qualityScore:row.quality_score };
 }
 
 export class SourceRepository {
@@ -72,6 +81,10 @@ export class SourceRepository {
     const row=this.database.connection.prepare("SELECT * FROM sources WHERE project_id=? AND source_type='youtube' AND json_extract(metadata_json,'$.videoId')=? AND status NOT IN ('failed','cancelled') ORDER BY created_at LIMIT 1").get(projectId,videoId) as SourceRow|undefined;
     return row?toSource(row):undefined;
   }
+
+  setIncludedInAnalysis(projectId:string,sourceId:string,included:boolean):Source|undefined{this.database.connection.prepare("UPDATE sources SET include_in_analysis=?,updated_at=? WHERE project_id=? AND id=?").run(included?1:0,new Date().toISOString(),projectId,sourceId);return this.get(projectId,sourceId);}
+
+  analysisSet(projectId:string):Comment[]{return (this.database.connection.prepare(`SELECT c.* FROM comments c JOIN sources s ON s.id=c.source_id AND s.project_id=c.project_id WHERE c.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,c.created_at`).all(projectId) as unknown as CommentRow[]).map(toComment);}
 
   getBundle(projectId: string, sourceId: string): SourceBundle | undefined {
     const source=this.get(projectId,sourceId); if(!source)return undefined;
@@ -108,13 +121,13 @@ export class SourceRepository {
       this.database.connection.prepare(`INSERT INTO videos(id,project_id,source_id,platform_video_id,title,channel_id,channel_title,published_at,comment_count,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,'{}',?) ON CONFLICT(source_id,platform_video_id) DO UPDATE SET title=excluded.title,channel_id=excluded.channel_id,channel_title=excluded.channel_title,published_at=excluded.published_at,comment_count=excluded.comment_count`)
         .run(videoRowId,projectId,sourceId,video.videoId,video.title,video.channelId,video.channelTitle,video.publishedAt,video.commentCount??null,now);
       const actualVideo=(this.database.connection.prepare("SELECT id FROM videos WHERE project_id=? AND source_id=? AND platform_video_id=?").get(projectId,sourceId,video.videoId) as {id:string}).id;
-      const upsert=this.database.connection.prepare(`INSERT INTO comments(id,project_id,source_id,video_id,platform_comment_id,thread_id,parent_comment_id,author,text,likes,published_at,updated_at,is_reply,is_demo,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,'{}',?) ON CONFLICT(source_id,platform_comment_id) DO UPDATE SET author=excluded.author,text=excluded.text,likes=excluded.likes,published_at=excluded.published_at,updated_at=excluded.updated_at`);
+      const upsert=this.database.connection.prepare(`INSERT INTO comments(id,project_id,source_id,video_id,platform_comment_id,thread_id,parent_comment_id,author,text,likes,published_at,updated_at,is_reply,is_demo,analysis_eligible,noise_reason,quality_score,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,'{}',?) ON CONFLICT(source_id,platform_comment_id) DO UPDATE SET author=excluded.author,text=excluded.text,likes=excluded.likes,published_at=excluded.published_at,updated_at=excluded.updated_at,analysis_eligible=excluded.analysis_eligible,noise_reason=excluded.noise_reason,quality_score=excluded.quality_score`);
       const evidence=this.database.connection.prepare(`INSERT INTO evidence_snippets(id,project_id,source_id,comment_id,quote_text,provenance,created_at) VALUES(?,?,?,?,?,'EVIDENCE_BACKED',?) ON CONFLICT(project_id,comment_id) DO UPDATE SET quote_text=excluded.quote_text`);
       for(const thread of threads){
         const all=[thread.topLevelComment,...thread.embeddedReplies,...(extraReplies.get(thread.topLevelComment.commentId)??[])];
         const unique=new Map(all.map(comment=>[comment.commentId,comment]));
         const localIds=new Map<string,string>();for(const comment of unique.values()){const existing=this.database.connection.prepare("SELECT id FROM comments WHERE source_id=? AND platform_comment_id=?").get(sourceId,comment.commentId) as {id:string}|undefined;localIds.set(comment.commentId,existing?.id??uuidv7());}
-        for(const comment of unique.values()){const id=localIds.get(comment.commentId)!;upsert.run(id,projectId,sourceId,actualVideo,comment.commentId,thread.threadId,comment.parentCommentId?localIds.get(comment.parentCommentId)??null:null,comment.author,comment.text,comment.likes,comment.publishedAt,comment.updatedAt,comment.isReply?1:0,now);evidence.run(uuidv7(),projectId,sourceId,id,comment.text,now);saved++;}
+        for(const comment of unique.values()){const id=localIds.get(comment.commentId)!,quality=classifyComment(comment.text,comment.isReply);upsert.run(id,projectId,sourceId,actualVideo,comment.commentId,thread.threadId,comment.parentCommentId?localIds.get(comment.parentCommentId)??null:null,comment.author,comment.text,comment.likes,comment.publishedAt,comment.updatedAt,comment.isReply?1:0,quality.eligible?1:0,quality.reason,quality.score,now);evidence.run(uuidv7(),projectId,sourceId,id,comment.text,now);saved++;}
       }
       this.database.connection.prepare(`UPDATE sources SET title=?,status='ready',metadata_json=?,error_code=NULL,error_message=NULL,updated_at=? WHERE project_id=? AND id=?`).run(video.title,JSON.stringify({platform:"youtube",videoId:video.videoId,channelId:video.channelId,channelTitle:video.channelTitle,reportedCommentCount:video.commentCount??null}),now,projectId,sourceId);
       this.database.connection.prepare(`UPDATE workflow_steps SET state='COMPLETED',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='sources'`).run(now,projectId);

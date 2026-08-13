@@ -18,7 +18,14 @@ export interface YouTubeVideo {
   readonly channelTitle: string;
   readonly publishedAt: string;
   readonly commentCount?: number;
+  readonly description?: string;
+  readonly thumbnailUrl?: string;
+  readonly duration?: string;
+  readonly viewCount?: number;
+  readonly likeCount?: number;
 }
+
+export interface YouTubeSearchResult { readonly videoId:string; readonly title:string; readonly description:string; readonly channelId:string; readonly channelTitle:string; readonly publishedAt:string; readonly thumbnailUrl?:string; }
 
 export interface YouTubeComment {
   readonly commentId: string;
@@ -59,6 +66,7 @@ function count(value: unknown): number {
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : 0;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
+function thumbnail(snippet:Record<string,unknown>):string|undefined{const thumbnails=snippet.thumbnails;if(typeof thumbnails!=="object"||thumbnails===null)return undefined;for(const key of ["high","medium","default"]){const url=(thumbnails as Record<string,unknown>)[key];if(typeof url==="object"&&url!==null&&typeof (url as {url?:unknown}).url==="string")return (url as {url:string}).url;}return undefined;}
 
 function mapComment(value: unknown, parentCommentId: string | null): YouTubeComment {
   if (typeof value !== "object" || value === null) throw new IntegrationError("invalid_response", "YouTube devolvió un comentario inválido.");
@@ -112,20 +120,41 @@ export class YouTubeAdapter {
   }
 
   async getVideo(videoId: string): Promise<YouTubeVideo | undefined> {
-    const response = await this.get("videos", { part: "snippet,statistics", id: videoId });
-    const item = Array.isArray(response.items) ? response.items[0] : undefined;
-    if (item === undefined) return undefined;
+    return (await this.getVideos([videoId]))[0];
+  }
+
+  async searchVideos(query:string,pageToken?:string):Promise<YouTubePage<YouTubeSearchResult>>{
+    const response=await this.get("search",{part:"snippet",type:"video",q:query,maxResults:"25",...(pageToken===undefined?{}:{pageToken})});
+    return {items:(Array.isArray(response.items)?response.items:[]).flatMap((raw):YouTubeSearchResult[]=>{
+      if(typeof raw!=="object"||raw===null)return[];const item=raw as {id?:{videoId?:unknown};snippet?:Record<string,unknown>};const videoId=item.id?.videoId,snippet=item.snippet;
+      if(typeof videoId!=="string"||typeof snippet!=="object"||snippet===null)return[];
+      const thumb=thumbnail(snippet);return [{videoId,title:requiredString(snippet.title,"search.title"),description:typeof snippet.description==="string"?snippet.description:"",channelId:requiredString(snippet.channelId,"search.channelId"),channelTitle:typeof snippet.channelTitle==="string"?snippet.channelTitle:"Canal desconocido",publishedAt:requiredString(snippet.publishedAt,"search.publishedAt"),...(thumb?{thumbnailUrl:thumb}:{})}];
+    }),...(typeof response.nextPageToken==="string"?{nextPageToken:response.nextPageToken}:{})};
+  }
+
+  async getVideos(videoIds:readonly string[]):Promise<YouTubeVideo[]> {
+    if(videoIds.length===0)return[];
+    const response = await this.get("videos", { part: "snippet,contentDetails,statistics", id: videoIds.slice(0,50).join(",") });
+    return (Array.isArray(response.items)?response.items:[]).map((item)=>this.mapVideo(item));
+  }
+
+  private mapVideo(item:unknown):YouTubeVideo {
     if (typeof item !== "object" || item === null) throw new IntegrationError("invalid_response", "YouTube devolvió un video inválido.");
-    const video = item as { id?: unknown; snippet?: Record<string, unknown>; statistics?: Record<string, unknown> };
+    const video = item as { id?: unknown; snippet?: Record<string, unknown>; statistics?: Record<string, unknown>; contentDetails?:Record<string,unknown> };
     const snippet = video.snippet;
     if (typeof snippet !== "object" || snippet === null) throw new IntegrationError("invalid_response", "YouTube omitió la metadata del video.");
-    return {
+    const thumb=thumbnail(snippet);return {
       videoId: requiredString(video.id, "video.id"),
       title: requiredString(snippet.title, "video.title"),
       channelId: requiredString(snippet.channelId, "video.channelId"),
       channelTitle: requiredString(snippet.channelTitle, "video.channelTitle"),
       publishedAt: requiredString(snippet.publishedAt, "video.publishedAt"),
       ...(video.statistics?.commentCount === undefined ? {} : { commentCount: count(video.statistics.commentCount) }),
+      ...(typeof snippet.description==="string"?{description:snippet.description}:{}),
+      ...(thumb?{thumbnailUrl:thumb}:{}),
+      ...(typeof (video as {contentDetails?:Record<string,unknown>}).contentDetails?.duration==="string"?{duration:(video as {contentDetails:Record<string,string>}).contentDetails.duration}:{}),
+      ...(video.statistics?.viewCount===undefined?{}:{viewCount:count(video.statistics.viewCount)}),
+      ...(video.statistics?.likeCount===undefined?{}:{likeCount:count(video.statistics.likeCount)}),
     };
   }
 

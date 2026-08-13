@@ -130,7 +130,7 @@ export class ModuleService {
     }
 
     const evidence = this.db.connection.prepare(
-      "SELECT id, quote_text AS quoteText FROM evidence_snippets WHERE project_id = ? ORDER BY created_at LIMIT 20",
+      "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
     ).all(projectId) as unknown as Array<{ id: string; quoteText: string }>;
     const evidenceIds = evidence.map((row) => row.id);
     const project = this.db.connection.prepare("SELECT name,niche FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string };

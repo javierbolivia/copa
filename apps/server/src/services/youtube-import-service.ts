@@ -3,6 +3,7 @@ import type { JobRepository } from "../repositories/job-repository.js";
 import type { SourceRepository } from "../repositories/source-repository.js";
 import { IntegrationError } from "../integrations/integration-error.js";
 import { YouTubeAdapter, extractYouTubeVideoId, type YouTubeComment } from "../integrations/youtube-adapter.js";
+import { scoreYouTubeResearch, type ResearchScoredVideo } from "./youtube-research-score.js";
 
 export { extractYouTubeVideoId } from "../integrations/youtube-adapter.js";
 
@@ -11,15 +12,24 @@ export class YouTubeImportError extends Error {
 }
 
 export class YouTubeImportService {
-  static readonly MAX_TOP_LEVEL_COMMENTS = 500;
+  static readonly DEFAULT_TOP_LEVEL_COMMENTS = 500;
+  static readonly MAX_TOP_LEVEL_COMMENTS = 2_000;
   private readonly adapter:YouTubeAdapter;
   constructor(private readonly sources:SourceRepository,private readonly jobs:JobRepository,apiKey:string|undefined=process.env.YOUTUBE_API_KEY,adapter?:YouTubeAdapter){this.adapter=adapter??new YouTubeAdapter(apiKey===undefined?{}:{apiKey});}
   isConfigured():boolean{return this.adapter.configured;}
-  queue(projectId:string,url:string,title?:string):{source:Source;job:Job}{
+  async search(query:string,pageToken?:string):Promise<{items:ResearchScoredVideo[];nextPageToken?:string}>{
+    if(!this.isConfigured())throw new YouTubeImportError("youtube_not_configured","YouTube no está configurado.");
+    const hits=await this.adapter.searchVideos(query,pageToken),metadata=await this.adapter.getVideos(hits.items.map(hit=>hit.videoId));
+    const byId=new Map(metadata.map(video=>[video.videoId,video]));const deduped=new Map<string,ResearchScoredVideo>();
+    for(const hit of hits.items){const video=byId.get(hit.videoId);if(video){const thumb=video.thumbnailUrl??hit.thumbnailUrl;deduped.set(video.videoId,scoreYouTubeResearch(query,{...video,description:video.description??hit.description,...(thumb?{thumbnailUrl:thumb}:{})}));}}
+    return {items:[...deduped.values()],...(hits.nextPageToken?{nextPageToken:hits.nextPageToken}:{})};
+  }
+  queue(projectId:string,url:string,title?:string,topLevelLimit=YouTubeImportService.DEFAULT_TOP_LEVEL_COMMENTS):{source:Source;job:Job}{
     if(!this.isConfigured())throw new YouTubeImportError("youtube_not_configured","YouTube no está configurado. Añade YOUTUBE_API_KEY o usa Demo.");
     const videoId=extractYouTubeVideoId(url);if(!videoId)throw new YouTubeImportError("invalid_youtube_url","La URL no identifica un video público de YouTube.");
     if(this.sources.findYouTubeByVideoId(projectId,videoId))throw new YouTubeImportError("duplicate_youtube_source","Este video de YouTube ya fue añadido al proyecto.");
-    const source=this.sources.createPendingYouTube(projectId,title?.trim()||`YouTube ${videoId}`,url,videoId),job=this.jobs.createYouTube(projectId,source.id,url);
+    const limit=Math.max(1,Math.min(YouTubeImportService.MAX_TOP_LEVEL_COMMENTS,Math.floor(topLevelLimit)));
+    const source=this.sources.createPendingYouTube(projectId,title?.trim()||`YouTube ${videoId}`,url,videoId),job=this.jobs.createYouTube(projectId,source.id,url,limit);
     this.schedule(projectId,job.id);
     return {source,job};
   }
@@ -36,9 +46,10 @@ export class YouTubeImportService {
     try{
       const video=await this.adapter.getVideo(videoId);if(this.cancelled(projectId,jobId,job.sourceId))return;if(!video)throw new IntegrationError("invalid_response","El video no existe, no es público o no está disponible.");
       let token=typeof job.payload.pageToken==="string"?job.payload.pageToken:undefined,pageCount=typeof job.payload.pageCount==="number"?job.payload.pageCount:0,savedCount=typeof job.payload.savedCount==="number"?job.payload.savedCount:0,threadCount=typeof job.payload.threadCount==="number"?job.payload.threadCount:0;
-      while(threadCount<YouTubeImportService.MAX_TOP_LEVEL_COMMENTS){
+      const limit=typeof job.payload.topLevelLimit==="number"?Math.max(1,Math.min(YouTubeImportService.MAX_TOP_LEVEL_COMMENTS,job.payload.topLevelLimit)):YouTubeImportService.DEFAULT_TOP_LEVEL_COMMENTS;
+      while(threadCount<limit){
         if(this.jobs.isCancellationRequested(projectId,jobId)){this.sources.markImportCancelled(projectId,job.sourceId);return;}
-        const remaining=YouTubeImportService.MAX_TOP_LEVEL_COMMENTS-threadCount;
+        const remaining=limit-threadCount;
         const page=await this.adapter.listCommentThreads({videoId,maxResults:Math.min(100,remaining),order:"relevance",...(token===undefined?{}:{pageToken:token})});if(this.cancelled(projectId,jobId,job.sourceId))return;pageCount++;const threads=page.items.slice(0,remaining),extraReplies=new Map<string,YouTubeComment[]>();
         for(const thread of threads){
           if(thread.totalReplyCount<=thread.embeddedReplies.length)continue;
@@ -46,8 +57,8 @@ export class YouTubeImportService {
           do{if(this.cancelled(projectId,jobId,job.sourceId))return;const replyPage=await this.adapter.listReplies({parentCommentId:thread.topLevelComment.commentId,maxResults:100,...(replyToken===undefined?{}:{pageToken:replyToken})});if(this.cancelled(projectId,jobId,job.sourceId))return;replies.push(...replyPage.items);replyToken=replyPage.nextPageToken;}while(replyToken);
           extraReplies.set(thread.topLevelComment.commentId,replies);
         }
-        savedCount+=this.sources.finishYouTubeImport(projectId,job.sourceId,video,threads,extraReplies);threadCount+=threads.length;token=threadCount<YouTubeImportService.MAX_TOP_LEVEL_COMMENTS?page.nextPageToken:undefined;
-        this.jobs.checkpoint(projectId,jobId,{url:job.payload.url,...(token?{pageToken:token}:{}),pageCount,savedCount,threadCount},Math.min(95,10+pageCount*7),`${threadCount} hilos guardados`);
+        savedCount+=this.sources.finishYouTubeImport(projectId,job.sourceId,video,threads,extraReplies);threadCount+=threads.length;token=threadCount<limit?page.nextPageToken:undefined;
+        this.jobs.checkpoint(projectId,jobId,{url:job.payload.url,topLevelLimit:limit,...(token?{pageToken:token}:{}),pageCount,savedCount,threadCount},Math.min(95,10+pageCount*7),`${threadCount} / ${limit} comentarios`);
         if(!token)break;
       }
       if(!this.cancelled(projectId,jobId,job.sourceId))this.jobs.complete(projectId,jobId,{videoId,count:savedCount,threadCount});

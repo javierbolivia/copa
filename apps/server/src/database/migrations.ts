@@ -843,6 +843,17 @@ export const migrations: readonly Migration[] = [
       BEGIN SELECT RAISE(ABORT,'product_export_project_mismatch'); END;
     `,
   },
+  {
+    version: 8,
+    name: "008_youtube_research_analysis_set",
+    sql: `
+      ALTER TABLE sources ADD COLUMN include_in_analysis INTEGER NOT NULL DEFAULT 1 CHECK (include_in_analysis IN (0,1));
+      ALTER TABLE comments ADD COLUMN analysis_eligible INTEGER NOT NULL DEFAULT 1 CHECK (analysis_eligible IN (0,1));
+      ALTER TABLE comments ADD COLUMN noise_reason TEXT;
+      ALTER TABLE comments ADD COLUMN quality_score INTEGER NOT NULL DEFAULT 100 CHECK (quality_score BETWEEN 0 AND 100);
+      CREATE INDEX comments_analysis_set_idx ON comments(project_id, source_id, analysis_eligible, quality_score);
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

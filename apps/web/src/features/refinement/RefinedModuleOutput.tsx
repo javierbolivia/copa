@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { AvatarEditor, BeliefsEditor, LandingBuilder, MechanismEditor, OfferEditor, ProductEditor } from "./index";
 import type { AvatarEditorValue, BeliefsEditorValue, LandingEditorValue, LandingVersion, MechanismEditorValue, OfferEditorValue, ProductEditorValue } from "./types";
 import { ContentWorkspace, EmailsWorkspace, FunnelWorkspace, ProductFinalWorkspace, type CampaignContent, type CampaignEmail, type FunnelNode, type ProductFile } from "./CampaignWorkspaces";
+import { ProductStudio } from "../product-studio/ProductStudio";
 
 export interface RefinedModuleOutputProps {
   projectId:string;
@@ -27,12 +28,12 @@ export function RefinedModuleOutput(props:RefinedModuleOutputProps) {
   return <>
     {message&&<div className="refinement-feedback" role="status">{message}</div>}
     <div className="refinement-approval-bar"><span>v{selected.versionNumber} · {selected.status} · {selected.freshness}</span><button className="button secondary" type="button" onClick={()=>void openTrace()}>Ver origen</button><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("REJECTED")}>Marcar rechazado</button>{selected.status==="approved"&&<><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("APPROVED")}>Usar como ejemplo futuro</button><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("APPROVED","GLOBAL")}>Usar globalmente</button></>}{selected.status==="draft"&&<button className="button primary" disabled={saving} type="button" onClick={()=>void approve()}>Aprobar versión</button>}</div>
-    <Specialized moduleKey={moduleKey} selected={selected} versions={props.versions} files={props.files} saving={saving} onSave={save} onSelectVersion={props.onSelectVersion} onTrace={()=>void openTrace()} onRegenerate={props.onRegenerate} />
+    <Specialized projectId={props.projectId} moduleKey={moduleKey} selected={selected} versions={props.versions} files={props.files} saving={saving} onSave={save} onSelectVersion={props.onSelectVersion} onTrace={()=>void openTrace()} onRegenerate={props.onRegenerate} />
     {trace&&<TraceDialog graph={trace} onClose={()=>setTrace(null)}/>} 
   </>;
 }
 
-function Specialized({moduleKey,selected,versions,files,saving,onSave,onSelectVersion,onTrace,onRegenerate}:{moduleKey:ModuleKey;selected:ModuleResult;versions:ModuleResult[];files:GeneratedFile[];saving:boolean;onSave:(value:unknown)=>Promise<void>;onSelectVersion:(id:string)=>void;onTrace:()=>void;onRegenerate:()=>Promise<void>}) {
+function Specialized({projectId,moduleKey,selected,versions,files,saving,onSave,onSelectVersion,onTrace,onRegenerate}:{projectId:string;moduleKey:ModuleKey;selected:ModuleResult;versions:ModuleResult[];files:GeneratedFile[];saving:boolean;onSave:(value:unknown)=>Promise<void>;onSelectVersion:(id:string)=>void;onTrace:()=>void;onRegenerate:()=>Promise<void>}) {
   const output=record(selected.outputData);
   if(moduleKey==="product")return <ProductEditor value={toProduct(output)} onSave={(value)=>onSave(fromProduct(output,value))} saving={saving} onOpenTraceability={onTrace}/>;
   if(moduleKey==="avatar")return <AvatarEditor value={toAvatar(output)} onSave={(value)=>onSave(fromAvatar(output,value))} saving={saving} onOpenTraceability={onTrace}/>;
@@ -46,7 +47,7 @@ function Specialized({moduleKey,selected,versions,files,saving,onSave,onSelectVe
   if(moduleKey==="funnel")return <FunnelAdapter output={output} onSave={onSave}/>;
   if(moduleKey==="emails")return <EmailsAdapter output={output} onSave={onSave}/>;
   if(moduleKey==="content")return <ContentAdapter output={output} onSave={onSave}/>;
-  if(moduleKey==="final_product")return <ProductFinalWorkspace files={toFiles(files.filter(file=>file.artifactVersionId===selected.versionId),selected.versionNumber)} onOpen={(id)=>openFile(files,id)} onExport={(id)=>openFile(files,id)} onRegenerate={()=>void onRegenerate()} onViewSource={onTrace}/>;
+  if(moduleKey==="final_product")return <ProductStudio projectId={projectId}/>;
   return null;
 }
 

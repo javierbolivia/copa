@@ -27,6 +27,7 @@ import {
   type OpenAIProviderOptions,
 } from "./integrations/openai-provider.js";
 import type { ModuleServiceOptions } from "./services/module-service.js";
+import { GeminiProvider, type GeminiProviderOptions } from "./integrations/gemini-provider.js";
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
 import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
@@ -43,7 +44,8 @@ export interface CreateAppOptions {
   readonly logger?: boolean;
   readonly serveFrontend?: boolean;
   readonly openAI?: OpenAIProviderOptions;
-  readonly llm?: Omit<ModuleServiceOptions, "openAI">;
+  readonly gemini?: GeminiProviderOptions;
+  readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini">;
 }
 
 export async function createApp(
@@ -72,6 +74,7 @@ export async function createApp(
       : {}),
     ...options.openAI,
   });
+  const gemini=new GeminiProvider({...(process.env.GEMINI_API_KEY?{apiKey:process.env.GEMINI_API_KEY}:{}),...options.gemini});
   const knowledge = new KnowledgeRepository(database);
   const modules = new ModuleService(
     database,
@@ -82,6 +85,7 @@ export async function createApp(
     knowledge,
     {
       openAI,
+      gemini,
       ...(process.env.OPENAI_ECONOMY_MODEL
         ? { economyModel: process.env.OPENAI_ECONOMY_MODEL }
         : {}),

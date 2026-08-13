@@ -39,7 +39,8 @@ export class ApiClientError extends Error {
 
 export interface ProviderStatus {
   openai: { configured: boolean; economyModel: string; powerfulModel: string };
-  defaultProvider: "mock" | "openai";
+  gemini:{configured:boolean;economyModel:string;powerfulModel:string};
+  defaultProvider: "mock" | "openai" | "gemini";
 }
 export interface YouTubeResearchVideo {videoId:string;title:string;description?:string;channelId:string;channelTitle:string;publishedAt:string;thumbnailUrl?:string;duration?:string;viewCount?:number;likeCount?:number;commentCount?:number;researchScore:number;scoreExplanation:string;alreadyImported:boolean}
 export interface TraceabilityNode {

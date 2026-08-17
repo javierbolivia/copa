@@ -6,12 +6,12 @@ export type VocabularyStatus = "candidate" | "active" | "rejected";
 
 const DIACRITICS = /[̀-ͯ]/gu;
 
-function sha256(value: string): string {
+function computeSha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 /** Collapse whitespace and case/accent-fold a value into a stable form. */
-function normalizeForHash(value: string): string {
+export function normalizeForHash(value: string): string {
   return value
     .trim()
     .replace(/\s+/gu, " ")
@@ -28,7 +28,15 @@ function normalizeForHash(value: string): string {
  * empty string and therefore to a stable, well-known hash.
  */
 export function researchFocusHash(focus: string | null | undefined): string {
-  return sha256(normalizeForHash(focus ?? ""));
+  return computeSha256(normalizeForHash(focus ?? ""));
+}
+
+/**
+ * Deterministic SHA-256 hex digest of an arbitrary string.
+ * Reused by the discovery validator for stable concept keys and content hashes.
+ */
+export function sha256(value: string): string {
+  return computeSha256(value);
 }
 
 /**

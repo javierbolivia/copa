@@ -16,7 +16,7 @@ import {
  *     because "desprecio" is a single token;
  *   - punctuation is stripped so "ruido digital!" still matches "ruido digital".
  */
-function tokenizeForMatch(value: string): string[] {
+export function tokenizeForMatch(value: string): string[] {
   return normalizeAlias(value).match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 
@@ -53,7 +53,7 @@ function isGrammaticalConnector(value: string): boolean {
  * fuzzy matching, no embeddings, no generated regex. Single-token aliases use
  * exact token-set membership (never a substring of another word).
  */
-function sequenceMatch(tokens: readonly string[], seq: readonly string[]): boolean {
+export function sequenceMatch(tokens: readonly string[], seq: readonly string[]): boolean {
   if (seq.length === 0) return false;
   if (seq.length === 1) return tokens.includes(seq[0]!);
   let si = 0; // index into seq

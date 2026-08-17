@@ -53,4 +53,13 @@ describe("Problem analysis details UI",()=>{
     expect(source).toContain("clustersRejectedOutOfScope");
     expect(source).toContain("clustersRejectedMiscellaneous");
   });
+
+  it("muestra el CLAIM AUDITADO persistido y la coherencia interna del cluster",()=>{
+    expect(source).toContain("CLAIM AUDITADO");
+    expect(source).toContain("cluster.claim");
+    expect(source).toContain("clustersRejectedInternalCoherence");
+    expect(source).toContain("REJECTED_LOW_INTERNAL_COHERENCE");
+    expect(source).toContain("internalComponentCount");
+    expect(source).toContain("internalConnected");
+  });
 });

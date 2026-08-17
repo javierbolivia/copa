@@ -6,7 +6,7 @@ export type SupportType="DIRECT"|"INFERRED"|"CONTEXT_ONLY"|"NOT_SUPPORTED";
 export type CommentKind="PROBLEM_REPORT"|"QUESTION"|"SOLUTION"|"PRAISE"|"NEUTRAL_CONTEXT";
 export type ProblemStrength="SIGNAL"|"EMERGING"|"PATTERN"|"STRONG_PATTERN";
 export type ResearchRelevance="CORE"|"RELATED"|"TANGENTIAL"|"OUT_OF_SCOPE";
-export type ClusterAuditDecision="VALIDATED"|"REJECTED_LOW_COHESION"|"REJECTED_LOW_PRECISION"|"REJECTED_NO_SUPPORT"|"REJECTED_OUT_OF_SCOPE"|"REJECTED_MISCELLANEOUS";
+export type ClusterAuditDecision="VALIDATED"|"REJECTED_LOW_COHESION"|"REJECTED_LOW_PRECISION"|"REJECTED_NO_SUPPORT"|"REJECTED_OUT_OF_SCOPE"|"REJECTED_MISCELLANEOUS"|"REJECTED_LOW_INTERNAL_COHERENCE";
 export const PROBLEM_BATCH_SIZE=60;
 export const PROBLEM_QUALITY_CONFIG={emergingAuthors:2,patternAuthors:4,strongAuthors:6,strongSources:2,coreRelevance:80,relatedRelevance:60,tangentialRelevance:40,validatedPrecision:60,tentativePrecision:40,patternStrength:55,strongStrength:75,minCohesion:55} as const;
 const STOP_WORDS=new Set("de del la el los las y o en para por con un una que como sobre sus se al a es son no mi tu su this that from into foto fotos fotografia fotografias tutorial video problema usuarios user".split(" "));
@@ -30,8 +30,8 @@ export type QualityConcept=CoreQualityConcept|string;
 const CORE_CONCEPTS=new Set<string>(["PERFORMANCE_TIME","HARDWARE_COMPUTE","FILE_FORMAT"]);
 export interface EvidenceQualityAudit {evidenceId:string;supportType:SupportType;commentKind:CommentKind;lexicalTokensShared:string[];semanticConceptsClaim:QualityConcept[];semanticConceptsEvidence:QualityConcept[];semanticConceptsShared:QualityConcept[];classifierRule:string;cohesionContribution:number;includedInCohesionDenominator:boolean;}
 interface ValidatedEvidence extends EvidenceRow{supportType:SupportType;commentKind:CommentKind;quality:Omit<EvidenceQualityAudit,"evidenceId"|"cohesionContribution"|"includedInCohesionDenominator">;}
-export interface ProblemPipelineMetrics {activeSources:number;rawComments:number;analysisEligibleComments:number;commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number;clustersAfterMerge:number;finalProblems:number;signals:number;emerging:number;patterns:number;strongPatterns:number;corpusCoverage:number;candidateClusters:number;clustersSplitForLowCohesion:number;clustersRejectedForLowPrecision:number;evidenceRejectedInstructionOnly:number;evidenceRejectedContextOnly:number;positiveOnlyCommentsExcluded:number;validatedProblems:number;clustersRejectedNoSupport:number;clustersRejectedOutOfScope:number;clustersRejectedMiscellaneous:number;mapCandidateCount:number;postMergeClusterCount:number;validatedProblemCount:number;}
-export interface ClusterAuditRecord {clusterId:string;canonicalProblem:string;summary:string;claim:string;semanticSignature:string;category:string;evidenceIds:string[];candidateEvidenceCount:number;resolvedEvidenceCount:number;unresolvedEvidenceCount:number;unresolvedEvidenceIds:string[];evidenceCount:number;supportedEvidenceCount:number;uniqueAuthors:number;uniqueSources:number;uniqueThreads:number;directEvidenceCount:number;inferredEvidenceCount:number;researchRelevanceScore:number;researchRelevanceLevel:ResearchRelevance;evidencePrecisionScore:number|null;cohesionScore:number|null;strengthScore:number|null;strengthLevel:ProblemStrength|null;finalDecision:ClusterAuditDecision;rejectionReason:string;evidenceQuality:EvidenceQualityAudit[];}
+export interface ProblemPipelineMetrics {activeSources:number;rawComments:number;analysisEligibleComments:number;commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number;clustersAfterMerge:number;finalProblems:number;signals:number;emerging:number;patterns:number;strongPatterns:number;corpusCoverage:number;candidateClusters:number;clustersSplitForLowCohesion:number;clustersRejectedForLowPrecision:number;evidenceRejectedInstructionOnly:number;evidenceRejectedContextOnly:number;positiveOnlyCommentsExcluded:number;validatedProblems:number;clustersRejectedNoSupport:number;clustersRejectedOutOfScope:number;clustersRejectedMiscellaneous:number;mapCandidateCount:number;postMergeClusterCount:number;validatedProblemCount:number;clustersRejectedInternalCoherence:number;}
+export interface ClusterAuditRecord {clusterId:string;canonicalProblem:string;summary:string;claim:string;semanticSignature:string;category:string;evidenceIds:string[];candidateEvidenceCount:number;resolvedEvidenceCount:number;unresolvedEvidenceCount:number;unresolvedEvidenceIds:string[];evidenceCount:number;supportedEvidenceCount:number;internalComponentCount:number;largestInternalComponentSize:number;internalConnected:boolean;uniqueAuthors:number;uniqueSources:number;uniqueThreads:number;directEvidenceCount:number;inferredEvidenceCount:number;researchRelevanceScore:number;researchRelevanceLevel:ResearchRelevance;evidencePrecisionScore:number|null;cohesionScore:number|null;strengthScore:number|null;strengthLevel:ProblemStrength|null;finalDecision:ClusterAuditDecision;rejectionReason:string;evidenceQuality:EvidenceQualityAudit[];}
 
 /** Human focus only: source titles are intentionally never turned into keyword soup. */
 export function deriveResearchFocus(_titles:readonly string[],fallback:string,explicit?:string|null):string{return explicit?.trim().replace(/\s+/gu," ")||fallback.trim().replace(/\s+/gu," ")||"Investigación del proyecto";}
@@ -63,6 +63,50 @@ function cohesionBreakdown(evidence:readonly ValidatedEvidence[],vocabularySnaps
 /** Cohesion averages only DIRECT/INFERRED evidence; CONTEXT_ONLY and NOT_SUPPORTED are excluded from the denominator. */
 function cohesion(evidence:readonly ValidatedEvidence[]):number{return cohesionBreakdown(evidence).score??0;}
 
+interface InternalCoherenceResult{supportedEvidenceCount:number;internalComponentCount:number;largestInternalComponentSize:number;internalConnected:boolean;}
+const sharedCount=(a:Set<string>,b:Set<string>)=>[...a].reduce((sum,value)=>b.has(value)?sum+1:sum,0);
+/**
+ * INTERNAL TOPICAL COHERENCE — deterministic, provider-free gate over the
+ * evidence-to-evidence graph of a cluster's SUPPORTED evidence (DIRECT/INFERRED).
+ *
+ * Claim↔evidence cohesion answers "does each piece of evidence support the
+ * claim?". It does NOT answer "do the pieces of evidence represent the same
+ * problem as each other?". A composite claim `A + B` can get DIRECT support from
+ * evidence for A and from evidence for B and still score cohesion 100 while the
+ * two topics are disconnected.
+ *
+ * This gate closes that gap: every supported evidence is a node, and two nodes
+ * are bridged only when they share independent topical signal:
+ *   - lexical bridge: >= 2 shared normalized meaningful tokens (reuses `tokens()`
+ *     which already drops stopwords and folds case/accents), OR
+ *   - semantic bridge: >= 1 shared semantic concept, using the EXACT core
+ *     semantics + vocabulary snapshot of this run (`normalizeQualityText`).
+ * A bridge is NEVER the mere fact that two evidences support different parts of
+ * the same claim.
+ *
+ * A cluster is internally coherent iff its supported evidence forms a single
+ * connected component (transitive connectivity is allowed). 0 or 1 supported
+ * evidence is never rejected by this gate.
+ */
+function internalCoherence(supported:readonly ValidatedEvidence[],vocabularySnapshot?:SemanticVocabularySnapshot|null):InternalCoherenceResult{
+  const count=supported.length;
+  if(count<=1)return{supportedEvidenceCount:count,internalComponentCount:count,largestInternalComponentSize:count,internalConnected:true};
+  const profiles=supported.map(row=>normalizeQualityText(row.quoteText,vocabularySnapshot));
+  const lexical=profiles.map(profile=>new Set(profile.lexicalTokens));
+  const semantic=profiles.map(profile=>new Set(profile.semanticConcepts));
+  const bridges=(a:number,b:number)=>sharedCount(lexical[a]!,lexical[b]!)>=2||sharedCount(semantic[a]!,semantic[b]!)>=1;
+  const visited=new Array<boolean>(count).fill(false);
+  let internalComponentCount=0,largestInternalComponentSize=0;
+  for(let start=0;start<count;start++){
+    if(visited[start])continue;
+    internalComponentCount++;
+    let size=0;const queue=[start];visited[start]=true;
+    while(queue.length){const current=queue.shift()!;size++;for(let next=0;next<count;next++){if(!visited[next]&&bridges(current,next)){visited[next]=true;queue.push(next);}}}
+    if(size>largestInternalComponentSize)largestInternalComponentSize=size;
+  }
+  return{supportedEvidenceCount:count,internalComponentCount,largestInternalComponentSize,internalConnected:internalComponentCount<=1};
+}
+
 export function qualityProblems(database:AppDatabase,projectId:string,raw:unknown,options?:{researchFocus?:string|null;metrics?:Partial<ProblemPipelineMetrics>;vocabularySnapshot?:SemanticVocabularySnapshot|null;analysisSetSnapshot?:AnalysisSetSnapshot|null}):Record<string,unknown>{
   const output=isRecord(raw)?raw:{};
   const snapshot=options?.analysisSetSnapshot ?? analysisSetSnapshot(database,projectId);
@@ -73,8 +117,8 @@ export function qualityProblems(database:AppDatabase,projectId:string,raw:unknow
   const vocabularySnapshot=options?.vocabularySnapshot??null;
   const candidates=Array.isArray(output.items)?output.items:[];
   const parsed=parsedCandidates(candidates),miscellaneous=parsed.filter(isMiscellaneous),merged=mergeProblemCandidates(candidates);
-  let lowPrecision=0,instructions=0,contextOnly=0,praise=0,lowCohesion=0,noSupport=0,outOfScope=0;
-  const preMergeRejectedCandidates:ClusterAuditRecord[]=miscellaneous.map(item=>{const resolvedEvidenceIds=item.evidenceIds.filter(id=>byId.has(id)),unresolvedEvidenceIds=item.evidenceIds.filter(id=>!byId.has(id));return {clusterId:item.id,canonicalProblem:item.name,summary:item.summary,claim:`${item.name} ${item.summary}`,semanticSignature:item.semanticSignature,category:item.category,evidenceIds:item.evidenceIds,candidateEvidenceCount:item.evidenceIds.length,resolvedEvidenceCount:resolvedEvidenceIds.length,unresolvedEvidenceCount:unresolvedEvidenceIds.length,unresolvedEvidenceIds,evidenceCount:0,supportedEvidenceCount:0,uniqueAuthors:0,uniqueSources:0,uniqueThreads:0,directEvidenceCount:0,inferredEvidenceCount:0,researchRelevanceScore:item.relevanceScore??relevance(`${item.name} ${item.summary}`,focus),researchRelevanceLevel:relevanceLevel(item.relevanceScore??relevance(`${item.name} ${item.summary}`,focus)),evidencePrecisionScore:null,cohesionScore:null,strengthScore:null,strengthLevel:null,finalDecision:"REJECTED_MISCELLANEOUS",rejectionReason:"Candidate represented a miscellaneous multi-problem cluster",evidenceQuality:[]};});
+  let lowPrecision=0,instructions=0,contextOnly=0,praise=0,lowCohesion=0,noSupport=0,outOfScope=0,internalCoherenceRejected=0;
+  const preMergeRejectedCandidates:ClusterAuditRecord[]=miscellaneous.map(item=>{const resolvedEvidenceIds=item.evidenceIds.filter(id=>byId.has(id)),unresolvedEvidenceIds=item.evidenceIds.filter(id=>!byId.has(id));return {clusterId:item.id,canonicalProblem:item.name,summary:item.summary,claim:`${item.name} ${item.summary}`,semanticSignature:item.semanticSignature,category:item.category,evidenceIds:item.evidenceIds,candidateEvidenceCount:item.evidenceIds.length,resolvedEvidenceCount:resolvedEvidenceIds.length,unresolvedEvidenceCount:unresolvedEvidenceIds.length,unresolvedEvidenceIds,evidenceCount:0,supportedEvidenceCount:0,internalComponentCount:0,largestInternalComponentSize:0,internalConnected:true,uniqueAuthors:0,uniqueSources:0,uniqueThreads:0,directEvidenceCount:0,inferredEvidenceCount:0,researchRelevanceScore:item.relevanceScore??relevance(`${item.name} ${item.summary}`,focus),researchRelevanceLevel:relevanceLevel(item.relevanceScore??relevance(`${item.name} ${item.summary}`,focus)),evidencePrecisionScore:null,cohesionScore:null,strengthScore:null,strengthLevel:null,finalDecision:"REJECTED_MISCELLANEOUS",rejectionReason:"Candidate represented a miscellaneous multi-problem cluster",evidenceQuality:[]};});
   const audits:ClusterAuditRecord[]=[];
   const items=merged.flatMap(item=>{
     const claim=`${item.name} ${item.summary}`;
@@ -88,6 +132,7 @@ export function qualityProblems(database:AppDatabase,projectId:string,raw:unknow
       return[{...row,commentKind,supportType,quality}];
     });
     const supported=classified.filter(row=>row.supportType==="DIRECT"||row.supportType==="INFERRED"),direct=supported.filter(row=>row.supportType==="DIRECT"),inferred=supported.filter(row=>row.supportType==="INFERRED"),authors=new Set(supported.map(row=>row.author.trim().toLocaleLowerCase("es"))),sources=new Set(supported.map(row=>row.sourceId)),threads=new Set(supported.map(row=>row.threadId??row.commentId));
+    const internal=internalCoherence(supported,vocabularySnapshot);
     const relevanceScore=item.relevanceScore??relevance(claim,focus),relevanceKind=relevanceLevel(relevanceScore);
     const precision=supported.length?Math.round((direct.length+inferred.length*.7)/Math.max(1,classified.length)*100):null;
     const cohesionResult=cohesionBreakdown(classified,vocabularySnapshot),cohesionScore=cohesionResult.score;
@@ -99,11 +144,12 @@ export function qualityProblems(database:AppDatabase,projectId:string,raw:unknow
     else if(cohesionScore===null||cohesionScore<PROBLEM_QUALITY_CONFIG.minCohesion){finalDecision="REJECTED_LOW_COHESION";rejectionReason=`Cohesion ${cohesionScore??0} < minimum ${PROBLEM_QUALITY_CONFIG.minCohesion}`;lowCohesion++;}
     else if(precision!<PROBLEM_QUALITY_CONFIG.validatedPrecision){finalDecision="REJECTED_LOW_PRECISION";rejectionReason=`Precision ${precision} < minimum ${PROBLEM_QUALITY_CONFIG.validatedPrecision}`;lowPrecision++;}
     else if(relevanceKind==="OUT_OF_SCOPE"){finalDecision="REJECTED_OUT_OF_SCOPE";rejectionReason="Research relevance classified OUT_OF_SCOPE";outOfScope++;}
-    audits.push({clusterId:item.id,canonicalProblem:item.name,summary:item.summary,claim,semanticSignature:item.semanticSignature,category:item.category,evidenceIds:item.evidenceIds,candidateEvidenceCount:item.evidenceIds.length,resolvedEvidenceCount:classified.length,unresolvedEvidenceCount:item.evidenceIds.length-classified.length,unresolvedEvidenceIds:item.evidenceIds.filter(id=>!byId.has(id)),evidenceCount:classified.length,supportedEvidenceCount:supported.length,uniqueAuthors:authors.size,uniqueSources:sources.size,uniqueThreads:threads.size,directEvidenceCount:direct.length,inferredEvidenceCount:inferred.length,researchRelevanceScore:relevanceScore,researchRelevanceLevel:relevanceKind,evidencePrecisionScore:precision,cohesionScore,strengthScore:strength,strengthLevel:level,finalDecision,rejectionReason,evidenceQuality:cohesionResult.details});
+    else if(!internal.internalConnected){finalDecision="REJECTED_LOW_INTERNAL_COHERENCE";rejectionReason=`Internal topical coherence failed: ${internal.internalComponentCount} disconnected evidence components (largest ${internal.largestInternalComponentSize} of ${internal.supportedEvidenceCount} supported)`;internalCoherenceRejected++;}
+    audits.push({clusterId:item.id,canonicalProblem:item.name,summary:item.summary,claim,semanticSignature:item.semanticSignature,category:item.category,evidenceIds:item.evidenceIds,candidateEvidenceCount:item.evidenceIds.length,resolvedEvidenceCount:classified.length,unresolvedEvidenceCount:item.evidenceIds.length-classified.length,unresolvedEvidenceIds:item.evidenceIds.filter(id=>!byId.has(id)),evidenceCount:classified.length,supportedEvidenceCount:supported.length,internalComponentCount:internal.internalComponentCount,largestInternalComponentSize:internal.largestInternalComponentSize,internalConnected:internal.internalConnected,uniqueAuthors:authors.size,uniqueSources:sources.size,uniqueThreads:threads.size,directEvidenceCount:direct.length,inferredEvidenceCount:inferred.length,researchRelevanceScore:relevanceScore,researchRelevanceLevel:relevanceKind,evidencePrecisionScore:precision,cohesionScore,strengthScore:strength,strengthLevel:level,finalDecision,rejectionReason,evidenceQuality:cohesionResult.details});
     if(finalDecision!=="VALIDATED")return[];
     return[{id:item.id,name:item.name,summary:item.summary,category:item.category,tags:[...new Set([item.category])],semanticSignature:item.semanticSignature,evidenceIds:supported.map(row=>row.id),quotes:supported.map(row=>row.quoteText),evidenceCount:supported.length,uniqueAuthors:authors.size,uniqueSources:sources.size,uniqueThreads:threads.size,directEvidenceCount:direct.length,inferredEvidenceCount:inferred.length,totalLikes:likes,evidencePrecisionScore:precision!,clusterCohesionScore:cohesionScore!,relevanceScore,relevanceLevel:relevanceKind,problemStrengthScore:strength!,strengthLevel:level!,evidence:supported.map(row=>({evidenceId:row.id,commentId:row.commentId,quote:row.quoteText,author:row.author,sourceTitle:row.sourceTitle,likes:row.likes,isReply:row.isReply===1,supportType:row.supportType,commentKind:row.commentKind}))}];
   });
   const count=(level:ProblemStrength)=>items.filter(item=>item.strengthLevel===level).length,selected=options?.metrics?.commentsSelectedForSemanticAnalysis??snapshot.eligibleComments;
-  const metrics:ProblemPipelineMetrics={activeSources:snapshot.activeSources,rawComments:snapshot.rawComments,analysisEligibleComments:snapshot.eligibleComments,commentsSelectedForSemanticAnalysis:selected,batchesSentToGemini:options?.metrics?.batchesSentToGemini??0,commentsPerBatch:options?.metrics?.commentsPerBatch??PROBLEM_BATCH_SIZE,candidateInsights:options?.metrics?.candidateInsights??candidates.length,candidateEvidenceLinks:options?.metrics?.candidateEvidenceLinks??parsed.reduce((n,item)=>n+item.evidenceIds.length,0),clustersBeforeValidation:options?.metrics?.clustersBeforeValidation??merged.length,clustersAfterMerge:items.length,finalProblems:items.length,signals:count("SIGNAL"),emerging:count("EMERGING"),patterns:count("PATTERN"),strongPatterns:count("STRONG_PATTERN"),corpusCoverage:snapshot.eligibleComments?Number((selected/snapshot.eligibleComments*100).toFixed(1)):0,candidateClusters:merged.length,clustersSplitForLowCohesion:lowCohesion,clustersRejectedForLowPrecision:lowPrecision,evidenceRejectedInstructionOnly:instructions,evidenceRejectedContextOnly:contextOnly,positiveOnlyCommentsExcluded:praise,validatedProblems:items.length,clustersRejectedNoSupport:noSupport,clustersRejectedOutOfScope:outOfScope,clustersRejectedMiscellaneous:miscellaneous.length,mapCandidateCount:options?.metrics?.candidateInsights??candidates.length,postMergeClusterCount:merged.length,validatedProblemCount:items.length};
+  const metrics:ProblemPipelineMetrics={activeSources:snapshot.activeSources,rawComments:snapshot.rawComments,analysisEligibleComments:snapshot.eligibleComments,commentsSelectedForSemanticAnalysis:selected,batchesSentToGemini:options?.metrics?.batchesSentToGemini??0,commentsPerBatch:options?.metrics?.commentsPerBatch??PROBLEM_BATCH_SIZE,candidateInsights:options?.metrics?.candidateInsights??candidates.length,candidateEvidenceLinks:options?.metrics?.candidateEvidenceLinks??parsed.reduce((n,item)=>n+item.evidenceIds.length,0),clustersBeforeValidation:options?.metrics?.clustersBeforeValidation??merged.length,clustersAfterMerge:items.length,finalProblems:items.length,signals:count("SIGNAL"),emerging:count("EMERGING"),patterns:count("PATTERN"),strongPatterns:count("STRONG_PATTERN"),corpusCoverage:snapshot.eligibleComments?Number((selected/snapshot.eligibleComments*100).toFixed(1)):0,candidateClusters:merged.length,clustersSplitForLowCohesion:lowCohesion,clustersRejectedForLowPrecision:lowPrecision,evidenceRejectedInstructionOnly:instructions,evidenceRejectedContextOnly:contextOnly,positiveOnlyCommentsExcluded:praise,validatedProblems:items.length,clustersRejectedNoSupport:noSupport,clustersRejectedOutOfScope:outOfScope,clustersRejectedMiscellaneous:miscellaneous.length,mapCandidateCount:options?.metrics?.candidateInsights??candidates.length,postMergeClusterCount:merged.length,validatedProblemCount:items.length,clustersRejectedInternalCoherence:internalCoherenceRejected};
   return{...output,schemaVersion:typeof output.schemaVersion==="number"?output.schemaVersion:1,qualityAlgorithmVersion:"problem-quality-v3-hardened",researchFocus:focus,analysisMetrics:metrics,analysisAudit:{postMergeClusters:audits,preMergeRejectedCandidates},items};
 }

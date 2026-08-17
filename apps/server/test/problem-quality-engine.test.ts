@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AppDatabase } from "../src/database/database.js";
 import { ProjectRepository } from "../src/repositories/project-repository.js";
 import { SourceRepository } from "../src/repositories/source-repository.js";
-import { classifyCommentKind, classifyEvidenceSupport, createProblemBatches, deriveResearchFocus, mergeProblemCandidates, qualityProblems, relevanceLevel, scoreProblem, strengthLevel } from "../src/services/problem-quality-engine.js";
+import { analyzeEvidenceSupport, classifyCommentKind, classifyEvidenceSupport, createProblemBatches, deriveResearchFocus, mergeProblemCandidates, normalizeQualityText, qualityProblems, relevanceLevel, scoreProblem, strengthLevel } from "../src/services/problem-quality-engine.js";
 import type { ClusterAuditRecord } from "../src/services/problem-quality-engine.js";
 
 describe("Problem quality engine",()=>{
@@ -181,6 +181,57 @@ describe("Cluster audit trail",()=>{
       expect(typeof cluster.rejectionReason).toBe("string");
       expect(cluster.rejectionReason.length).toBeGreaterThan(0);
     }
+    db.close();
+  });
+});
+
+
+describe("Semantic evidence quality normalization",()=>{
+  const claim="Lentitud de procesamiento y limitaciones de hardware";
+  const focus="reducción y eliminación de ruido en fotografías";
+  const evidenceA="tarda 20 min en una sola foto con Ryzen, RAM y Radeon durante reducción de ruido";
+  const evidenceB="Si cropeas la foto toma menos tiempo porque son menos pixeles, pero toma muchisimo tiempo y depende de tu computadora.";
+  const evidenceC="Al quitar ruido tarda varios minutos. ¿Hay alguna forma que vaya más rápido?";
+  const evidenceD="Me toma más de 30 minutos por foto, es demasiado.";
+  const evidenceE="Nvidia tiene codecs y mi Radeon no.";
+  const evidenceF="En algunas computadoras tarda un poco más.";
+  const evidenceG="¿Por qué tarda tanto en crear el DNG?";
+
+  it("normaliza conceptos generales de rendimiento, hardware y formato",()=>{
+    expect(normalizeQualityText("toma mucho tiempo en mi computadora").semanticConcepts).toEqual(expect.arrayContaining(["PERFORMANCE_TIME","HARDWARE_COMPUTE"]));
+    expect(normalizeQualityText("RAW JPG DNG formato de archivo").semanticConcepts).toContain("FILE_FORMAT");
+  });
+
+  it("mejora Evidence 2 a DIRECT por performance + hardware sin aceptar codecs GPU aislados",()=>{
+    const b=analyzeEvidenceSupport(claim,evidenceB,focus),e=analyzeEvidenceSupport(claim,evidenceE,focus);
+    expect(b.supportType).toBe("DIRECT");
+    expect(b.classifierRule).toBe("SEMANTIC_PERFORMANCE_HARDWARE_PAIR");
+    expect(b.semanticConceptsShared).toEqual(expect.arrayContaining(["PERFORMANCE_TIME","HARDWARE_COMPUTE"]));
+    expect(e.supportType).toBe("NOT_SUPPORTED");
+    expect(e.semanticConceptsEvidence).toContain("HARDWARE_COMPUTE");
+    expect(e.semanticConceptsEvidence).not.toContain("PERFORMANCE_TIME");
+  });
+
+  it("keeps conservative negative controls out of DIRECT",()=>{
+    expect(classifyEvidenceSupport(claim,"Mi computadora tiene una pantalla muy brillante.",focus)).not.toBe("DIRECT");
+    expect(classifyEvidenceSupport(claim,"El tiempo de exposición es largo para fotografía nocturna.",focus)).not.toBe("DIRECT");
+    expect(classifyEvidenceSupport(claim,"La GPU Nvidia tiene codecs de video.",focus)).not.toBe("DIRECT");
+  });
+
+  it("uses semantic concepts in cohesion and excludes unsupported evidence from its denominator",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Rendimiento",niche:focus});
+    sources.createManual(project.id,{sourceType:"manual",title:"Rendimiento",text:[evidenceA,evidenceB,evidenceC,evidenceD,evidenceE,evidenceF,evidenceG].join("\n\n")});
+    const ids=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{id:string}>;
+    const output=qualityProblems(db,project.id,{schemaVersion:1,items:[{id:"performance",name:claim,summary:"La reducción de ruido tarda demasiado según la capacidad de hardware",category:"pain",researchRelevanceScore:86,evidenceIds:ids.map(row=>row.id)}]}) as {analysisAudit:{postMergeClusters:ClusterAuditRecord[]};items:unknown[]};
+    const audit=output.analysisAudit.postMergeClusters[0]!;
+    const byEvidence=new Map(audit.evidenceQuality.map(detail=>[detail.evidenceId,detail]));
+    expect(audit.cohesionScore).toBeGreaterThan(21);
+    expect(byEvidence.get(ids[1]!.id)!.supportType).toBe("DIRECT");
+    expect(byEvidence.get(ids[4]!.id)!.supportType).toBe("NOT_SUPPORTED");
+    expect(byEvidence.get(ids[4]!.id)!.includedInCohesionDenominator).toBe(false);
+    expect(byEvidence.get(ids[1]!.id)!.semanticConceptsShared).toEqual(expect.arrayContaining(["PERFORMANCE_TIME","HARDWARE_COMPUTE"]));
+    expect(audit.claim).toContain(claim);
+    expect(audit.summary).toContain("reducción de ruido");
     db.close();
   });
 });

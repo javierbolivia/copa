@@ -4,6 +4,7 @@ import { ProjectRepository } from "../src/repositories/project-repository.js";
 import { SourceRepository } from "../src/repositories/source-repository.js";
 import { analyzeEvidenceSupport, classifyCommentKind, classifyEvidenceSupport, createProblemBatches, deriveResearchFocus, mergeProblemCandidates, normalizeQualityText, qualityProblems, relevanceLevel, scoreProblem, strengthLevel } from "../src/services/problem-quality-engine.js";
 import type { ClusterAuditRecord } from "../src/services/problem-quality-engine.js";
+import type { SemanticVocabularySnapshot } from "../src/services/semantic-vocabulary.js";
 
 describe("Problem quality engine",()=>{
   it("clasifica soporte y no mezcla evidencia X-Trans con fotos descartadas",()=>{
@@ -313,6 +314,111 @@ describe("Pre-merge miscellaneous audit evidence resolution",()=>{
     expect(validated.cohesionScore).not.toBeNull();
     expect(result.analysisAudit.preMergeRejectedCandidates[0]!.finalDecision).toBe("REJECTED_MISCELLANEOUS");
     expect(result.items).toHaveLength(1);
+    db.close();
+  });
+});
+
+describe("PHASE 2 — Dynamic semantic vocabulary integration (explicit snapshot)", () => {
+  type ConceptSeed = { conceptKey: string; label?: string; cohesionWeight?: number; aliases: string[]; exclusions?: string[] };
+  const snapshot = (id: string, concepts: ConceptSeed[]): SemanticVocabularySnapshot => ({
+    vocabularyVersionId: id,
+    contentHash: `hash-${id}`,
+    concepts: concepts.map((concept) => ({
+      conceptKey: concept.conceptKey,
+      label: concept.label ?? concept.conceptKey,
+      cohesionWeight: concept.cohesionWeight ?? 1,
+      aliases: concept.aliases,
+      exclusions: concept.exclusions ?? [],
+    })),
+  });
+
+  const makeDb = (evidenceText: string) => {
+    const db = new AppDatabase(":memory:");
+    const projects = new ProjectRepository(db);
+    const sources = new SourceRepository(db);
+    const project = projects.create({ name: "P", niche: "nicho generico" });
+    sources.createManual(project.id, { sourceType: "manual", title: "S", text: evidenceText });
+    const ids = db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{ id: string }>;
+    return { db, project, ids };
+  };
+
+  it("DOMAIN SUPPORT: a dynamic concept yields real INFERRED support with no lexical overlap, and vanishes without snapshot", () => {
+    // Same domain concept expressed by TWO distinct aliases, one per side.
+    const snap = snapshot("v-dom", [{ conceptKey: "domain_problem", aliases: ["se bloquea", "queda congelado"], exclusions: [], cohesionWeight: 1 }]);
+    // DB-free normalization: both aliases resolve to the same domain key.
+    expect(normalizeQualityText("la aplicación se bloquea", snap).semanticConcepts).toContain("domain_problem");
+    expect(normalizeQualityText("cuando intento abrirlo queda congelado", snap).semanticConcepts).toContain("domain_problem");
+    expect(normalizeQualityText("la aplicación se bloquea", null).semanticConcepts).not.toContain("domain_problem");
+
+    const { db, project, ids } = makeDb("¿por qué queda congelado cuando intento abrirlo?");
+    const input = { schemaVersion: 1, items: [{ id: "d1", name: "la aplicación se bloquea", summary: "La app se congela al abrir", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id] }] };
+    const withSnap = qualityProblems(db, project.id, input, { vocabularySnapshot: snap }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const withoutSnap = qualityProblems(db, project.id, input, { vocabularySnapshot: null }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+
+    const evWith = withSnap.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    const evWithout = withoutSnap.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    // With the snapshot the dynamic concept is the ONLY shared signal and drives INFERRED.
+    expect(evWith.semanticConceptsShared).toContain("domain_problem");
+    expect(evWith.supportType).toBe("INFERRED");
+    // Without the snapshot there is no domain concept and no lexical overlap => NOT_SUPPORTED.
+    expect(evWithout.semanticConceptsShared).not.toContain("domain_problem");
+    expect(evWithout.supportType).toBe("NOT_SUPPORTED");
+    // Provenance: the matcher preserves the supplied version id.
+    expect(snap.vocabularyVersionId).toBe("v-dom");
+    db.close();
+  });
+
+  it("COHESION WEIGHT: domain cohesionWeight from the snapshot drives cohesionScore", () => {
+    const strong = snapshot("v-strong", [{ conceptKey: "domain_problem", aliases: ["fallooperativo"], exclusions: [], cohesionWeight: 1 }]);
+    const weak = snapshot("v-weak", [{ conceptKey: "domain_problem", aliases: ["fallooperativo"], exclusions: [], cohesionWeight: 0.7 }]);
+    const { db, project, ids } = makeDb("¿por que ocurre fallooperativo durante operacion?");
+    const input = { schemaVersion: 1, items: [{ id: "d1", name: "fallooperativo del sistema", summary: "Fallo operativo reportado", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id] }] };
+    const strongRes = qualityProblems(db, project.id, input, { vocabularySnapshot: strong }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const weakRes = qualityProblems(db, project.id, input, { vocabularySnapshot: weak }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const strongScore = strongRes.analysisAudit.postMergeClusters[0]!.cohesionScore!;
+    const weakScore = weakRes.analysisAudit.postMergeClusters[0]!.cohesionScore!;
+    expect(strongScore).toBe(100);
+    expect(weakScore).toBe(70);
+    expect(strongScore).toBeGreaterThan(weakScore);
+    db.close();
+  });
+
+  it("EXCLUSION NEGATIVE CONTROL: alias + exclusion blocks the domain concept and prevents cohesion inflation", () => {
+    const withExclusion = snapshot("v-excl", [{ conceptKey: "domain_problem", aliases: ["ruido"], exclusions: ["audio"], cohesionWeight: 1 }]);
+    const aliasOnly = snapshot("v-alias", [{ conceptKey: "domain_problem", aliases: ["ruido"], exclusions: [], cohesionWeight: 1 }]);
+    const { db, project, ids } = makeDb("hay ruido en el audio");
+    const input = { schemaVersion: 1, items: [{ id: "r1", name: "ruido en la captura", summary: "Ruido durante captura", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id] }] };
+    const exclRes = qualityProblems(db, project.id, input, { vocabularySnapshot: withExclusion }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const aliasRes = qualityProblems(db, project.id, input, { vocabularySnapshot: aliasOnly }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const evExcl = exclRes.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    const evAlias = aliasRes.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    // Exclusion blocks the domain concept even though the alias token is present.
+    expect(evExcl.semanticConceptsShared).not.toContain("domain_problem");
+    expect(evAlias.semanticConceptsShared).toContain("domain_problem");
+    // Lexical overlap ("ruido") is independent of the snapshot, so support type is unchanged.
+    expect(evExcl.supportType).toBe(evAlias.supportType);
+    // The domain weight would have inflated cohesion; the exclusion prevents it.
+    expect(aliasRes.analysisAudit.postMergeClusters[0]!.cohesionScore!).toBeGreaterThan(exclRes.analysisAudit.postMergeClusters[0]!.cohesionScore!);
+    db.close();
+  });
+
+  it("SNAPSHOT V1/V2: engine uses EXACTLY the supplied snapshot, not latest ACTIVE", () => {
+    const v1 = snapshot("v1", [{ conceptKey: "domain_problem", aliases: ["alfa"], exclusions: [], cohesionWeight: 1 }]);
+    const v2 = snapshot("v2", [{ conceptKey: "domain_problem", aliases: ["beta"], exclusions: [], cohesionWeight: 1 }]);
+    // DB-free normalization: the matched concept depends solely on the supplied snapshot.
+    expect(normalizeQualityText("alfa", v1).semanticConcepts).toContain("domain_problem");
+    expect(normalizeQualityText("alfa", v2).semanticConcepts).not.toContain("domain_problem");
+    expect(normalizeQualityText("beta", v2).semanticConcepts).toContain("domain_problem");
+    expect(normalizeQualityText("beta", v1).semanticConcepts).not.toContain("domain_problem");
+    // End-to-end through qualityProblems with an in-memory DB that has NO vocabulary table rows.
+    const { db, project, ids } = makeDb("observo alfa en produccion");
+    const input = { schemaVersion: 1, items: [{ id: "x1", name: "alfa en produccion", summary: "Problema alfa", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id] }] };
+    const r1 = qualityProblems(db, project.id, input, { vocabularySnapshot: v1 }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const r2 = qualityProblems(db, project.id, input, { vocabularySnapshot: v2 }) as { analysisAudit: { postMergeClusters: ClusterAuditRecord[] } };
+    const ev1 = r1.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    const ev2 = r2.analysisAudit.postMergeClusters[0]!.evidenceQuality.find((e) => e.evidenceId === ids[0]!.id)!;
+    expect(ev1.semanticConceptsShared).toContain("domain_problem");
+    expect(ev2.semanticConceptsShared).not.toContain("domain_problem");
     db.close();
   });
 });

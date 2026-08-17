@@ -3,6 +3,8 @@ import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
 import {
   type ConceptInput,
+  type SemanticConceptSnapshot,
+  type SemanticVocabularySnapshot,
   type VocabularyStatus,
   canonicalContentHash,
   normalizeAlias,
@@ -183,6 +185,41 @@ export class SemanticVocabularyRepository {
       )
       .get(projectId, researchFocusHash, analysisSnapshotHash) as Record<string, unknown> | undefined;
     return row ? this.mapVersion(row) : undefined;
+  }
+
+  /**
+   * Transform the ACTIVE vocabulary version (if any) for a given
+   * project + focus hash + analysis snapshot hash into an immutable runtime
+   * {@link SemanticVocabularySnapshot}.
+   *
+   * This is the single bridge between the persisted, immutable vocabulary and
+   * the Problem Quality Engine. The resulting snapshot contains only normalized
+   * aliases/exclusions and weights — never mutable DB rows — so the engine can
+   * match deterministically without touching the database.
+   *
+   * If there is no ACTIVE version, returns `null`. It never creates a vocabulary
+   * automatically.
+   */
+  loadActiveVocabularySnapshot(
+    projectId: string,
+    researchFocusHash: string,
+    analysisSnapshotHash: string,
+  ): SemanticVocabularySnapshot | null {
+    const version = this.getActiveVocabulary(projectId, researchFocusHash, analysisSnapshotHash);
+    if (!version) return null;
+    const entries = this.listConceptsWithAliases(version.id);
+    const concepts: SemanticConceptSnapshot[] = entries.map(({ concept, aliases }) => ({
+      conceptKey: concept.conceptKey,
+      label: concept.label,
+      cohesionWeight: concept.cohesionWeight,
+      aliases: aliases.filter((alias) => !alias.isExclusion).map((alias) => alias.normalizedAlias),
+      exclusions: aliases.filter((alias) => alias.isExclusion).map((alias) => alias.normalizedAlias),
+    }));
+    return {
+      vocabularyVersionId: version.id,
+      contentHash: version.contentHash,
+      concepts,
+    };
   }
 
   listConceptsWithAliases(

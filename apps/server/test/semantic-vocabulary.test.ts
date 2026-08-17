@@ -11,11 +11,16 @@ import { JobRepository } from "../src/repositories/job-repository.js";
 import { SemanticVocabularyRepository } from "../src/repositories/semantic-vocabulary-repository.js";
 import {
   type ConceptInput,
+  type SemanticVocabularySnapshot,
   analysisSnapshotHash,
   canonicalContentHash,
   normalizeAlias,
   researchFocusHash,
 } from "../src/services/semantic-vocabulary.js";
+import {
+  domainConceptsOf,
+  matchDomainConcepts,
+} from "../src/services/semantic-vocabulary-matcher.js";
 
 interface SeedRow {
   eid: string;
@@ -589,6 +594,186 @@ describe("Domain Semantic Vocabulary - real migration v9 -> v10 (AUDIT 3)", () =
     expect(repo.getVocabularyVersion(created.id)).toBeTruthy();
     expect(db.connection.prepare("SELECT id FROM generations WHERE id='gen-legacy'").get()).toBeTruthy();
     db.close();
+  });
+});
+
+describe("PHASE 2 — Dynamic semantic vocabulary matcher (deterministic aliases)", () => {
+  const snapshot = (id: string, concepts: Array<{
+    conceptKey: string;
+    label?: string;
+    cohesionWeight?: number;
+    aliases: string[];
+    exclusions?: string[];
+  }>): SemanticVocabularySnapshot => ({
+    vocabularyVersionId: id,
+    contentHash: `hash-${id}`,
+    concepts: concepts.map((concept) => ({
+      conceptKey: concept.conceptKey,
+      label: concept.label ?? concept.conceptKey,
+      cohesionWeight: concept.cohesionWeight ?? 1,
+      aliases: concept.aliases,
+      exclusions: concept.exclusions ?? [],
+    })),
+  });
+
+  // DOMAIN A — photography
+  const photo = snapshot("v-photo", [{
+    conceptKey: "ruido_digital",
+    aliases: ["ruido", "grano"],
+    exclusions: ["audio", "microfono"],
+    cohesionWeight: 1,
+  }]);
+  // DOMAIN B — dogs
+  const dogs = snapshot("v-dogs", [{
+    conceptKey: "ladrido_separacion",
+    aliases: ["ladra cuando queda solo", "ladrido al quedarse solo"],
+    exclusions: ["ladra cuando juega"],
+    cohesionWeight: 1,
+  }]);
+  // DOMAIN C — sales
+  const sales = snapshot("v-sales", [{
+    conceptKey: "objecion_precio",
+    aliases: ["demasiado caro", "precio muy alto", "no puedo pagarlo"],
+    cohesionWeight: 1,
+  }]);
+
+  it("DOMINIO A: reconoce ruido pero lo excluye con audio/microfono", () => {
+    expect(domainConceptsOf(photo, "la foto tiene mucho ruido")).toContain("ruido_digital");
+    expect(domainConceptsOf(photo, "hay ruido en el audio")).not.toContain("ruido_digital");
+    const blocked = matchDomainConcepts(photo, "hay ruido en el audio").find((m) => m.conceptKey === "ruido_digital");
+    expect(blocked?.blockedByExclusion).toBe("audio");
+    expect(blocked?.matchedAlias).toBeNull();
+  });
+
+  it("DOMINIO B: reconoce ladrido por separacion y lo excluye al jugar", () => {
+    expect(domainConceptsOf(dogs, "mi perro ladra cuando queda solo")).toContain("ladrido_separacion");
+    expect(domainConceptsOf(dogs, "mi perro ladra cuando juega")).not.toContain("ladrido_separacion");
+    const blocked = matchDomainConcepts(dogs, "mi perro ladra cuando juega").find((m) => m.conceptKey === "ladrido_separacion");
+    expect(blocked?.blockedByExclusion).toBe("ladra cuando juega");
+  });
+
+  it("DOMINIO C: reconoce objecion de precio y no confunde catalogo", () => {
+    expect(domainConceptsOf(sales, "me interesa pero el precio es muy alto")).toContain("objecion_precio");
+    expect(domainConceptsOf(sales, "el precio aparece en el catálogo")).not.toContain("objecion_precio");
+  });
+
+  it("BOUNDARIES: alias de una palabra no coincide como substring accidental", () => {
+    const priceOnly = snapshot("v-price", [{ conceptKey: "objecion_precio", aliases: ["precio"], cohesionWeight: 1 }]);
+    expect(domainConceptsOf(priceOnly, "el precio subió")).toContain("objecion_precio");
+    expect(domainConceptsOf(priceOnly, "lo desprecio")).not.toContain("objecion_precio");
+  });
+
+  // ISSUE 1 — conectores gramaticales ignorables, gaps acotados y deterministas.
+  const pricePhrase = snapshot("v-precio", [{ conceptKey: "objecion_precio", aliases: ["precio muy alto"], cohesionWeight: 1 }]);
+
+  it("A: alias multi-palabra tolera conector gramatical entre tokens (precio es muy alto)", () => {
+    expect(domainConceptsOf(pricePhrase, "el precio es muy alto")).toContain("objecion_precio");
+    expect(domainConceptsOf(pricePhrase, "el precio muy alto")).toContain("objecion_precio");
+    expect(domainConceptsOf(pricePhrase, "me interesa pero el precio es muy alto")).toContain("objecion_precio");
+  });
+
+  it("B: NO permite gaps con palabras de contenido semantico entre tokens", () => {
+    expect(domainConceptsOf(pricePhrase, "el precio revisó toda la configuración muy alto")).not.toContain("objecion_precio");
+    expect(domainConceptsOf(pricePhrase, "el precio después de revisar todo terminó muy alto")).not.toContain("objecion_precio");
+  });
+
+  it("C: alias de una palabra no coincide como substring (desprecio)", () => {
+    const priceOnly = snapshot("v-price", [{ conceptKey: "objecion_precio", aliases: ["precio"], cohesionWeight: 1 }]);
+    expect(domainConceptsOf(priceOnly, "lo desprecio")).not.toContain("objecion_precio");
+  });
+
+  it("D: exclusions siguen funcionando con conectores gramaticales", () => {
+    const withExclusion = snapshot("v-excl", [{ conceptKey: "ruido_digital", aliases: ["ruido"], exclusions: ["audio"], cohesionWeight: 1 }]);
+    expect(domainConceptsOf(withExclusion, "hay ruido en el audio")).not.toContain("ruido_digital");
+    expect(domainConceptsOf(withExclusion, "el ruido es fuerte")).toContain("ruido_digital");
+  });
+
+  it("ISOLATION: un snapshot de un nicho no reconoce conceptos de otros", () => {
+    expect(domainConceptsOf(photo, "mi perro ladra cuando queda solo")).not.toContain("ruido_digital");
+    expect(domainConceptsOf(photo, "el precio es muy alto")).not.toContain("ruido_digital");
+    expect(domainConceptsOf(dogs, "la foto tiene mucho ruido")).not.toContain("ladrido_separacion");
+    expect(domainConceptsOf(sales, "la foto tiene mucho ruido")).not.toContain("objecion_precio");
+  });
+
+  it("VERSIONING: el resultado depende EXCLUSIVAMENTE del snapshot suministrado", () => {
+    const v1 = snapshot("v1", [{ conceptKey: "x", aliases: ["alpha"], cohesionWeight: 1 }]);
+    const v2 = snapshot("v2", [{ conceptKey: "x", aliases: ["beta"], cohesionWeight: 1 }]);
+    expect(domainConceptsOf(v1, "alpha")).toEqual(["x"]);
+    expect(domainConceptsOf(v2, "alpha")).toEqual([]);
+    expect(domainConceptsOf(v2, "beta")).toEqual(["x"]);
+    expect(domainConceptsOf(v1, "beta")).toEqual([]);
+  });
+
+  it("provenance: matchedAlias y vocabularyVersionId se conservan", () => {
+    const match = matchDomainConcepts(photo, "hay grano en la imagen").find((m) => m.conceptKey === "ruido_digital");
+    expect(match?.matchedAlias).toBe("grano");
+    expect(match?.vocabularyVersionId).toBe("v-photo");
+    expect(match?.blockedByExclusion).toBeNull();
+  });
+});
+
+describe("PHASE 2 — loadActiveVocabularySnapshot (repository bridge)", () => {
+  let database: AppDatabase;
+  let projects: ProjectRepository;
+  let repository: SemanticVocabularyRepository;
+
+  beforeEach(() => {
+    database = new AppDatabase(":memory:");
+    projects = new ProjectRepository(database);
+    repository = new SemanticVocabularyRepository(database);
+  });
+  afterEach(() => database.close());
+
+  const focusHash = researchFocusHash("fotografia");
+
+  it("devuelve null cuando no hay version ACTIVE", () => {
+    const project = projects.create({ name: "P", niche: "N" });
+    const result = repository.loadActiveVocabularySnapshot(project.id, focusHash, "snap");
+    expect(result).toBeNull();
+  });
+
+  it("transforma la version ACTIVE en un snapshot inmutable sin filas DB", () => {
+    const project = projects.create({ name: "P", niche: "N" });
+    const version = repository.createVocabularyVersion({
+      projectId: project.id,
+      researchFocus: "fotografia",
+      researchFocusHash: focusHash,
+      analysisSnapshotHash: "snap",
+      contentHash: canonicalContentHash([{
+        conceptKey: "ruido_digital",
+        label: "Ruido digital",
+        cohesionWeight: 0.5,
+        aliases: [
+          { alias: "ruido", isExclusion: false },
+          { alias: "grano", isExclusion: false },
+          { alias: "audio", isExclusion: true },
+        ],
+      }]),
+      concepts: [{
+        conceptKey: "ruido_digital",
+        label: "Ruido digital",
+        cohesionWeight: 0.5,
+        aliases: [
+          { alias: "ruido", isExclusion: false },
+          { alias: "grano", isExclusion: false },
+          { alias: "audio", isExclusion: true },
+        ],
+      }],
+    });
+    repository.activateVocabularyVersion(version.id);
+
+    const snapshot = repository.loadActiveVocabularySnapshot(project.id, focusHash, "snap")!;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.vocabularyVersionId).toBe(version.id);
+    expect(snapshot.concepts).toHaveLength(1);
+    const concept = snapshot.concepts[0]!;
+    expect(concept.conceptKey).toBe("ruido_digital");
+    expect(concept.cohesionWeight).toBe(0.5);
+    expect(concept.aliases).toEqual(expect.arrayContaining(["ruido", "grano"]));
+    expect(concept.exclusions).toEqual(["audio"]);
+    // The runtime snapshot is immediately usable by the matcher.
+    expect(domainConceptsOf(snapshot, "la foto tiene mucho ruido")).toContain("ruido_digital");
+    expect(domainConceptsOf(snapshot, "hay ruido en el audio")).not.toContain("ruido_digital");
   });
 });
 

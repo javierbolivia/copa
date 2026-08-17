@@ -115,3 +115,49 @@ export function canonicalContentHash(concepts: readonly ConceptInput[]): string 
     .sort((a, b) => a.conceptKey.localeCompare(b.conceptKey));
   return sha256(JSON.stringify(normalized));
 }
+
+/**
+ * Runtime, immutable, provider-agnostic view of a single domain concept.
+ *
+ * Built once from an ACTIVE vocabulary version (see
+ * SemanticVocabularyRepository.loadActiveVocabularySnapshot) and then passed
+ * straight into the Problem Quality Engine. The engine never sees mutable DB
+ * rows. Aliases and exclusions are already normalized (deterministic,
+ * accent/case/whitespace folded) so matching requires no DB access.
+ */
+export interface SemanticConceptSnapshot {
+  conceptKey: string;
+  label: string;
+  cohesionWeight: number;
+  aliases: string[];
+  exclusions: string[];
+}
+
+/**
+ * Immutable runtime snapshot of an ACTIVE domain semantic vocabulary version.
+ *
+ * This is the ONLY vocabulary shape the Problem Quality Engine consumes. It is
+ * deliberately free of any database identity beyond the version id and content
+ * hash, so the engine stays deterministic and provider-agnostic.
+ */
+export interface SemanticVocabularySnapshot {
+  vocabularyVersionId: string;
+  contentHash: string;
+  concepts: SemanticConceptSnapshot[];
+}
+
+/**
+ * Minimal provenance record produced by the deterministic alias matcher.
+ *
+ * One entry per domain concept that either matched or was blocked by an
+ * exclusion. `matchedAlias` is the normalized alias that triggered the match
+ * (null when blocked); `blockedByExclusion` carries the exclusion alias that
+ * suppressed the match. PHASE 3 can extend this with full audit rows without
+ * reworking the matching algorithm.
+ */
+export interface SemanticConceptMatch {
+  conceptKey: string;
+  matchedAlias: string | null;
+  vocabularyVersionId: string;
+  blockedByExclusion?: string | null;
+}

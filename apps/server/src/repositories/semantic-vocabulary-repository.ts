@@ -230,6 +230,25 @@ export class SemanticVocabularyRepository {
   ): SemanticVocabularySnapshot | null {
     const version = this.getActiveVocabulary(projectId, researchFocusHash, analysisSnapshotHash);
     if (!version) return null;
+    return this.snapshotFromVersion(version);
+  }
+
+  /**
+   * Transform ANY vocabulary version (candidate, active or rejected) by its
+   * exact id into an immutable runtime {@link SemanticVocabularySnapshot}.
+   *
+   * This is the single bridge used by the PHASE 4C dry-run/activation path to
+   * materialize the EXACT candidate that was discovered/evaluated (never a
+   * "latest" ambiguous lookup). Returns `null` when the version id does not
+   * exist or its content cannot be fully loaded (guardrail B in PHASE 4C).
+   */
+  loadVocabularySnapshot(id: string): SemanticVocabularySnapshot | null {
+    const version = this.getVocabularyVersion(id);
+    if (!version) return null;
+    return this.snapshotFromVersion(version);
+  }
+
+  private snapshotFromVersion(version: SemanticVocabularyVersion): SemanticVocabularySnapshot {
     const entries = this.listConceptsWithAliases(version.id);
     const concepts: SemanticConceptSnapshot[] = entries.map(({ concept, aliases }) => ({
       conceptKey: concept.conceptKey,

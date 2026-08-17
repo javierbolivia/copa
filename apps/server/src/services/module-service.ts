@@ -1,4 +1,4 @@
-import type { LlmGenerateResult, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
+import type { LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -28,6 +28,11 @@ import {
   analysisSnapshotHashFromRows,
   researchFocusHash,
 } from "./semantic-vocabulary.js";
+import {
+  type DomainVocabularyDiscoverySourceItem,
+  DomainVocabularyDiscoveryService,
+} from "./domain-vocabulary-discovery-service.js";
+import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -40,6 +45,15 @@ export interface ModuleServiceOptions {
   readonly economyOutputCostPerMillion?: number;
   readonly powerfulInputCostPerMillion?: number;
   readonly powerfulOutputCostPerMillion?: number;
+  /**
+   * PHASE 4C — optional LlmProvider used for domain vocabulary discovery.
+   *
+   * Provider-agnostic: when omitted, ModuleService falls back to the SAME
+   * provider abstraction as the current Problems run (gemini for "gemini"
+   * runs, openai for "openai" runs). It is never hardcoded to Gemini in the
+   * domain services. Tests inject a MockLLMProvider here.
+   */
+  readonly discoveryProvider?: LlmProvider;
 }
 
 export class ModuleService {
@@ -211,12 +225,17 @@ export class ModuleService {
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
-    // PHASE 3 — load the ACTIVE semantic vocabulary ONCE per run, using the same
-    // project + research focus + exact Analysis Set that the Problem Quality Engine
-    // will consume below. If no ACTIVE vocabulary exists, vocabularySnapshot stays
-    // null and the engine runs with its legacy, exact behavior.
+    // PHASE 3/4C — resolve the semantic vocabulary ONCE per run using the same
+    // project + research focus + exact Analysis Set that the Problem Quality
+    // Engine consumes below.
+    //  - If an ACTIVE exact vocabulary exists, it is used with NO discovery.
+    //  - Otherwise (PHASE 4C) a CANDIDATE is discovered from the structured
+    //    pipeline output, dry-run deterministically, and activated only when the
+    //    hard guardrails PASS. Discovery/validator/dry-run failures fall back to
+    //    legacy exact behavior; activation failures are explicit, never silent.
     let vocabularySnapshot: SemanticVocabularySnapshot | null = null;
     let vocabularyVersionId: string | null = null;
+    let vocabularyDryRun: DomainVocabularyDryRunResult | undefined;
     if (key === "problems") {
       const researchFocusValue = this.settings.researchFocus(projectId)?.value ?? null;
       const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusValue);
@@ -226,6 +245,79 @@ export class ModuleService {
       const loaded = this.vocabulary.loadActiveVocabularySnapshot(projectId, focusHash, snapshotHash);
       vocabularySnapshot = loaded ?? null;
       vocabularyVersionId = vocabularySnapshot?.vocabularyVersionId ?? null;
+      // Explicit corruption guard: an ACTIVE vocabulary must always carry content.
+      if (vocabularySnapshot && vocabularySnapshot.concepts.length === 0) {
+        throw new Error(
+          `ACTIVE vocabulary corruption: loaded active vocabulary ${vocabularySnapshot.vocabularyVersionId} has zero concepts`,
+        );
+      }
+
+      // PHASE 4C — only when there is no ACTIVE exact vocabulary do we discover.
+      if (!vocabularySnapshot) {
+        const discoveryProvider =
+          this.options.discoveryProvider ??
+          (selectedProvider === "gemini"
+            ? this.options.gemini
+            : selectedProvider === "openai"
+              ? this.options.openAI
+              : undefined);
+        const sourceItems = buildDiscoverySourceItems(output);
+        let candidateSnapshot: SemanticVocabularySnapshot | null = null;
+        if (discoveryProvider && sourceItems.length > 0) {
+          try {
+            const discovery = new DomainVocabularyDiscoveryService(
+              discoveryProvider,
+              this.vocabulary,
+              this.db,
+              { model, reuseExistingCandidate: true },
+            );
+            const discoveryResult = await discovery.discover({
+              projectId,
+              researchFocus: effectiveFocus,
+              researchFocusHash: focusHash,
+              analysisSnapshotHash: snapshotHash,
+              analysisSetSnapshot: analysisSet,
+              sourceItems,
+            });
+            const candidateId =
+              discoveryResult.status === "CREATED_CANDIDATE" ||
+              discoveryResult.status === "REUSED_CANDIDATE"
+                ? discoveryResult.vocabularyVersionId
+                : undefined;
+            // Guardrail B — candidate must be fully loadable by its exact id.
+            candidateSnapshot = candidateId
+              ? this.vocabulary.loadVocabularySnapshot(candidateId)
+              : null;
+            if (candidateSnapshot) {
+              vocabularyDryRun = runDomainVocabularyDryRun({
+                database: this.db,
+                projectId,
+                analysisSetSnapshot: analysisSet,
+                rawProblems: output,
+                candidateSnapshot,
+              });
+              if (vocabularyDryRun.status !== "PASS") candidateSnapshot = null;
+            }
+          } catch {
+            // Discovery provider failure / unexpected discovery error => legacy CORE.
+            candidateSnapshot = null;
+          }
+        }
+        if (candidateSnapshot) {
+          // Activation by the EXACT candidate id that passed the dry-run — never "latest".
+          const activated = this.vocabulary.activateVocabularyVersion(
+            candidateSnapshot.vocabularyVersionId,
+          );
+          if (!activated) {
+            throw new Error(
+              `domain vocabulary candidate activation failed for ${candidateSnapshot.vocabularyVersionId}`,
+            );
+          }
+          vocabularySnapshot = candidateSnapshot;
+          vocabularyVersionId = candidateSnapshot.vocabularyVersionId;
+        }
+      }
+
       const qualityOptions: {
         metrics?: Partial<ProblemPipelineMetrics>;
         vocabularySnapshot?: SemanticVocabularySnapshot | null;
@@ -234,6 +326,7 @@ export class ModuleService {
       if (problemMetrics) qualityOptions.metrics = problemMetrics;
       if (vocabularySnapshot) qualityOptions.vocabularySnapshot = vocabularySnapshot;
       output = qualityProblems(this.db, projectId, output, qualityOptions);
+      if (vocabularyDryRun !== undefined) output.domainVocabularyDryRun = vocabularyDryRun;
     }
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
@@ -418,3 +511,30 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
  return outputs[key];
 }
 function referencedEvidenceIds(output:unknown,allowed:string[]):string[]{const allowedSet=new Set(allowed),found=new Set<string>();const visit=(value:unknown)=>{if(typeof value==="string"&&allowedSet.has(value))found.add(value);else if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==="object")Object.values(value).forEach(visit);};visit(output);return [...found];}
+
+/**
+ * PHASE 4C — build COMPACT discovery sourceItems from the structured Problems
+ * output the pipeline already produced. Never resends the full corpus: only the
+ * candidate/problem claim (name + summary) and a short category context are
+ * included. The complete Analysis Set stays server-side only.
+ */
+function buildDiscoverySourceItems(
+  output: Record<string, unknown>,
+): DomainVocabularyDiscoverySourceItem[] {
+  const items = Array.isArray(output.items) ? output.items : [];
+  const sourceItems: DomainVocabularyDiscoverySourceItem[] = [];
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    const summary = typeof item.summary === "string" ? item.summary.trim() : "";
+    const text = [name, summary].filter(Boolean).join(". ");
+    if (!text) continue;
+    const id =
+      typeof item.id === "string" && item.id ? item.id : `candidate-${sourceItems.length + 1}`;
+    const category =
+      typeof item.category === "string" && item.category.trim() ? item.category.trim() : undefined;
+    sourceItems.push(category ? { id, text, context: category } : { id, text });
+  }
+  return sourceItems;
+}

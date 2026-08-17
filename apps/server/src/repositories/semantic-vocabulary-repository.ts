@@ -86,29 +86,52 @@ export class SemanticVocabularyRepository {
         .get(input.projectId, input.researchFocusHash, input.analysisSnapshotHash) as { version: number }
     ).version;
     const id = uuidv7();
-    db.prepare(
-      `INSERT INTO semantic_vocabulary_versions
-        (id, project_id, research_focus, research_focus_hash, analysis_snapshot_hash, version, content_hash, status, source_generation_id, provider, model, prompt_version, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(
-      id,
-      input.projectId,
-      input.researchFocus ?? null,
-      input.researchFocusHash,
-      input.analysisSnapshotHash,
-      version,
-      input.contentHash,
-      status,
-      input.sourceGenerationId ?? null,
-      input.provider ?? null,
-      input.model ?? null,
-      input.promptVersion ?? null,
-      now,
-    );
-    for (const concept of input.concepts ?? []) {
-      this.addConcept({ vocabularyVersionId: id, concept });
+    const ownsTransaction = !db.isTransaction;
+    if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
+    try {
+      db.prepare(
+        `INSERT INTO semantic_vocabulary_versions
+          (id, project_id, research_focus, research_focus_hash, analysis_snapshot_hash, version, content_hash, status, source_generation_id, provider, model, prompt_version, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ).run(
+        id,
+        input.projectId,
+        input.researchFocus ?? null,
+        input.researchFocusHash,
+        input.analysisSnapshotHash,
+        version,
+        input.contentHash,
+        status,
+        input.sourceGenerationId ?? null,
+        input.provider ?? null,
+        input.model ?? null,
+        input.promptVersion ?? null,
+        now,
+      );
+      for (const concept of input.concepts ?? []) {
+        this.addConcept({ vocabularyVersionId: id, concept });
+      }
+      if (ownsTransaction) db.exec("COMMIT");
+      return this.getVocabularyVersion(id)!;
+    } catch (error) {
+      if (ownsTransaction && db.isTransaction) db.exec("ROLLBACK");
+      throw error;
     }
-    return this.getVocabularyVersion(id)!;
+  }
+
+  getLatestCandidateForTuple(
+    projectId: string,
+    researchFocusHash: string,
+    analysisSnapshotHash: string,
+  ): SemanticVocabularyVersion | undefined {
+    const row = this.database.connection
+      .prepare(
+        `SELECT * FROM semantic_vocabulary_versions
+         WHERE project_id=? AND research_focus_hash=? AND analysis_snapshot_hash=? AND status='candidate'
+         ORDER BY version DESC, created_at DESC LIMIT 1`,
+      )
+      .get(projectId, researchFocusHash, analysisSnapshotHash) as Record<string, unknown> | undefined;
+    return row ? this.mapVersion(row) : undefined;
   }
 
   addConcept(input: { vocabularyVersionId: string; concept: ConceptInput }): SemanticConcept {

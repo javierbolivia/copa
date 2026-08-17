@@ -40,6 +40,7 @@ const POWERFUL_MODULES = new Set<ModuleKey>([
 ]);
 
 const promptCache = new Map<ModuleKey, ModulePrompt>();
+const genericPromptCache = new Map<string, ModulePrompt>();
 
 export function getModulePrompt(key: ModuleKey): ModulePrompt | undefined {
   const filename = PROMPT_FILES[key];
@@ -69,5 +70,34 @@ export function getModulePrompt(key: ModuleKey): ModulePrompt | undefined {
     relativePath,
   };
   promptCache.set(key, prompt);
+  return prompt;
+}
+
+export function getPrompt(relativePath: string): ModulePrompt {
+  const cached = genericPromptCache.get(relativePath);
+  if (cached) return cached;
+
+  const absolute = resolve(WORKSPACE_ROOT, relativePath);
+  const source = readFileSync(absolute, "utf8");
+  const frontMatter = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/u.exec(source);
+  if (!frontMatter) throw new Error(`El prompt ${relativePath} no tiene front matter valido.`);
+  const metadata = Object.fromEntries(frontMatter[1]!.split(/\r?\n/u).map((line) => {
+    const separator = line.indexOf(":");
+    return separator < 0 ? [line.trim(), ""] : [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+  }));
+  if (!metadata.agent_key || !metadata.version || metadata.status !== "active") {
+    throw new Error(`El prompt ${relativePath} no esta activo o carece de metadata requerida.`);
+  }
+  const hash = createHash("sha256").update(source).digest("hex");
+  const prompt: ModulePrompt = {
+    agentKey: metadata.agent_key,
+    version: metadata.version,
+    hash,
+    versionHash: `${metadata.version}+sha256.${hash.slice(0, 12)}`,
+    instructions: frontMatter[2]!.trim(),
+    modelTier: "powerful",
+    relativePath,
+  };
+  genericPromptCache.set(relativePath, prompt);
   return prompt;
 }

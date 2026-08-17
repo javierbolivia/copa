@@ -72,6 +72,64 @@ export interface VocabularyValidationResult {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Discovery input contract (provider-agnostic)                       */
+/* ------------------------------------------------------------------ */
+
+export interface DomainVocabularyDiscoverySourceItem {
+  /** Stable evidence/source identifier. */
+  id: string;
+  /** Compact text representation. */
+  text: string;
+  /** Optional candidate/problem context to guide discovery without resending full corpus. */
+  context?: string;
+}
+
+export interface DomainVocabularyDiscoveryInput {
+  projectId: string;
+  researchFocus: string | null;
+  researchFocusHash: string;
+  analysisSnapshotHash: string;
+  analysisSetSnapshot: AnalysisSetSnapshot;
+  sourceItems: readonly DomainVocabularyDiscoverySourceItem[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Discovery result                                                   */
+/* ------------------------------------------------------------------ */
+
+export type DomainVocabularyDiscoveryResultStatus =
+  | "REUSED_CANDIDATE"
+  | "CREATED_CANDIDATE"
+  | "REJECTED"
+  | "PROVIDER_FAILED";
+
+export interface DomainVocabularyDiscoveryProviderMetadata {
+  provider: string;
+  model?: string;
+  promptVersion: string;
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    estimatedCost?: number;
+    currency?: string;
+    usageKind?: "provider_reported" | "estimated" | "unknown";
+  };
+}
+
+export interface DomainVocabularyDiscoveryResult {
+  status: DomainVocabularyDiscoveryResultStatus;
+  vocabularyVersionId?: string;
+  validationStatus?: VocabularyValidationStatus;
+  issues: VocabularyValidationIssue[];
+  statistics: {
+    totalConcepts: number;
+    validConcepts: number;
+    rejectedConcepts: number;
+  };
+  providerMetadata?: DomainVocabularyDiscoveryProviderMetadata;
+}
+
+/* ------------------------------------------------------------------ */
 /*  V1 limits (deterministic, server-side)                             */
 /* ------------------------------------------------------------------ */
 

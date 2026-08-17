@@ -24,6 +24,40 @@ import { canonicalContentHash } from "../services/semantic-vocabulary.js";
 const DISCOVERY_PROMPT_RELATIVE_PATH = "prompts/domain-vocabulary-discovery.md";
 const MAX_OUTPUT_TOKENS = 8_000;
 
+/* ------------------------------------------------------------------ */
+/*  Safe diagnostic helpers (PHASE 4C observability)                   */
+/* ------------------------------------------------------------------ */
+
+const SECRET_PATTERNS = [
+  /AIza[\w-]{20,}/gu,
+  /sk-[A-Za-z0-9]{16,}/gu,
+  /Bearer\s+[\w-]{8,}/giu,
+  /x-goog-api-key[^\n]*/giu,
+  /\?key=[^&\s]+/giu,
+  /key=[^&\s]{12,}/giu,
+];
+
+function sanitizeDiagnostic(value: string): string {
+  let safe = value;
+  for (const pattern of SECRET_PATTERNS) safe = safe.replace(pattern, "[redacted]");
+  return safe.replace(/\s+/gu, " ").trim().slice(0, 300);
+}
+
+/**
+ * Safe, credential-free diagnostic string for a provider/validation error.
+ * Only the error category, an optional HTTP status and a sanitized message are
+ * kept. Never exposes API keys, headers, prompts or raw secrets.
+ */
+export function providerErrorDiagnostic(error: unknown): string {
+  if (error instanceof Error) {
+    const rec = error as Error & { code?: unknown; status?: unknown };
+    const code = typeof rec.code === "string" ? rec.code : rec.name;
+    const status = typeof rec.status === "number" ? ` http=${rec.status}` : "";
+    return sanitizeDiagnostic(`${code}${status}: ${rec.message}`);
+  }
+  return sanitizeDiagnostic(String(error));
+}
+
 function buildSourceMaterial(input: DomainVocabularyDiscoveryInput): string {
   const lines: string[] = [];
   lines.push(`researchFocus: ${input.researchFocus ?? "(sin foco explícito)"}`);
@@ -33,6 +67,15 @@ function buildSourceMaterial(input: DomainVocabularyDiscoveryInput): string {
     lines.push(`- id: ${item.id}`);
     if (item.context) lines.push(`  context: ${item.context}`);
     lines.push(`  text: "${item.text.replace(/"/g, '\\"')}"`);
+    if (item.evidenceIds && item.evidenceIds.length > 0) {
+      lines.push(`  evidenceIds: [${item.evidenceIds.join(", ")}]`);
+    }
+    if (item.snippets && item.snippets.length > 0) {
+      lines.push(`  snippets:`);
+      for (const snippet of item.snippets) {
+        lines.push(`    - "${snippet.replace(/"/g, '\\"')}"`);
+      }
+    }
   }
   return lines.join("\n");
 }
@@ -160,7 +203,7 @@ export class DomainVocabularyDiscoveryService {
     } catch (error) {
       return {
         status: "PROVIDER_FAILED",
-        issues: [],
+        issues: [{ code: "PROVIDER_ERROR", message: providerErrorDiagnostic(error) }],
         statistics: {
           totalConcepts: 0,
           validConcepts: 0,

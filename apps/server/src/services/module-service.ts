@@ -29,8 +29,10 @@ import {
   researchFocusHash,
 } from "./semantic-vocabulary.js";
 import {
+  type DomainVocabularyDiscoveryResult,
   type DomainVocabularyDiscoverySourceItem,
   DomainVocabularyDiscoveryService,
+  providerErrorDiagnostic,
 } from "./domain-vocabulary-discovery-service.js";
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 
@@ -236,6 +238,7 @@ export class ModuleService {
     let vocabularySnapshot: SemanticVocabularySnapshot | null = null;
     let vocabularyVersionId: string | null = null;
     let vocabularyDryRun: DomainVocabularyDryRunResult | undefined;
+    let discoveryAudit: Record<string, unknown> | undefined;
     if (key === "problems") {
       const researchFocusValue = this.settings.researchFocus(projectId)?.value ?? null;
       const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusValue);
@@ -261,7 +264,7 @@ export class ModuleService {
             : selectedProvider === "openai"
               ? this.options.openAI
               : undefined);
-        const sourceItems = buildDiscoverySourceItems(output);
+        const sourceItems = buildDiscoverySourceItems(output, analysisSet);
         let candidateSnapshot: SemanticVocabularySnapshot | null = null;
         if (discoveryProvider && sourceItems.length > 0) {
           try {
@@ -279,6 +282,8 @@ export class ModuleService {
               analysisSetSnapshot: analysisSet,
               sourceItems,
             });
+            // PHASE 4C observability — keep the discovery outcome for this exact run.
+            discoveryAudit = toDiscoveryAudit(discoveryResult, sourceItems.length);
             const candidateId =
               discoveryResult.status === "CREATED_CANDIDATE" ||
               discoveryResult.status === "REUSED_CANDIDATE"
@@ -298,8 +303,18 @@ export class ModuleService {
               });
               if (vocabularyDryRun.status !== "PASS") candidateSnapshot = null;
             }
-          } catch {
+          } catch (error) {
             // Discovery provider failure / unexpected discovery error => legacy CORE.
+            discoveryAudit = {
+              status: "PROVIDER_FAILED",
+              sourceItemCount: sourceItems.length,
+              issues: [{ code: "PROVIDER_ERROR", message: providerErrorDiagnostic(error) }],
+              statistics: { totalConcepts: 0, validConcepts: 0, rejectedConcepts: 0 },
+              provider: {
+                provider: typeof discoveryProvider?.name === "string" ? discoveryProvider.name : null,
+                model: model ?? null,
+              },
+            };
             candidateSnapshot = null;
           }
         }
@@ -327,6 +342,7 @@ export class ModuleService {
       if (vocabularySnapshot) qualityOptions.vocabularySnapshot = vocabularySnapshot;
       output = qualityProblems(this.db, projectId, output, qualityOptions);
       if (vocabularyDryRun !== undefined) output.domainVocabularyDryRun = vocabularyDryRun;
+      if (discoveryAudit !== undefined) output.domainVocabularyDiscovery = discoveryAudit;
     }
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
@@ -513,14 +529,21 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
 function referencedEvidenceIds(output:unknown,allowed:string[]):string[]{const allowedSet=new Set(allowed),found=new Set<string>();const visit=(value:unknown)=>{if(typeof value==="string"&&allowedSet.has(value))found.add(value);else if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==="object")Object.values(value).forEach(visit);};visit(output);return [...found];}
 
 /**
- * PHASE 4C — build COMPACT discovery sourceItems from the structured Problems
- * output the pipeline already produced. Never resends the full corpus: only the
- * candidate/problem claim (name + summary) and a short category context are
- * included. The complete Analysis Set stays server-side only.
+ * PHASE 4C — build a COMPACT discovery sourceItems from the structured Problems
+ * output the pipeline already produced. Never resends the full corpus.
+ *
+ * For each candidate it includes the real evidence ids it references (that ARE
+ * in the exact Analysis Set snapshot) plus a short server-side snippet for each.
+ * This exposes resolvable evidence ids to the provider so it can propose
+ * `evidenceIds` that the validator accepts, and grounded aliases. The enrichment
+ * is generic (works for any niche) and bounded (max 5 evidence + short snippets
+ * per candidate), keeping the payload compact.
  */
 function buildDiscoverySourceItems(
   output: Record<string, unknown>,
+  analysisSet: AnalysisSetSnapshot,
 ): DomainVocabularyDiscoverySourceItem[] {
+  const rowsById = new Map(analysisSet.rows.map((row) => [row.id, row]));
   const items = Array.isArray(output.items) ? output.items : [];
   const sourceItems: DomainVocabularyDiscoverySourceItem[] = [];
   for (const raw of items) {
@@ -534,7 +557,41 @@ function buildDiscoverySourceItems(
       typeof item.id === "string" && item.id ? item.id : `candidate-${sourceItems.length + 1}`;
     const category =
       typeof item.category === "string" && item.category.trim() ? item.category.trim() : undefined;
-    sourceItems.push(category ? { id, text, context: category } : { id, text });
+    const evidenceIds = Array.isArray(item.evidenceIds)
+      ? [...new Set(item.evidenceIds.filter((eid): eid is string => typeof eid === "string" && rowsById.has(eid)))].slice(0, 5)
+      : [];
+    const snippets = evidenceIds
+      .map((eid) => rowsById.get(eid)!.quoteText.trim().slice(0, 120))
+      .filter(Boolean);
+    sourceItems.push({
+      id,
+      text,
+      ...(category ? { context: category } : {}),
+      ...(evidenceIds.length > 0 ? { evidenceIds, snippets } : {}),
+    });
   }
   return sourceItems;
+}
+
+/**
+ * PHASE 4C — build a safe, credential-free discovery audit for the current run
+ * from a {@link DomainVocabularyDiscoveryResult}. Only fields that already exist
+ * are included; never API keys, raw prompts or full corpus.
+ */
+function toDiscoveryAudit(
+  result: DomainVocabularyDiscoveryResult,
+  sourceItemCount: number,
+): Record<string, unknown> {
+  return {
+    status: result.status,
+    sourceItemCount,
+    ...(result.vocabularyVersionId ? { vocabularyVersionId: result.vocabularyVersionId } : {}),
+    ...(result.validationStatus ? { validationStatus: result.validationStatus } : {}),
+    issues: result.issues,
+    statistics: result.statistics,
+    provider: {
+      provider: result.providerMetadata?.provider ?? null,
+      model: result.providerMetadata?.model ?? null,
+    },
+  };
 }

@@ -82,6 +82,14 @@ export interface DomainVocabularyDiscoverySourceItem {
   text: string;
   /** Optional candidate/problem context to guide discovery without resending full corpus. */
   context?: string;
+  /**
+   * Real evidence ids this candidate references that ARE present in the
+   * Analysis Set snapshot. Exposing them lets a provider propose resolvable
+   * `evidenceIds` instead of inventing ids that the validator rejects.
+   */
+  evidenceIds?: string[];
+  /** Short server-side snippets for those evidence ids to guide alias grounding. */
+  snippets?: string[];
 }
 
 export interface DomainVocabularyDiscoveryInput {

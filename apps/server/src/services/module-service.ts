@@ -35,6 +35,7 @@ import {
   providerErrorDiagnostic,
 } from "./domain-vocabulary-discovery-service.js";
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
+import { validateResearchOutput } from "./research-output-validator.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -359,6 +360,17 @@ export class ModuleService {
       output.commentCount = counts.commentCount;
       output.isDemo = counts.allDemo === 1;
     }
+    // STRICT RESEARCH CONTRACT — a new Research generation is deterministically
+    // validated against the complete module contract and grounded against the
+    // EXACT source snapshot (evidenceIds) used for this run. Incomplete or
+    // evidence-invalid output must never be APPROVED: it is persisted as a
+    // DRAFT with a compact validation audit, never silently approved.
+    let researchStatus: "approved" | "draft" | undefined;
+    if (key === "research") {
+      const validation = validateResearchOutput(output, evidenceIds);
+      output = validation.output;
+      researchStatus = validation.audit.ok ? "approved" : "draft";
+    }
     const inputSnapshot = {
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
@@ -386,6 +398,7 @@ export class ModuleService {
       inputSnapshot,
       outputData: output,
       parentVersionIds: parentIds,
+      ...(researchStatus ? { status: researchStatus } : {}),
     });
     createdVersionId=version.id;
 

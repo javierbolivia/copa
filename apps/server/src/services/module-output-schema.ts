@@ -5,6 +5,9 @@ type JsonSchema = Readonly<Record<string, unknown>>;
 const string = { type: "string" } as const;
 const stringArray = { type: "array", items: string } as const;
 const evidenceIds = stringArray;
+const nonEmptyStringArray = { type: "array", items: string, minItems: 1 } as const;
+const researchItem = { type: "object", properties: { text: string, provenance: string, evidenceIds }, required: ["text", "provenance", "evidenceIds"], additionalProperties: true } as const;
+const nonEmptyResearchItemArray = { type: "array", items: researchItem, minItems: 1 } as const;
 
 function object(properties: Record<string, JsonSchema>, required = Object.keys(properties)): JsonSchema {
   return { type: "object", properties, required, additionalProperties: true };
@@ -13,7 +16,7 @@ function object(properties: Record<string, JsonSchema>, required = Object.keys(p
 /** Stable, module-specific contracts. They validate the fields consumed by the app while
  * allowing additive prompt evolution. OpenAI still receives these as structured outputs. */
 export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
-  research: object({ schemaVersion: { type: "integer" }, summary: string, insights: { type: "array", items: object({ text: string, provenance: string, evidenceIds }) } }),
+  research: object({ schemaVersion: { type: "integer" }, summary: string, subniches: nonEmptyStringArray, hypotheses: nonEmptyResearchItemArray, questions: nonEmptyStringArray, searchSuggestions: nonEmptyStringArray, insights: nonEmptyResearchItemArray }),
   sources: object({ schemaVersion: { type: "integer" }, summary: string, sourceCount: { type: "integer" }, commentCount: { type: "integer" }, isDemo: { type: "boolean" } }),
   problems: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, category: string, summary: string, evidenceIds }) } }),
   opportunities: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, problemId: string, evidenceIds }) }, selectedId: string }),

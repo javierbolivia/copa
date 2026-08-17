@@ -32,7 +32,7 @@ describe("pipeline real de modulos con OpenAI", () => {
     const directory = mkdtempSync(join(tmpdir(), "our-platform-openai-"));
     directories.push(directory);
     const databasePath = join(directory, "test.db");
-    const fetchMock = vi.fn(async () => openAIResponse({ schemaVersion: 1, summary: "Resultado real", insights: [] }));
+    const fetchMock = vi.fn(async () => openAIResponse({ schemaVersion: 1, summary: "Resultado real", subniches: ["S"], hypotheses: [{ text: "H", provenance: "AI_INFERENCE", evidenceIds: [] }], questions: ["Q"], searchSuggestions: ["B"], insights: [{ text: "I", provenance: "AI_INFERENCE", evidenceIds: [] }] }));
     app = await createApp({
       databasePath,
       serveFrontend: false,
@@ -91,7 +91,7 @@ describe("pipeline real de modulos con OpenAI", () => {
   it("repara una vez el formato invalido antes de persistir", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(openAIResponse("no-json"))
-      .mockResolvedValueOnce(openAIResponse({ schemaVersion: 1, summary: "Reparado", insights: [] }));
+      .mockResolvedValueOnce(openAIResponse({ schemaVersion: 1, summary: "Reparado", subniches: ["S"], hypotheses: [{ text: "H", provenance: "AI_INFERENCE", evidenceIds: [] }], questions: ["Q"], searchSuggestions: ["B"], insights: [{ text: "I", provenance: "AI_INFERENCE", evidenceIds: [] }] }));
     app = await createApp({ databasePath: ":memory:", serveFrontend: false, openAI: { apiKey: "test-key", fetch: fetchMock as typeof fetch } });
     const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Repair", niche: "Prueba" } })).json<Project>();
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "openai" } });

@@ -31,6 +31,7 @@ import { GeminiProvider, type GeminiProviderOptions } from "./integrations/gemin
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
 import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
+import { SemanticVocabularyRepository } from "./repositories/semantic-vocabulary-repository.js";
 import { KnowledgeIngestionService } from "./services/knowledge-ingestion-service.js";
 import { registerKnowledgeRoutes } from "./routes/knowledge.js";
 import { ProductDocumentRepository } from "./repositories/product-document-repository.js";
@@ -77,6 +78,7 @@ export async function createApp(
   });
   const gemini=new GeminiProvider({...(process.env.GEMINI_API_KEY?{apiKey:process.env.GEMINI_API_KEY}:{}),...options.gemini});
   const knowledge = new KnowledgeRepository(database);
+  const vocabulary = new SemanticVocabularyRepository(database);
   const modules = new ModuleService(
     database,
     artifacts,
@@ -84,6 +86,7 @@ export async function createApp(
     exporter,
     settings,
     knowledge,
+    vocabulary,
     {
       openAI,
       gemini,

@@ -13,8 +13,21 @@ import type { FileExporterService } from "./file-exporter-service.js";
 import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
 import type { KnowledgeRepository } from "../repositories/knowledge-repository.js";
+import { SemanticVocabularyRepository } from "../repositories/semantic-vocabulary-repository.js";
 import { getAgentKnowledgePolicy } from "./knowledge/index.js";
-import { createProblemBatches, qualityProblems } from "./problem-quality-engine.js";
+import {
+  type AnalysisSetSnapshot,
+  type ProblemPipelineMetrics,
+  createProblemBatches,
+  deriveResearchFocus,
+  qualityProblems,
+  analysisSetSnapshot,
+} from "./problem-quality-engine.js";
+import {
+  type SemanticVocabularySnapshot,
+  analysisSnapshotHashFromRows,
+  researchFocusHash,
+} from "./semantic-vocabulary.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -37,6 +50,7 @@ export class ModuleService {
     private readonly exporter: FileExporterService,
     private readonly settings: ProjectSettingsRepository,
     private readonly knowledge: KnowledgeRepository,
+    private readonly vocabulary: SemanticVocabularyRepository,
     private readonly options: ModuleServiceOptions,
   ) {}
 
@@ -197,7 +211,30 @@ export class ModuleService {
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
-    if (key === "problems") output = qualityProblems(this.db, projectId, output,problemMetrics?{metrics:problemMetrics}:undefined);
+    // PHASE 3 — load the ACTIVE semantic vocabulary ONCE per run, using the same
+    // project + research focus + exact Analysis Set that the Problem Quality Engine
+    // will consume below. If no ACTIVE vocabulary exists, vocabularySnapshot stays
+    // null and the engine runs with its legacy, exact behavior.
+    let vocabularySnapshot: SemanticVocabularySnapshot | null = null;
+    let vocabularyVersionId: string | null = null;
+    if (key === "problems") {
+      const researchFocusValue = this.settings.researchFocus(projectId)?.value ?? null;
+      const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusValue);
+      const focusHash = researchFocusHash(effectiveFocus);
+      const analysisSet = analysisSetSnapshot(this.db, projectId);
+      const snapshotHash = analysisSnapshotHashFromRows(analysisSet.rows);
+      const loaded = this.vocabulary.loadActiveVocabularySnapshot(projectId, focusHash, snapshotHash);
+      vocabularySnapshot = loaded ?? null;
+      vocabularyVersionId = vocabularySnapshot?.vocabularyVersionId ?? null;
+      const qualityOptions: {
+        metrics?: Partial<ProblemPipelineMetrics>;
+        vocabularySnapshot?: SemanticVocabularySnapshot | null;
+        analysisSetSnapshot?: AnalysisSetSnapshot | null;
+      } = { analysisSetSnapshot: analysisSet };
+      if (problemMetrics) qualityOptions.metrics = problemMetrics;
+      if (vocabularySnapshot) qualityOptions.vocabularySnapshot = vocabularySnapshot;
+      output = qualityProblems(this.db, projectId, output, qualityOptions);
+    }
     if (key === "sources") {
       const counts = this.db.connection.prepare(`
         SELECT
@@ -218,6 +255,7 @@ export class ModuleService {
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
+      ...(vocabularyVersionId ? { vocabularyVersionId, vocabularyContentHash: vocabularySnapshot?.contentHash ?? null } : { vocabularyVersionId: null }),
       knowledgeUsed: knowledgeContext,
     };
     const inputTokens = usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
@@ -244,13 +282,13 @@ export class ModuleService {
 
     this.db.connection.prepare(`
       INSERT INTO generations (
-        id, project_id, agent_key, provider, model, status, input_snapshot,
+        id, project_id, agent_key, provider, model, status, vocabulary_version_id, input_snapshot,
         output_data, prompt_version, input_tokens, output_tokens,
         estimated_cost, duration_ms, created_at, completed_at
-      ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?,
+      ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      generationId, projectId, agentKey, selectedProvider, model, JSON.stringify(inputSnapshot), JSON.stringify(output),
+      generationId, projectId, agentKey, selectedProvider, model, vocabularyVersionId, JSON.stringify(inputSnapshot), JSON.stringify(output),
       promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, now, now,
     );
     this.db.connection.prepare(`

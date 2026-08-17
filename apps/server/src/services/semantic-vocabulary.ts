@@ -60,6 +60,24 @@ export interface AnalysisSnapshotRow {
  * SQLite returns them in. The same Analysis Set always yields the same hash,
  * and any change to the relevant set of evidence/comments changes the hash.
  */
+/**
+ * Deterministic content hash computed from an ALREADY-MATERIALIZED Analysis Set.
+ *
+ * This is the canonical building block used by both the standalone
+ * `analysisSnapshotHash` (which materializes the rows itself) and by the
+ * Problems runtime, which materializes the Analysis Set ONCE and then reuses
+ * the exact same rows for the hash, the vocabulary lookup and the Quality
+ * Engine. Rows are sorted canonically so the same set yields the same hash
+ * regardless of physical order.
+ */
+export function analysisSnapshotHashFromRows(rows: readonly AnalysisSnapshotRow[]): string {
+  const canonical = [...rows]
+    .map((row) => `${row.id}|${row.commentId}|${row.sourceId}|${row.quoteText.trim()}`)
+    .sort()
+    .join("\n");
+  return sha256(canonical);
+}
+
 export function analysisSnapshotHash(database: AppDatabase, projectId: string): string {
   const rows = database.connection
     .prepare(
@@ -71,10 +89,7 @@ export function analysisSnapshotHash(database: AppDatabase, projectId: string): 
        ORDER BY e.id ASC`,
     )
     .all(projectId) as unknown as AnalysisSnapshotRow[];
-  const canonical = rows
-    .map((row) => `${row.id}|${row.commentId}|${row.sourceId}|${row.quoteText.trim()}`)
-    .join("\n");
-  return sha256(canonical);
+  return analysisSnapshotHashFromRows(rows);
 }
 
 export interface AliasInput {

@@ -263,4 +263,56 @@ describe("Semantic evidence quality normalization",()=>{
     expect(output.items[0]!.evidenceIds).not.toContain(fake2);
     db.close();
   });
+
+});
+
+describe("Pre-merge miscellaneous audit evidence resolution",()=>{
+  it("TEST A: miscellaneous candidate with 3 real evidenceIds reports all resolved",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Misc",niche:"fotografía"});
+    sources.createManual(project.id,{sourceType:"manual",title:"M",text:"Uno.\n\nDos.\n\nTres."});
+    const ids=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{id:string}>;
+    const input={schemaVersion:1,items:[{id:"misc-1",name:"Varios problemas adicionales miscellaneous",summary:"Otros problemas varios etc",category:"pain",researchRelevanceScore:50,evidenceIds:[ids[0]!.id,ids[1]!.id,ids[2]!.id]}]};
+    const result=qualityProblems(db,project.id,input) as {analysisAudit:{preMergeRejectedCandidates:ClusterAuditRecord[]}};
+    const rec=result.analysisAudit.preMergeRejectedCandidates[0]!;
+    expect(rec.finalDecision).toBe("REJECTED_MISCELLANEOUS");
+    expect(rec.candidateEvidenceCount).toBe(3);
+    expect(rec.resolvedEvidenceCount).toBe(3);
+    expect(rec.unresolvedEvidenceCount).toBe(0);
+    expect(rec.unresolvedEvidenceIds).toEqual([]);
+    db.close();
+  });
+
+  it("TEST B: miscellaneous candidate with 2 real and 1 fake evidenceIds reports only the fake as unresolved",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Misc",niche:"fotografía"});
+    sources.createManual(project.id,{sourceType:"manual",title:"M",text:"Uno.\n\nDos."});
+    const ids=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{id:string}>;
+    const fake="00000000-0000-0000-0000-0000000000b1";
+    const input={schemaVersion:1,items:[{id:"misc-1",name:"Varios problemas adicionales miscellaneous",summary:"Otros problemas varios etc",category:"pain",researchRelevanceScore:50,evidenceIds:[ids[0]!.id,ids[1]!.id,fake]}]};
+    const result=qualityProblems(db,project.id,input) as {analysisAudit:{preMergeRejectedCandidates:ClusterAuditRecord[]};items:unknown[]};
+    const rec=result.analysisAudit.preMergeRejectedCandidates[0]!;
+    expect(rec.finalDecision).toBe("REJECTED_MISCELLANEOUS");
+    expect(rec.candidateEvidenceCount).toBe(3);
+    expect(rec.resolvedEvidenceCount).toBe(2);
+    expect(rec.unresolvedEvidenceCount).toBe(1);
+    expect(rec.unresolvedEvidenceIds).toEqual([fake]);
+    db.close();
+  });
+
+  it("TEST C: pre-merge fix leaves post-merge precision/cohesion/classification intact",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Rendimiento",niche:"fotografía"});
+    sources.createManual(project.id,{sourceType:"manual",title:"HW",text:"El procesador es muy lento.\n\nProcesamiento muy lento del hardware."});
+    const ids=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{id:string}>;
+    const input={schemaVersion:1,items:[
+      {id:"perf",name:"Rendimiento deficiente del procesador",summary:"El procesador es muy lento para procesar imagenes",category:"pain",researchRelevanceScore:80,evidenceIds:[ids[0]!.id,ids[1]!.id]},
+      {id:"misc-1",name:"Varios problemas adicionales miscellaneous",summary:"Otros problemas varios etc",category:"pain",researchRelevanceScore:50,evidenceIds:[ids[0]!.id]}
+    ]};
+    const result=qualityProblems(db,project.id,input) as {items:unknown[];analysisAudit:{postMergeClusters:ClusterAuditRecord[];preMergeRejectedCandidates:ClusterAuditRecord[]}};
+    const validated=result.analysisAudit.postMergeClusters.find(c=>c.clusterId==="perf")!;
+    expect(validated.finalDecision).toBe("VALIDATED");
+    expect(validated.evidencePrecisionScore).not.toBeNull();
+    expect(validated.cohesionScore).not.toBeNull();
+    expect(result.analysisAudit.preMergeRejectedCandidates[0]!.finalDecision).toBe("REJECTED_MISCELLANEOUS");
+    expect(result.items).toHaveLength(1);
+    db.close();
+  });
 });

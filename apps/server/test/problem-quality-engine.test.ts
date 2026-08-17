@@ -218,6 +218,17 @@ describe("Semantic evidence quality normalization",()=>{
     expect(classifyEvidenceSupport(claim,"La GPU Nvidia tiene codecs de video.",focus)).not.toBe("DIRECT");
   });
 
+  it("promotes QUESTION/PROBLEM_REPORT sharing a single semantic concept to INFERRED, not NOT_SUPPORTED",()=>{
+    const focus="reducción y eliminación de ruido en fotografías";
+    expect(analyzeEvidenceSupport(claim,"¿El tiempo de proceso es muy largo?","reducción y eliminación de ruido en fotografías").supportType).toBe("INFERRED");
+    expect(analyzeEvidenceSupport(claim,"No puedo trabajar con este rendimiento tan lento.","reducción y eliminación de ruido en fotografías").supportType).toBe("INFERRED");
+    expect(analyzeEvidenceSupport(claim,"La GPU Nvidia tiene codecs de video.","reducción y eliminación de ruido en fotografías").supportType).toBe("NOT_SUPPORTED");
+  });
+
+  it("does NOT promote NEUTRAL_CONTEXT sharing a single semantic concept",()=>{
+    expect(analyzeEvidenceSupport(claim,"Me gusta el formato DNG","reducción y eliminación de ruido en fotografías").supportType).toBe("NOT_SUPPORTED");
+  });
+
   it("uses semantic concepts in cohesion and excludes unsupported evidence from its denominator",()=>{
     const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Rendimiento",niche:focus});
     sources.createManual(project.id,{sourceType:"manual",title:"Rendimiento",text:[evidenceA,evidenceB,evidenceC,evidenceD,evidenceE,evidenceF,evidenceG].join("\n\n")});
@@ -232,6 +243,24 @@ describe("Semantic evidence quality normalization",()=>{
     expect(byEvidence.get(ids[1]!.id)!.semanticConceptsShared).toEqual(expect.arrayContaining(["PERFORMANCE_TIME","HARDWARE_COMPUTE"]));
     expect(audit.claim).toContain(claim);
     expect(audit.summary).toContain("reducción de ruido");
+    db.close();
+  });
+
+  it("precision uses resolved evidence as denominator, not candidate count; audit tracks unresolved",()=>{
+    const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db),project=projects.create({name:"Rendimiento",niche:"fotografía"});
+    sources.createManual(project.id,{sourceType:"manual",title:"Rendimiento",text:["El procesador es muy lento.","Procesamiento muy lento del hardware.","Rendimiento deficiente del equipo.","El hardware es insuficiente y tarda mucho.","Procesador lento para procesar imagenes."].join("\n\n")});
+    const ids=db.connection.prepare("SELECT id FROM evidence_snippets WHERE project_id=? ORDER BY created_at").all(project.id) as Array<{id:string}>;
+    const fake1="00000000-0000-0000-0000-0000000000a1",fake2="00000000-0000-0000-0000-0000000000a2";
+    const output=qualityProblems(db,project.id,{schemaVersion:1,items:[{id:"perf",name:"Rendimiento deficiente del procesador",summary:"El procesador es muy lento para procesar imagenes",category:"pain",researchRelevanceScore:80,evidenceIds:[ids[0]!.id,ids[1]!.id,ids[2]!.id,ids[3]!.id,ids[4]!.id,fake1,fake2]}]}) as {analysisAudit:{postMergeClusters:ClusterAuditRecord[]};items:Array<{evidenceIds:string[]}>};
+    const audit=output.analysisAudit.postMergeClusters[0]!;
+    expect(audit.candidateEvidenceCount).toBe(7);
+    expect(audit.resolvedEvidenceCount).toBe(5);
+    expect(audit.unresolvedEvidenceCount).toBe(2);
+    expect(audit.unresolvedEvidenceIds).toEqual([fake1,fake2]);
+    expect(audit.evidencePrecisionScore).toBe(100);
+    expect(output.items[0]!.evidenceIds).toHaveLength(5);
+    expect(output.items[0]!.evidenceIds).not.toContain(fake1);
+    expect(output.items[0]!.evidenceIds).not.toContain(fake2);
     db.close();
   });
 });

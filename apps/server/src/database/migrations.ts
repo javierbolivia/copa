@@ -864,6 +864,113 @@ export const migrations: readonly Migration[] = [
         CHECK (research_focus_source IS NULL OR research_focus_source IN ('user','youtube_query'));
     `,
   },
+  {
+    version: 10,
+    name: "010_domain_semantic_vocabulary",
+    sql: `
+      CREATE TABLE semantic_vocabulary_versions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        research_focus TEXT,
+        research_focus_hash TEXT NOT NULL,
+        analysis_snapshot_hash TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('candidate','active','rejected')),
+        source_generation_id TEXT REFERENCES generations(id) ON DELETE SET NULL,
+        provider TEXT,
+        model TEXT,
+        prompt_version TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id, research_focus_hash, analysis_snapshot_hash, version)
+      ) STRICT;
+
+      CREATE INDEX semantic_vocabulary_project_lookup
+        ON semantic_vocabulary_versions(project_id, research_focus_hash, analysis_snapshot_hash, status);
+
+      CREATE TABLE semantic_concepts (
+        id TEXT PRIMARY KEY,
+        vocabulary_version_id TEXT NOT NULL REFERENCES semantic_vocabulary_versions(id) ON DELETE CASCADE,
+        concept_key TEXT NOT NULL,
+        label TEXT NOT NULL CHECK (length(trim(label)) BETWEEN 1 AND 200),
+        definition TEXT CHECK (definition IS NULL OR length(definition) <= 2000),
+        cohesion_weight REAL NOT NULL DEFAULT 1.0 CHECK (cohesion_weight >= 0),
+        created_at TEXT NOT NULL,
+        UNIQUE(vocabulary_version_id, concept_key)
+      ) STRICT;
+
+      CREATE INDEX semantic_concepts_version_idx ON semantic_concepts(vocabulary_version_id);
+
+      CREATE TABLE semantic_concept_aliases (
+        id TEXT PRIMARY KEY,
+        concept_id TEXT NOT NULL REFERENCES semantic_concepts(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL CHECK (length(trim(alias)) BETWEEN 1 AND 200),
+        normalized_alias TEXT NOT NULL CHECK (length(trim(normalized_alias)) BETWEEN 1 AND 200),
+        language TEXT,
+        is_exclusion INTEGER NOT NULL DEFAULT 0 CHECK (is_exclusion IN (0,1)),
+        created_at TEXT NOT NULL,
+        UNIQUE(concept_id, normalized_alias)
+      ) STRICT;
+
+      CREATE INDEX semantic_aliases_concept_idx ON semantic_concept_aliases(concept_id);
+      CREATE INDEX semantic_aliases_normalized_idx ON semantic_concept_aliases(normalized_alias);
+
+      ALTER TABLE generations ADD COLUMN vocabulary_version_id TEXT
+        REFERENCES semantic_vocabulary_versions(id) ON DELETE SET NULL;
+
+      CREATE TRIGGER semantic_vocabulary_version_immutable_update
+      BEFORE UPDATE ON semantic_vocabulary_versions
+      WHEN OLD.status='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_vocabulary_version_immutable_delete
+      BEFORE DELETE ON semantic_vocabulary_versions
+      WHEN OLD.status='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_concept_immutable_insert
+      BEFORE INSERT ON semantic_concepts
+      WHEN (SELECT status FROM semantic_vocabulary_versions v WHERE v.id=NEW.vocabulary_version_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_concept_immutable_update
+      BEFORE UPDATE ON semantic_concepts
+      WHEN (SELECT status FROM semantic_vocabulary_versions v WHERE v.id=NEW.vocabulary_version_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_concept_immutable_delete
+      BEFORE DELETE ON semantic_concepts
+      WHEN (SELECT status FROM semantic_vocabulary_versions v WHERE v.id=OLD.vocabulary_version_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_alias_immutable_insert
+      BEFORE INSERT ON semantic_concept_aliases
+      WHEN (SELECT status FROM semantic_vocabulary_versions v JOIN semantic_concepts c ON c.vocabulary_version_id=v.id WHERE c.id=NEW.concept_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_alias_immutable_update
+      BEFORE UPDATE ON semantic_concept_aliases
+      WHEN (SELECT status FROM semantic_vocabulary_versions v JOIN semantic_concepts c ON c.vocabulary_version_id=v.id WHERE c.id=NEW.concept_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER semantic_alias_immutable_delete
+      BEFORE DELETE ON semantic_concept_aliases
+      WHEN (SELECT status FROM semantic_vocabulary_versions v JOIN semantic_concepts c ON c.vocabulary_version_id=v.id WHERE c.id=OLD.concept_id)='active'
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+
+      CREATE TRIGGER generations_vocabulary_guard_insert
+      BEFORE INSERT ON generations
+      WHEN NEW.vocabulary_version_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM semantic_vocabulary_versions v WHERE v.id=NEW.vocabulary_version_id AND v.project_id=NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'generation_vocabulary_project_mismatch'); END;
+
+      CREATE TRIGGER generations_vocabulary_guard_update
+      BEFORE UPDATE OF project_id,vocabulary_version_id ON generations
+      WHEN NEW.vocabulary_version_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM semantic_vocabulary_versions v WHERE v.id=NEW.vocabulary_version_id AND v.project_id=NEW.project_id
+      ) BEGIN SELECT RAISE(ABORT,'generation_vocabulary_project_mismatch'); END;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

@@ -77,7 +77,7 @@ describe("recorrido E2E del proyecto Demo", () => {
   it("materializa Sources automáticamente al continuar desde una fuente manual", async () => {
     app = await createApp({ databasePath: ":memory:", serveFrontend: false });
     const project = (await app.inject({
-      method: "POST", url: "/api/projects", payload: { name: "Manual", niche: "Prueba" },
+      method: "POST", url: "/api/projects", payload: { name: "Manual", niche: "problema y frustración de los usuarios" },
     })).json<Project>();
     expect((await app.inject({
       method: "POST", url: `/api/projects/${project.id}/sources`,

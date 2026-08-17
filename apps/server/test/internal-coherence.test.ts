@@ -92,7 +92,7 @@ describe("Internal topical coherence gate", () => {
     const { db, project, ids } = makeDb([
       "la aplicación se bloquea",
       "queda congelado",
-    ]);
+    ], "la aplicación se bloquea");
     const input = {
       schemaVersion: 1,
       items: [{ id: "fz", name: "La aplicación se bloquea", summary: "La aplicación queda congelado", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id, ids[1]!.id] }],
@@ -186,7 +186,7 @@ describe("Internal topical coherence gate", () => {
       concepts: [{ conceptKey: "domain_freeze", label: "domain_freeze", cohesionWeight: 1, aliases: ["se bloquea", "queda congelado"], exclusions: [] }],
     };
     const v2: SemanticVocabularySnapshot = { vocabularyVersionId: "v2", contentHash: "hash-v2", concepts: [] };
-    const { db, project, ids } = makeDb(["la aplicación se bloquea", "queda congelado"]);
+    const { db, project, ids } = makeDb(["la aplicación se bloquea", "queda congelado"], "la aplicación se bloquea");
     const input = {
       schemaVersion: 1,
       items: [{ id: "h", name: "La aplicación se bloquea", summary: "La aplicación queda congelado", category: "pain", researchRelevanceScore: 90, evidenceIds: [ids[0]!.id, ids[1]!.id] }],
@@ -250,7 +250,7 @@ describe("Internal topical coherence gate", () => {
         niche: "ventas",
         texts: ["los clientes piden reembolsos", "quejas por precios altos"],
         name: "Devoluciones y precios altos",
-        summary: "clientes piden reembolsos y quejas por precios altos",
+        summary: "clientes piden reembolsos y quejas por precios altos en las ventas",
       },
     ];
     for (const c of cases) {

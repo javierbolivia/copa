@@ -518,7 +518,39 @@ export class ProductExportService {
       throw new Error("Ruta fuera del directorio de datos.");
     return path;
   }
+  private ebookPresentation(document: ProductDocument) {
+    const outline = [...document.version.outline].sort(
+      (a, b) => a.order - b.order || a.id.localeCompare(b.id),
+    );
+    const blocksByChapter = new Map<string, ProductBlock[]>();
+    for (const item of outline) blocksByChapter.set(item.id, []);
+    const unassignedBlocks: ProductBlock[] = [];
+    for (const block of [...document.version.blocks].sort(
+      (a, b) => a.order - b.order || a.id.localeCompare(b.id),
+    )) {
+      const chapterId =
+        typeof block.metadata.chapterId === "string"
+          ? block.metadata.chapterId
+          : undefined;
+      const chapterBlocks = chapterId ? blocksByChapter.get(chapterId) : undefined;
+      if (chapterBlocks) chapterBlocks.push(block);
+      else unassignedBlocks.push(block);
+    }
+    return {
+      title: document.title,
+      theme: document.version.theme,
+      chapters: outline.map((item, index) => ({
+        anchor: `chapter-${item.id.replace(/[^a-z0-9]/gi, "").toLowerCase()}`,
+        blocks: blocksByChapter.get(item.id) ?? [],
+        number: index + 1,
+        title: item.title,
+      })),
+      unassignedBlocks,
+    };
+  }
   private renderHtml(projectId: string, document: ProductDocument): string {
+    if (document.documentType === "ebook")
+      return this.renderEbookHtml(projectId, document);
     const theme = document.version.theme,
       meta = document.version.metadata,
       profile = resolveExportProfile(projectExportProfileInput(document)),
@@ -533,6 +565,30 @@ export class ProductExportService {
       ? `<p class="no-print" data-export-profile="${profile.kind}" style="margin:0 0 24px;padding:12px;border-left:5px solid ${profile.accentColor}">${escapeHtml(profile.label)}</p>`
       : "";
     return `<!doctype html><html lang="${escapeHtml(document.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{--accent:${theme.accentColor};--scale:${theme.typographyScale};--space:${theme.spacing}}*{box-sizing:border-box}body{margin:0;color:#17221e;background:#eef1ed;font:calc(16px * var(--scale))/1.65 system-ui,sans-serif}.page{max-width:820px;margin:auto;background:#fff;min-height:100vh;padding:${theme.margins}px}.cover{display:flex;min-height:85vh;flex-direction:column;justify-content:center;padding:8%;color:#fff;background:linear-gradient(145deg,#14251c,var(--accent));page-break-after:always}.cover h1{font-size:3.4em;line-height:1.05}.cover .type{letter-spacing:.18em;text-transform:uppercase}.cover .author{margin-top:auto}.block{margin:calc(18px * var(--space)) 0}.callout,.exercise,.keyTakeaway{padding:16px;border-left:5px solid var(--accent);background:#f3f7ef}.checklist{list-style:none;padding:0}.checklist input{margin-right:9px}.page-break{break-after:page}.diagram,.image{max-width:100%;height:auto}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd4ce}blockquote{padding-left:16px;border-left:4px solid var(--accent)}@media(max-width:600px){.page{padding:20px}.cover h1{font-size:2.3em}}@media print{body{background:#fff}.page{max-width:none}.no-print{display:none}@page{size:${theme.pageSize};margin:${theme.margins}mm}}</style></head><body><section class="cover"><span class="type">${escapeHtml(profile?.label ?? document.documentType)}</span><h1>${title}</h1><p>${subtitle}</p><strong class="author">${author}</strong></section><main class="page">${profileBanner}${blocks}</main></body></html>`;
+  }
+  private renderEbookHtml(projectId: string, document: ProductDocument): string {
+    const ebook = this.ebookPresentation(document);
+    const profile = resolveExportProfile(projectExportProfileInput(document));
+    const meta = document.version.metadata;
+    const title = escapeHtml(ebook.title);
+    const subtitle = escapeHtml(meta.coverSubtitle ?? document.subtitle ?? "");
+    const author = escapeHtml(meta.author ?? "");
+    const toc = ebook.chapters
+      .map(
+        (chapter) =>
+          `<li><a href="#${chapter.anchor}">${chapter.number}. ${escapeHtml(chapter.title)}</a></li>`,
+      )
+      .join("");
+    const chapters = ebook.chapters
+      .map(
+        (chapter, index) =>
+          `<section class="ebook-chapter" id="${chapter.anchor}"><h2>${chapter.number}. ${escapeHtml(chapter.title)}</h2>${chapter.blocks.map((block) => this.blockHtml(projectId, block)).join("\n")}</section>${index < ebook.chapters.length - 1 ? '<div class="page-break ebook-page-break" aria-hidden="true"></div>' : ""}`,
+      )
+      .join("\n");
+    const unassigned = ebook.unassignedBlocks.length
+      ? `<section class="ebook-unassigned"><h2>Contenido adicional</h2>${ebook.unassignedBlocks.map((block) => this.blockHtml(projectId, block)).join("\n")}</section>`
+      : "";
+    return `<!doctype html><html lang="${escapeHtml(document.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{--accent:${ebook.theme.accentColor};--scale:${ebook.theme.typographyScale};--space:${ebook.theme.spacing}}*{box-sizing:border-box}body{margin:0;color:#17221e;background:#eef1ed;font:calc(16px * var(--scale))/1.65 system-ui,sans-serif}.page{max-width:820px;margin:auto;background:#fff;min-height:100vh;padding:${ebook.theme.margins}px}.cover{display:flex;min-height:85vh;flex-direction:column;justify-content:center;padding:8%;color:#fff;background:linear-gradient(145deg,#14251c,var(--accent));page-break-after:always}.cover h1{font-size:3.4em;line-height:1.05}.cover .type{letter-spacing:.18em;text-transform:uppercase}.cover .author{margin-top:auto}.cover .theme{opacity:.85}.block{margin:calc(18px * var(--space)) 0}.callout,.exercise,.keyTakeaway{padding:16px;border-left:5px solid var(--accent);background:#f3f7ef}.checklist{list-style:none;padding:0}.checklist input{margin-right:9px}.page-break{break-after:page}.diagram,.image{max-width:100%;height:auto}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd4ce}blockquote{padding-left:16px;border-left:4px solid var(--accent)}.ebook-toc{margin-bottom:36px}.ebook-toc li{margin:.45em 0}.ebook-toc a{color:inherit}.ebook-chapter h2,.ebook-unassigned h2{border-bottom:2px solid var(--accent);padding-bottom:.35em}@media(max-width:600px){.page{padding:20px}.cover h1{font-size:2.3em}}@media print{body{background:#fff}.page{max-width:none}@page{size:${ebook.theme.pageSize};margin:${ebook.theme.margins}mm}}</style></head><body><section class="cover ebook-cover" data-ebook-theme="${escapeHtml(ebook.theme.template)}"><span class="type" data-export-profile="ebook">${escapeHtml(profile?.label ?? "Ebook")}</span><h1>${title}</h1><p>${subtitle}</p><p class="theme">Tema: ${escapeHtml(ebook.theme.template)}</p><strong class="author">${author}</strong></section><main class="page ebook"><nav class="ebook-toc" aria-label="Tabla de contenidos"><h2>Contenido</h2><ol>${toc}</ol></nav>${chapters}${unassigned}</main></body></html>`;
   }
   private blockHtml(projectId: string, block: ProductBlock): string {
     const text = escapeHtml(flatten(block.content)),
@@ -577,6 +633,8 @@ export class ProductExportService {
     projectId: string,
     document: ProductDocument,
   ): Promise<Buffer> {
+    if (document.documentType === "ebook")
+      return this.renderEbookDocx(projectId, document);
     const profile = resolveExportProfile(projectExportProfileInput(document));
     const children: Array<Paragraph | Table> = [
       new Paragraph({
@@ -610,6 +668,93 @@ export class ProductExportService {
       (a, b) => a.order - b.order,
     )) {
       children.push(...(await this.docxBlock(projectId, block)));
+    }
+    const doc = new Document({
+      sections: [
+        {
+          headers: {
+            default: new Header({ children: [new Paragraph(document.title)] }),
+          },
+          footers: {
+            default: new Footer({
+              children: [
+                new Paragraph({
+                  text: "Product Studio",
+                  alignment: AlignmentType.CENTER,
+                }),
+              ],
+            }),
+          },
+          children,
+        },
+      ],
+    });
+    return Packer.toBuffer(doc);
+  }
+  private async renderEbookDocx(
+    projectId: string,
+    document: ProductDocument,
+  ): Promise<Buffer> {
+    const ebook = this.ebookPresentation(document);
+    const profile = resolveExportProfile(projectExportProfileInput(document));
+    const children: Array<Paragraph | Table> = [
+      new Paragraph({
+        text: ebook.title,
+        heading: HeadingLevel.TITLE,
+        alignment: AlignmentType.CENTER,
+      }),
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Ebook · ${ebook.theme.template}`,
+            bold: true,
+            color: ebook.theme.accentColor.slice(1),
+          }),
+        ],
+        alignment: AlignmentType.CENTER,
+      }),
+      ...(profile
+        ? [
+            new Paragraph({
+              text: profile.label,
+              alignment: AlignmentType.CENTER,
+            }),
+          ]
+        : []),
+      new Paragraph({
+        children: [
+          new TextRun({ text: document.subtitle ?? "", italics: true }),
+        ],
+        alignment: AlignmentType.CENTER,
+      }),
+      new Paragraph({ children: [new PageBreak()] }),
+      new Paragraph({ text: "Contenido", heading: HeadingLevel.HEADING_1 }),
+      ...ebook.chapters.map(
+        (chapter) => new Paragraph(`${chapter.number}. ${chapter.title}`),
+      ),
+      new Paragraph({ children: [new PageBreak()] }),
+    ];
+    for (const [index, chapter] of ebook.chapters.entries()) {
+      children.push(
+        new Paragraph({
+          text: `${chapter.number}. ${chapter.title}`,
+          heading: HeadingLevel.HEADING_1,
+        }),
+      );
+      for (const block of chapter.blocks)
+        children.push(...(await this.docxBlock(projectId, block)));
+      if (index < ebook.chapters.length - 1)
+        children.push(new Paragraph({ children: [new PageBreak()] }));
+    }
+    if (ebook.unassignedBlocks.length) {
+      children.push(
+        new Paragraph({
+          text: "Contenido adicional",
+          heading: HeadingLevel.HEADING_1,
+        }),
+      );
+      for (const block of ebook.unassignedBlocks)
+        children.push(...(await this.docxBlock(projectId, block)));
     }
     const doc = new Document({
       sections: [

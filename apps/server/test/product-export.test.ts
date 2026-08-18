@@ -7,11 +7,38 @@ import type { FastifyInstance } from "fastify";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import * as mammoth from "mammoth";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { extractPdf } from "../src/services/knowledge/index.js";
 import { projectExportProfileInput } from "../src/services/product-export-service.js";
+
+function docxDocumentXml(bytes: Buffer): string {
+  for (let offset = 0; offset + 30 <= bytes.length; ) {
+    if (bytes.readUInt32LE(offset) !== 0x04034b50) {
+      offset++;
+      continue;
+    }
+    const flags = bytes.readUInt16LE(offset + 6);
+    const compression = bytes.readUInt16LE(offset + 8);
+    const compressedSize = bytes.readUInt32LE(offset + 18);
+    const filenameLength = bytes.readUInt16LE(offset + 26);
+    const extraLength = bytes.readUInt16LE(offset + 28);
+    const filenameStart = offset + 30;
+    const dataStart = filenameStart + filenameLength + extraLength;
+    const filename = bytes
+      .subarray(filenameStart, filenameStart + filenameLength)
+      .toString("utf8");
+    if (!(flags & 0x08) && filename === "word/document.xml") {
+      const data = bytes.subarray(dataStart, dataStart + compressedSize);
+      return (compression === 8 ? inflateRawSync(data) : data).toString("utf8");
+    }
+    offset = dataStart + compressedSize;
+  }
+  throw new Error("No se encontró word/document.xml en el DOCX.");
+}
 
 describe("Product Studio physical assets and exports", () => {
   let app: FastifyInstance;
@@ -142,7 +169,7 @@ describe("Product Studio physical assets and exports", () => {
   async function exportDocument(
     project: Project,
     document: ProductDocument,
-    format: "html" | "docx",
+    format: "html" | "docx" | "pdf",
   ) {
     const exported = await app.inject({
       method: "POST",
@@ -158,11 +185,65 @@ describe("Product Studio physical assets and exports", () => {
     return download.rawPayload;
   }
 
-  it("proyecta sólo la entrada de perfil y la aplica en HTML y DOCX sin mutar la versión", async () => {
+  it("deriva una presentación ebook estructurada en HTML, DOCX y PDF sin mutar la versión", async () => {
     const project = (
       await app.inject({ method: "POST", url: "/api/demo/projects" })
     ).json<{ project: Project }>().project;
-    const ebook = await createExportableDocument(project, "ebook");
+    let ebook = await createExportableDocument(project, "ebook");
+    const chapters = [...ebook.version.outline].sort(
+      (a, b) => a.order - b.order || a.id.localeCompare(b.id),
+    );
+    expect(chapters.length).toBeGreaterThan(1);
+    const now = new Date().toISOString();
+    const blocks: ProductBlock[] = [
+      {
+        id: crypto.randomUUID(),
+        type: "paragraph",
+        content: "Bloque del segundo capítulo.",
+        order: 0,
+        metadata: { chapterId: chapters[1]!.id },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        type: "paragraph",
+        content: "Bloque del primer capítulo.",
+        order: 1,
+        metadata: { chapterId: chapters[0]!.id },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        type: "paragraph",
+        content: "Contenido sin capítulo A.",
+        order: 2,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        type: "paragraph",
+        content: "Contenido sin capítulo B.",
+        order: 3,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${project.id}/product-documents/${ebook.id}/autosave`,
+      payload: {
+        baseVersionNumber: ebook.version.versionNumber,
+        idempotencyKey: "advanced-ebook-export-001",
+        blocks,
+      },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    ebook = saved.json<ProductDocument>();
     const ebookBefore = structuredClone(ebook.version);
     expect(projectExportProfileInput(ebook)).toEqual({
       documentType: ebook.documentType,
@@ -176,17 +257,81 @@ describe("Product Studio physical assets and exports", () => {
       "outline",
       "theme",
     ]);
+
     const ebookHtml = (
       await exportDocument(project, ebook, "html")
     ).toString("utf8");
-    expect(ebookHtml).toContain('data-export-profile="ebook"');
-    expect(ebookHtml).toContain("Ebook ·");
+    const firstAnchor = `chapter-${chapters[0]!.id.replaceAll("-", "")}`;
+    const secondAnchor = `chapter-${chapters[1]!.id.replaceAll("-", "")}`;
+    expect(ebookHtml).toContain('class="cover ebook-cover"');
+    expect(ebookHtml).toContain(`<h1>${ebook.title}</h1>`);
+    expect(ebookHtml).toContain(
+      `data-ebook-theme="${ebook.version.theme.template}"`,
+    );
+    expect(ebookHtml).toContain(`--accent:${ebook.version.theme.accentColor}`);
+    expect(ebookHtml).toContain('<nav class="ebook-toc"');
+    for (const [index, chapter] of chapters.entries()) {
+      const anchor = `chapter-${chapter.id.replaceAll("-", "")}`;
+      expect(anchor).toMatch(/^chapter-[a-z0-9]+$/);
+      expect(ebookHtml).toContain(`href="#${anchor}"`);
+      expect(ebookHtml).toContain(`id="${anchor}"`);
+      expect(ebookHtml).toContain(`${index + 1}. ${chapter.title}`);
+    }
+    const firstChapterStart = ebookHtml.indexOf(
+      `<section class="ebook-chapter" id="${firstAnchor}">`,
+    );
+    const firstChapterEnd = ebookHtml.indexOf("</section>", firstChapterStart);
+    const secondChapterStart = ebookHtml.indexOf(
+      `<section class="ebook-chapter" id="${secondAnchor}">`,
+    );
+    const secondChapterEnd = ebookHtml.indexOf("</section>", secondChapterStart);
+    expect(ebookHtml.slice(firstChapterStart, firstChapterEnd)).toContain(
+      "Bloque del primer capítulo.",
+    );
+    expect(ebookHtml.slice(secondChapterStart, secondChapterEnd)).toContain(
+      "Bloque del segundo capítulo.",
+    );
+    expect(ebookHtml).toContain("Contenido sin capítulo A.");
+    expect(ebookHtml.indexOf("Contenido sin capítulo A.")).toBeLessThan(
+      ebookHtml.indexOf("Contenido sin capítulo B."),
+    );
+    expect(ebookHtml).toContain("Contenido adicional");
+    expect(
+      ebookHtml.match(/class="page-break ebook-page-break"/g),
+    ).toHaveLength(chapters.length - 1);
+    expect(ebookHtml).not.toMatch(/<script\b/i);
+    expect(ebookHtml).not.toMatch(/<[^>]+\son\w+\s*=/i);
+    expect(ebookHtml).not.toMatch(/(?:href|src)\s*=\s*["']?javascript:/i);
     expect(await exportDocument(project, ebook, "html")).toEqual(
       Buffer.from(ebookHtml, "utf8"),
     );
+
+    const ebookDocx = await exportDocument(project, ebook, "docx");
+    const ebookDocxHtml = (
+      await mammoth.convertToHtml({ buffer: ebookDocx })
+    ).value;
+    expect(ebookDocxHtml).toContain(ebook.title);
+    expect(ebookDocxHtml).toContain(`Ebook · ${ebook.version.theme.template}`);
+    expect(ebookDocxHtml).toContain("Contenido");
+    expect(ebookDocxHtml).toContain(`1. ${chapters[0]!.title}`);
+    expect(ebookDocxHtml).toContain(`2. ${chapters[1]!.title}`);
+    expect(ebookDocxHtml).toContain("Contenido sin capítulo A.");
+    expect(ebookDocxHtml).toContain("Contenido adicional");
     expect(
-      (await mammoth.convertToHtml({ buffer: await exportDocument(project, ebook, "docx") })).value,
-    ).toContain("Ebook ·");
+      docxDocumentXml(ebookDocx).match(/<w:br\b[^>]*w:type="page"/g),
+    ).toHaveLength(chapters.length + 1);
+
+    const ebookPdf = await exportDocument(project, ebook, "pdf");
+    expect(ebookPdf.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(ebookPdf.length).toBeGreaterThan(100);
+    const ebookPdfDocument = await extractPdf(ebookPdf, { maxPages: 100 });
+    expect(ebookPdfDocument.status).toBe("READY");
+    expect(ebookPdfDocument.text).toContain(ebook.title);
+    expect(ebookPdfDocument.text).toContain("Contenido");
+    for (const [index, chapter] of chapters.entries())
+      expect(ebookPdfDocument.text).toContain(`${index + 1}. ${chapter.title}`);
+    expect(ebookPdfDocument.text).toContain("Bloque del primer capítulo.");
+    expect(ebookPdfDocument.text).toContain("Bloque del segundo capítulo.");
 
     const checklist = await createExportableDocument(project, "checklist");
     const checklistHtml = (
@@ -195,9 +340,28 @@ describe("Product Studio physical assets and exports", () => {
     expect(checklistHtml).toContain('data-export-profile="checklist"');
     expect(checklistHtml).toContain("Checklist ·");
     expect(checklistHtml).toContain("3 tareas");
-    expect(
-      (await mammoth.convertToHtml({ buffer: await exportDocument(project, checklist, "docx") })).value,
-    ).toContain("Checklist ·");
+    expect(checklistHtml).not.toContain("ebook-cover");
+    expect(checklistHtml).not.toContain("ebook-toc");
+    expect(checklistHtml).not.toContain('id="chapter-');
+    const checklistDocx = await exportDocument(project, checklist, "docx");
+    const checklistDocxHtml = (
+      await mammoth.convertToHtml({ buffer: checklistDocx })
+    ).value;
+    expect(checklistDocxHtml).toContain(checklist.title);
+    expect(checklistDocxHtml).toContain("Checklist ·");
+    expect(checklistDocxHtml).toContain("Definir objetivo");
+    expect(checklistDocxHtml).not.toContain("Contenido");
+    expect(docxDocumentXml(checklistDocx)).not.toContain("chapter-");
+    const checklistPdf = await extractPdf(
+      await exportDocument(project, checklist, "pdf"),
+      { maxPages: 100 },
+    );
+    expect(checklistPdf.status).toBe("READY");
+    expect(checklistPdf.text).toContain(checklist.title);
+    expect(checklistPdf.text.replaceAll(/\s+/g, "")).toContain("CHECKLIST·");
+    expect(checklistPdf.text).toContain("Definir objetivo");
+    expect(checklistPdf.text).not.toContain("Contenido");
+    expect(checklistPdf.text).not.toContain("chapter-");
 
     const guide = await createExportableDocument(project, "guide");
     const guideHtml = (
@@ -205,6 +369,26 @@ describe("Product Studio physical assets and exports", () => {
     ).toString("utf8");
     expect(guideHtml).not.toContain("data-export-profile=");
     expect(guideHtml).toContain('<span class="type">guide</span>');
+    expect(guideHtml).not.toContain("ebook-cover");
+    expect(guideHtml).not.toContain("ebook-toc");
+    expect(guideHtml).not.toContain('id="chapter-');
+    const guideDocx = await exportDocument(project, guide, "docx");
+    const guideDocxHtml = (await mammoth.convertToHtml({ buffer: guideDocx }))
+      .value;
+    expect(guideDocxHtml).toContain(guide.title);
+    expect(guideDocxHtml).toContain("Preparación");
+    expect(guideDocxHtml).toContain("Contenido de exportación.");
+    expect(guideDocxHtml).not.toContain("Contenido adicional");
+    expect(docxDocumentXml(guideDocx)).not.toContain("chapter-");
+    const guidePdf = await extractPdf(await exportDocument(project, guide, "pdf"), {
+      maxPages: 100,
+    });
+    expect(guidePdf.status).toBe("READY");
+    expect(guidePdf.text).toContain(guide.title);
+    expect(guidePdf.text).toContain("Preparación");
+    expect(guidePdf.text).toContain("Contenido de exportación.");
+    expect(guidePdf.text).not.toContain("Contenido adicional");
+    expect(guidePdf.text).not.toContain("chapter-");
 
     const after = await app.inject({
       method: "GET",

@@ -117,7 +117,7 @@ function validateAcquisition(acquisition: MarketBenchmarkAcquisition): void {
 }
 
 /** Stable identity wins; URL is only an identity fallback, then text for future identity-less contracts. */
-function dedupeKey(signal: NormalizedMarketSignal): string {
+export function marketSignalDedupeKey(signal: NormalizedMarketSignal): string {
   if (signal.sourceId !== null) return `id:${signal.source}:${signal.sourceId}`;
   if (signal.url !== null) return `url:${signal.url}`;
   return `text:${signal.text}`;
@@ -255,7 +255,7 @@ export async function runMarketIntelligenceBenchmark(
     const providerUnique: NormalizedMarketSignal[] = [];
     let duplicates = 0;
     for (const signal of acquisition.signals) {
-      const key = dedupeKey(signal);
+      const key = marketSignalDedupeKey(signal);
       if (seen.has(key)) {
         duplicates += 1;
         duplicatesRemoved += 1;

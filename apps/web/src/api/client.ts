@@ -25,6 +25,9 @@ import type {
   CreateProductDocumentInput,
   ProductAutosaveInput,
   ProductDocumentVersion,
+  MarketResearchRun,
+  MarketResearchStatus,
+  RunMarketResearchInput,
 } from "@our-platform/shared";
 
 export class ApiClientError extends Error {
@@ -239,6 +242,10 @@ export const api = {
   youtubeSearch: (id:string, query:string, pageToken?:string) => request<{items:YouTubeResearchVideo[];nextPageToken?:string}>(`/api/projects/${id}/youtube/search?q=${encodeURIComponent(query)}${pageToken?`&pageToken=${encodeURIComponent(pageToken)}`:""}`),
   importYouTubeResearch: (id:string,input:{videoId:string;title:string;topLevelLimit:number}) => request<{source:import("@our-platform/shared").Source;job:Job}>(`/api/projects/${id}/youtube/import`,json("POST",input)),
   setSourceAnalysis: (id:string,sourceId:string,included:boolean) => request<import("@our-platform/shared").Source>(`/api/projects/${id}/sources/${sourceId}/analysis`,json("PUT",{included})),
+  marketResearchStatus: (id: string) =>
+    request<MarketResearchStatus>(`/api/projects/${id}/market-research/status`),
+  runMarketResearch: (id: string, input: RunMarketResearchInput) =>
+    request<MarketResearchRun>(`/api/projects/${id}/market-research`, json("POST", input)),
   researchFocus: (id:string) => request<{value:string|null;source:"user"|"youtube_query"|null}>(`/api/projects/${id}/research-focus`),
   saveResearchFocus: (id:string,value:string,source:"user"|"youtube_query"="user") => request<{value:string;source:"user"|"youtube_query"}>(`/api/projects/${id}/research-focus`,json("PUT",{value,source})),
   analysisSet: (id:string) => request<{comments:import("@our-platform/shared").Comment[]}>(`/api/projects/${id}/analysis-set`),

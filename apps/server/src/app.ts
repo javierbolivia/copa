@@ -41,6 +41,13 @@ import { registerProductStudioRoutes } from "./routes/product-studio.js";
 import { ProductExportService } from "./services/product-export-service.js";
 import { registerProductExportRoutes } from "./routes/product-exports.js";
 import { registerResearchFocusRoutes } from "./routes/research-focus.js";
+import { YouTubeAdapter } from "./integrations/youtube-adapter.js";
+import { TavilyProvider } from "./integrations/tavily-provider.js";
+import { ExaProvider } from "./integrations/exa-provider.js";
+import { BraveSearchProvider } from "./integrations/brave-search-provider.js";
+import { FirecrawlProvider } from "./integrations/firecrawl-provider.js";
+import { MarketResearchService, type MarketResearchServiceOptions } from "./services/market-research-service.js";
+import { registerMarketResearchRoutes } from "./routes/market-research.js";
 
 export interface CreateAppOptions {
   readonly databasePath: string;
@@ -50,6 +57,8 @@ export interface CreateAppOptions {
   readonly gemini?: GeminiProviderOptions;
   readonly deepSeek?: DeepSeekProviderOptions;
   readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini"|"deepSeek">;
+  /** Overrides the real multi-source Research wiring; tests inject doubles here. */
+  readonly marketResearch?: Partial<MarketResearchServiceOptions>;
 }
 
 export async function createApp(
@@ -129,6 +138,28 @@ export async function createApp(
     dataRoot,
   );
 
+  // PHASE 20.4 — real multi-source Research. Reuses the existing provider
+  // clients and market-signal adapters; a dedicated DeepSeek instance disables
+  // thinking so the bounded extraction budget cannot be consumed before the
+  // final answer, without changing the Research module's provider semantics.
+  const marketResearchDeepSeek = new DeepSeekProvider({
+    ...(process.env.DEEPSEEK_API_KEY ? { apiKey: process.env.DEEPSEEK_API_KEY } : {}),
+    ...(process.env.DEEPSEEK_MODEL?.trim() ? { model: process.env.DEEPSEEK_MODEL } : {}),
+    ...options.deepSeek,
+    thinking: "disabled",
+  });
+  const marketResearch = new MarketResearchService(database, {
+    clients: options.marketResearch?.clients ?? {
+      youtube: new YouTubeAdapter({ ...(process.env.YOUTUBE_API_KEY ? { apiKey: process.env.YOUTUBE_API_KEY } : {}) }),
+      tavily: new TavilyProvider({ ...(process.env.TAVILY_API_KEY ? { apiKey: process.env.TAVILY_API_KEY } : {}) }),
+      exa: new ExaProvider({ ...(process.env.EXA_API_KEY ? { apiKey: process.env.EXA_API_KEY } : {}) }),
+      brave: new BraveSearchProvider({ ...(process.env.BRAVE_SEARCH_API_KEY ? { apiKey: process.env.BRAVE_SEARCH_API_KEY } : {}) }),
+      firecrawl: new FirecrawlProvider({ ...(process.env.FIRECRAWL_API_KEY ? { apiKey: process.env.FIRECRAWL_API_KEY } : {}) }),
+    },
+    analyzers: options.marketResearch?.analyzers ?? { deepSeek: marketResearchDeepSeek, gemini },
+    ...(options.marketResearch?.now ? { now: options.marketResearch.now } : {}),
+  });
+
   app.addHook("onClose", async () => {
     database.close();
   });
@@ -140,6 +171,7 @@ export async function createApp(
   const youtubeImports = new YouTubeImportService(sources, jobs);
   registerSourceRoutes(app, sources, jobs, youtubeImports);
   registerModuleRoutes(app, projects, modules);
+  registerMarketResearchRoutes(app, projects, marketResearch);
   registerDemoRoutes(app, projects, sources, modules);
   registerFileRoutes(app, projects, exporter);
   registerTraceabilityRoutes(app, traceability);

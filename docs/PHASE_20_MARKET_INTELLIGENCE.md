@@ -2,7 +2,7 @@
 
 ## Estado y objetivo
 
-Esta es la especificación autoritativa de Phase 20. La prioridad es convertir Research en el motor principal de descubrimiento de problemas reales, deseos, soluciones fallidas y oportunidades comerciales. El único incremento autorizado para implementación es **20.1**. Los incrementos 20.2+ no están autorizados.
+Esta es la especificación autoritativa de Phase 20. La prioridad es convertir Research en el motor principal de descubrimiento de problemas reales, deseos, soluciones fallidas y oportunidades comerciales. Los únicos incrementos autorizados para implementación son **20.1** y **20.2**; 20.3+ no están autorizados.
 
 ## 20.1 — Source/Signal Architecture
 
@@ -33,17 +33,33 @@ Esta es la especificación autoritativa de Phase 20. La prioridad es convertir R
 6. Cada salida conserva provenance trazable al registro externo; la implementación no altera los contratos ni las tablas de Research/Evidence existentes.
 7. Las pruebas focalizadas cubren las fuentes extensibles, determinismo, provenance, seguridad de URL/texto y controles de no mutación. Las regresiones Research/Evidence relevantes siguen pasando.
 
+## 20.2 — YouTube MarketSignal Adapter
+
+### Alcance autorizado y límites
+
+- Transformar de forma pura y determinista los DTOs ya obtenidos por COPA (`YouTubeVideo`, `YouTubeThread`, comentarios embedded y replies adicionales) en `NormalizedMarketSignal` mediante `normalizeMarketSignal`.
+- La superficie es una transformación explícita dentro de `apps/server`; no implementa `MarketSignalAdapter.collect()` ni inicia un ciclo de importación, porque la entrada ya fue obtenida por el flujo YouTube existente.
+- Cada señal conserva la identidad estable de comentario y vídeo, una URL canónica HTTPS del vídeo, la query suministrada, el texto original sujeto sólo a la canonización del normalizador, timestamps de origen, engagement y contexto/provenance auditables. Los datos necesarios ausentes o inválidos se rechazan con auditoría determinista.
+- Deduplicar exclusivamente por identidad estable de comentario; el primer registro en el orden de entrada se conserva y los repetidos quedan en una auditoría inspeccionable. No se deduplica por texto.
+- Los campos `pain`, `desiredOutcome`, `failedAttempt`, `currentSolution`, `solutionComplaint`, `urgency`, `specificity` y `commercialIntent` permanecen `null`. No hay inferencia ni LLM.
+
+### No-goals de 20.2
+
+- No crear cliente, API, provider, dependencia, llamada de red, ruta, UI/mobile ni integración YouTube paralela.
+- No persistir señales ni modificar migraciones, esquema, Source, Comment, EvidenceSnippet, Analysis Set, historial, Research/Evidence o traceability.
+- No implementar scoring, ranking, clustering, síntesis, inferencia comercial ni 20.3+.
+
 ## No-goals
 
-- Integrar APIs o scraping de YouTube, Google, Q&A/forums, competitor ads, reviews o Reddit.
+- Integrar APIs o scraping de Google, Q&A/forums, competitor ads, reviews o Reddit.
 - Persistir señales, crear migraciones, ampliar el Analysis Set o promover señales a evidencia.
 - Ejecutar LLMs, deduplicación comercial, scoring de oportunidades, ranking, clustering, dashboards, UI o endpoints de señales.
 - Cambiar las políticas de calidad/provenance de EvidenceSnippet, el grafo de traceability o los contratos de Source/Comment.
-- Implementar 20.2+.
+- Implementar 20.3+.
 
 ## Incrementos posteriores — fuera de implementación
 
-- **20.2+** requieren una aprobación explícita y criterios propios; no quedan definidos ni autorizados por esta especificación.
+- **20.3+** requieren una aprobación explícita y criterios propios; no quedan definidos ni autorizados por esta especificación.
 
 ## Definición de terminado para 20.1
 

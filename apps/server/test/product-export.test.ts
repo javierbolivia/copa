@@ -7,9 +7,11 @@ import type { FastifyInstance } from "fastify";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as mammoth from "mammoth";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
+import { projectExportProfileInput } from "../src/services/product-export-service.js";
 
 describe("Product Studio physical assets and exports", () => {
   let app: FastifyInstance;
@@ -75,6 +77,142 @@ describe("Product Studio physical assets and exports", () => {
     document = batch.json<{ document: ProductDocument }>().document;
     return { project, document };
   }
+
+  async function createExportableDocument(
+    project: Project,
+    documentType: "ebook" | "checklist" | "guide",
+  ): Promise<ProductDocument> {
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents`,
+      payload: {
+        documentType,
+        title: `Perfil ${documentType}`,
+        language: "es",
+        length: "short",
+        level: "beginner",
+      },
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    let document = created.json<ProductDocument>();
+    const outlined = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/outline/generate`,
+      payload: {},
+    });
+    expect(outlined.statusCode, outlined.body).toBe(200);
+    document = outlined.json<ProductDocument>();
+    const now = new Date().toISOString();
+    const blocks: ProductBlock[] = [
+      {
+        id: crypto.randomUUID(),
+        type: "heading",
+        content: "Preparación",
+        order: 0,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        type: documentType === "checklist" ? "checklist" : "paragraph",
+        content:
+          documentType === "checklist"
+            ? ["Definir objetivo", "Completar tarea", "Revisar resultado"]
+            : "Contenido de exportación.",
+        order: 1,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/autosave`,
+      payload: {
+        baseVersionNumber: document.version.versionNumber,
+        idempotencyKey: `export-profile-${documentType}-001`,
+        blocks,
+      },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    return saved.json<ProductDocument>();
+  }
+
+  async function exportDocument(
+    project: Project,
+    document: ProductDocument,
+    format: "html" | "docx",
+  ) {
+    const exported = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/exports`,
+      payload: { format },
+    });
+    expect(exported.statusCode, exported.body).toBe(201);
+    const download = await app.inject({
+      method: "GET",
+      url: exported.json<{ downloadUrl: string }>().downloadUrl,
+    });
+    expect(download.statusCode).toBe(200);
+    return download.rawPayload;
+  }
+
+  it("proyecta sólo la entrada de perfil y la aplica en HTML y DOCX sin mutar la versión", async () => {
+    const project = (
+      await app.inject({ method: "POST", url: "/api/demo/projects" })
+    ).json<{ project: Project }>().project;
+    const ebook = await createExportableDocument(project, "ebook");
+    const ebookBefore = structuredClone(ebook.version);
+    expect(projectExportProfileInput(ebook)).toEqual({
+      documentType: ebook.documentType,
+      outline: ebook.version.outline,
+      blocks: ebook.version.blocks,
+      theme: ebook.version.theme,
+    });
+    expect(Object.keys(projectExportProfileInput(ebook)).sort()).toEqual([
+      "blocks",
+      "documentType",
+      "outline",
+      "theme",
+    ]);
+    const ebookHtml = (
+      await exportDocument(project, ebook, "html")
+    ).toString("utf8");
+    expect(ebookHtml).toContain('data-export-profile="ebook"');
+    expect(ebookHtml).toContain("Ebook ·");
+    expect(await exportDocument(project, ebook, "html")).toEqual(
+      Buffer.from(ebookHtml, "utf8"),
+    );
+    expect(
+      (await mammoth.convertToHtml({ buffer: await exportDocument(project, ebook, "docx") })).value,
+    ).toContain("Ebook ·");
+
+    const checklist = await createExportableDocument(project, "checklist");
+    const checklistHtml = (
+      await exportDocument(project, checklist, "html")
+    ).toString("utf8");
+    expect(checklistHtml).toContain('data-export-profile="checklist"');
+    expect(checklistHtml).toContain("Checklist ·");
+    expect(checklistHtml).toContain("3 tareas");
+    expect(
+      (await mammoth.convertToHtml({ buffer: await exportDocument(project, checklist, "docx") })).value,
+    ).toContain("Checklist ·");
+
+    const guide = await createExportableDocument(project, "guide");
+    const guideHtml = (
+      await exportDocument(project, guide, "html")
+    ).toString("utf8");
+    expect(guideHtml).not.toContain("data-export-profile=");
+    expect(guideHtml).toContain('<span class="type">guide</span>');
+
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/product-documents/${ebook.id}`,
+    });
+    expect(after.statusCode, after.body).toBe(200);
+    expect(after.json<ProductDocument>().version).toEqual(ebookBefore);
+  });
 
   it("genera assets seguros y archivos HTML, DOCX y PDF físicos, sin sobrescribir historial", async () => {
     let { project, document } = await createReadyDocument();

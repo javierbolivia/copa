@@ -81,6 +81,61 @@ interface ExportRow {
   created_at: string;
   generated_file_id: string | null;
 }
+interface ProductExportProfile {
+  kind: "ebook" | "checklist";
+  label: string;
+  accentColor: string;
+}
+
+export interface ExportProfileInput {
+  documentType: ProductDocument["documentType"];
+  outline: ProductDocument["version"]["outline"];
+  blocks: ProductDocument["version"]["blocks"];
+  theme: ProductTheme;
+}
+
+export function projectExportProfileInput(
+  document: ProductDocument,
+): ExportProfileInput {
+  return {
+    documentType: document.documentType,
+    outline: document.version.outline,
+    blocks: document.version.blocks,
+    theme: document.version.theme,
+  };
+}
+
+function resolveExportProfile(
+  input: ExportProfileInput,
+): ProductExportProfile | undefined {
+  const { documentType, outline, blocks, theme } = input;
+  const outlineCount = outline.length;
+  const blockCount = blocks.length;
+  const accentColor = theme.accentColor;
+  if (documentType === "ebook")
+    return {
+      kind: "ebook",
+      label: `Ebook · ${outlineCount} secciones · ${blockCount} bloques`,
+      accentColor,
+    };
+  if (documentType === "checklist") {
+    const itemCount = blocks.reduce(
+      (count, block) =>
+        count +
+        (block.type === "checklist"
+          ? Array.isArray(block.content)
+            ? block.content.length
+            : flatten(block.content).split("\n").filter(Boolean).length
+          : 0),
+      0,
+    );
+    return {
+      kind: "checklist",
+      label: `Checklist · ${outlineCount} secciones · ${itemCount} tareas`,
+      accentColor,
+    };
+  }
+}
 
 export class ProductExportService {
   private readonly root: string;
@@ -466,6 +521,7 @@ export class ProductExportService {
   private renderHtml(projectId: string, document: ProductDocument): string {
     const theme = document.version.theme,
       meta = document.version.metadata,
+      profile = resolveExportProfile(projectExportProfileInput(document)),
       title = escapeHtml(meta.coverTitle ?? document.title),
       subtitle = escapeHtml(meta.coverSubtitle ?? document.subtitle ?? ""),
       author = escapeHtml(meta.author ?? "");
@@ -473,7 +529,10 @@ export class ProductExportService {
       .sort((a, b) => a.order - b.order)
       .map((block) => this.blockHtml(projectId, block))
       .join("\n");
-    return `<!doctype html><html lang="${escapeHtml(document.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{--accent:${theme.accentColor};--scale:${theme.typographyScale};--space:${theme.spacing}}*{box-sizing:border-box}body{margin:0;color:#17221e;background:#eef1ed;font:calc(16px * var(--scale))/1.65 system-ui,sans-serif}.page{max-width:820px;margin:auto;background:#fff;min-height:100vh;padding:${theme.margins}px}.cover{display:flex;min-height:85vh;flex-direction:column;justify-content:center;padding:8%;color:#fff;background:linear-gradient(145deg,#14251c,var(--accent));page-break-after:always}.cover h1{font-size:3.4em;line-height:1.05}.cover .type{letter-spacing:.18em;text-transform:uppercase}.cover .author{margin-top:auto}.block{margin:calc(18px * var(--space)) 0}.callout,.exercise,.keyTakeaway{padding:16px;border-left:5px solid var(--accent);background:#f3f7ef}.checklist{list-style:none;padding:0}.checklist input{margin-right:9px}.page-break{break-after:page}.diagram,.image{max-width:100%;height:auto}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd4ce}blockquote{padding-left:16px;border-left:4px solid var(--accent)}@media(max-width:600px){.page{padding:20px}.cover h1{font-size:2.3em}}@media print{body{background:#fff}.page{max-width:none}.no-print{display:none}@page{size:${theme.pageSize};margin:${theme.margins}mm}}</style></head><body><section class="cover"><span class="type">${escapeHtml(document.documentType)}</span><h1>${title}</h1><p>${subtitle}</p><strong class="author">${author}</strong></section><main class="page">${blocks}</main></body></html>`;
+    const profileBanner = profile
+      ? `<p class="no-print" data-export-profile="${profile.kind}" style="margin:0 0 24px;padding:12px;border-left:5px solid ${profile.accentColor}">${escapeHtml(profile.label)}</p>`
+      : "";
+    return `<!doctype html><html lang="${escapeHtml(document.language)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><style>:root{--accent:${theme.accentColor};--scale:${theme.typographyScale};--space:${theme.spacing}}*{box-sizing:border-box}body{margin:0;color:#17221e;background:#eef1ed;font:calc(16px * var(--scale))/1.65 system-ui,sans-serif}.page{max-width:820px;margin:auto;background:#fff;min-height:100vh;padding:${theme.margins}px}.cover{display:flex;min-height:85vh;flex-direction:column;justify-content:center;padding:8%;color:#fff;background:linear-gradient(145deg,#14251c,var(--accent));page-break-after:always}.cover h1{font-size:3.4em;line-height:1.05}.cover .type{letter-spacing:.18em;text-transform:uppercase}.cover .author{margin-top:auto}.block{margin:calc(18px * var(--space)) 0}.callout,.exercise,.keyTakeaway{padding:16px;border-left:5px solid var(--accent);background:#f3f7ef}.checklist{list-style:none;padding:0}.checklist input{margin-right:9px}.page-break{break-after:page}.diagram,.image{max-width:100%;height:auto}table{width:100%;border-collapse:collapse}td,th{padding:8px;border:1px solid #ccd4ce}blockquote{padding-left:16px;border-left:4px solid var(--accent)}@media(max-width:600px){.page{padding:20px}.cover h1{font-size:2.3em}}@media print{body{background:#fff}.page{max-width:none}.no-print{display:none}@page{size:${theme.pageSize};margin:${theme.margins}mm}}</style></head><body><section class="cover"><span class="type">${escapeHtml(profile?.label ?? document.documentType)}</span><h1>${title}</h1><p>${subtitle}</p><strong class="author">${author}</strong></section><main class="page">${profileBanner}${blocks}</main></body></html>`;
   }
   private blockHtml(projectId: string, block: ProductBlock): string {
     const text = escapeHtml(flatten(block.content)),
@@ -518,12 +577,27 @@ export class ProductExportService {
     projectId: string,
     document: ProductDocument,
   ): Promise<Buffer> {
+    const profile = resolveExportProfile(projectExportProfileInput(document));
     const children: Array<Paragraph | Table> = [
       new Paragraph({
         text: document.title,
         heading: HeadingLevel.TITLE,
         alignment: AlignmentType.CENTER,
       }),
+      ...(profile
+        ? [
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: profile.label,
+                  bold: true,
+                  color: profile.accentColor.slice(1),
+                }),
+              ],
+              alignment: AlignmentType.CENTER,
+            }),
+          ]
+        : []),
       new Paragraph({
         children: [
           new TextRun({ text: document.subtitle ?? "", italics: true }),

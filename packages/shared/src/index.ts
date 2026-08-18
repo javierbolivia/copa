@@ -8,3 +8,4 @@ export * from "./artifact.js";
 export * from "./backup.js";
 export * from "./knowledge.js";
 export * from "./product-studio.js";
+export * from "./market-signal.js";

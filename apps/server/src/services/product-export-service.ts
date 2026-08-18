@@ -790,6 +790,12 @@ function planMermaid(
     return `mindmap\n  root((Idea central))\n${steps.map((step) => `    ${step}`).join("\n")}`;
   return `flowchart TD\n${steps.map((step, index) => `  N${index}[${step}]${index < steps.length - 1 ? ` --> N${index + 1}` : ""}`).join("\n")}`;
 }
+const MAX_MERMAID_RENDER_ATTEMPTS = 3;
+const MERMAID_RENDER_RE = /<body\b[^>]*data-render="(ready|error)"/i;
+function mermaidPageBody(stdout: string): string {
+  const body = stdout.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  return body?.[1]?.trim() ?? "";
+}
 async function renderMermaid(source: string): Promise<string> {
   const edge = edgePath(),
     mermaidModule = pathToFileURL(
@@ -802,33 +808,46 @@ async function renderMermaid(source: string): Promise<string> {
   mkdirSync(temp, { recursive: true });
   writeFileSync(
     htmlPath,
-    `<!doctype html><meta charset="utf-8"><div id="out"></div><script type="module">import mermaid from ${JSON.stringify(mermaidModule)};mermaid.initialize({startOnLoad:false,securityLevel:'strict',htmlLabels:false});try{await mermaid.parse(${JSON.stringify(source)});const {svg}=await mermaid.render('graph',${JSON.stringify(source)});document.getElementById('out').innerHTML=svg;document.title='ready'}catch(e){document.title='error';document.body.textContent=String(e)}</script>`,
+    `<!doctype html><meta charset="utf-8"><div id="out"></div><script type="module">import mermaid from ${JSON.stringify(mermaidModule)};mermaid.initialize({startOnLoad:false,securityLevel:'strict',htmlLabels:false});try{await mermaid.parse(${JSON.stringify(source)});const {svg}=await mermaid.render('graph',${JSON.stringify(source)});document.getElementById('out').innerHTML=svg;document.body.dataset.render='ready'}catch(e){document.body.dataset.render='error';document.body.textContent=String(e)}</script>`,
     "utf8",
   );
   try {
-    const result = spawnSync(
-      edge,
-      [
-        "--headless=new",
-        "--disable-gpu",
-        "--allow-file-access-from-files",
-        "--virtual-time-budget=10000",
-        "--dump-dom",
-        pathToFileURL(htmlPath).href,
-      ],
-      {
-        encoding: "utf8",
-        timeout: 30_000,
-        windowsHide: true,
-        maxBuffer: 5_000_000,
-      },
-    );
-    const match = result.stdout.match(/<svg[\s\S]*<\/svg>/i);
-    if (result.status !== 0 || !match)
-      throw new Error(
-        `Mermaid rechazó el diagrama (${result.status ?? "timeout"}): ${result.stderr.slice(0, 180)} ${result.stdout.slice(0, 240)}`,
+    for (let attempt = 1; attempt <= MAX_MERMAID_RENDER_ATTEMPTS; attempt++) {
+      const result = spawnSync(
+        edge,
+        [
+          "--headless=new",
+          "--disable-gpu",
+          "--allow-file-access-from-files",
+          "--virtual-time-budget=10000",
+          "--dump-dom",
+          pathToFileURL(htmlPath).href,
+        ],
+        {
+          encoding: "utf8",
+          timeout: 30_000,
+          windowsHide: true,
+          maxBuffer: 5_000_000,
+        },
       );
-    return match[0];
+      const stdout = result.stdout ?? "";
+      if (result.status !== 0)
+        throw new Error(
+          `Mermaid rechazó el diagrama (${result.status ?? "timeout"}): ${result.stderr.slice(0, 180) || stdout.slice(0, 240)}`,
+        );
+      if (stdout.match(MERMAID_RENDER_RE)?.[1] === "error") {
+        const detail = mermaidPageBody(stdout) || stdout.slice(0, 240);
+        throw new Error(`Mermaid rechazó el diagrama: ${detail.slice(0, 240)}`);
+      }
+      const match = stdout.match(/<svg[\s\S]*<\/svg>/i);
+      if (match) return match[0];
+      // Sin <svg> y sin marcador de error: el dump ocurrió antes de que
+      // terminara el render async (carrera). La página es determinista, así
+      // que reintentamos de forma acotada en lugar de usar sleeps arbitrarios.
+    }
+    throw new Error(
+      `Mermaid no completó el render tras ${MAX_MERMAID_RENDER_ATTEMPTS} intentos.`,
+    );
   } finally {
     rmSync(htmlPath, { force: true });
   }

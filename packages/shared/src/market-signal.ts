@@ -3,6 +3,7 @@ import { Type, type Static } from "@sinclair/typebox";
 /** Vocabulary for external records; this does not extend persisted Source types. */
 export const MARKET_SIGNAL_SOURCES = [
   "youtube",
+  "web",
   "google",
   "qa_forum",
   "competitor_ad",

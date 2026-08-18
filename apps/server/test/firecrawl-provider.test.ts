@@ -37,3 +37,20 @@ describe("FirecrawlProvider", () => {
     await provider.search("x").catch((error: unknown) => expect(error instanceof Error ? error.message : "").not.toContain("firecrawl-secret-value"));
   });
 });
+
+
+  it("expone discovery limitado y scrape de una URL explícita sin crawl ni batch", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if ("query" in body) return new Response(JSON.stringify({ data: { web: Array.from({ length: 6 }, (_, index) => ({ url: `https://example.test/${index}`, title: `R${index}`, description: "snippet" })) } }), { status: 200 });
+      return new Response(JSON.stringify({ data: { markdown: "contenido acotado" } }), { status: 200 });
+    });
+    const provider = new FirecrawlProvider({ apiKey: "firecrawl-test-key", fetch: fetchMock as typeof fetch });
+
+    await expect(provider.discover("consulta", { maxResults: 99 })).resolves.toMatchObject({
+      results: Array.from({ length: 5 }, () => expect.objectContaining({ snippet: "snippet" })),
+      metadata: { resultCount: 5 },
+    });
+    await expect(provider.scrape("https://example.test/a")).resolves.toMatchObject({ metadata: { resultCount: 1 } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });

@@ -4,6 +4,7 @@ import {
   normalizeFetchError,
   readErrorType,
 } from "./integration-error.js";
+import { discoveryResult, type WebDiscoveryResponse } from "./web-discovery.js";
 
 export interface TavilyProviderOptions {
   readonly apiKey?: string;
@@ -104,6 +105,60 @@ export class TavilyProvider {
       ...(credits === undefined ? {} : { credits }),
       ...(rateLimitRemaining === undefined ? {} : { rateLimitRemaining }),
       ...(rateLimitLimit === undefined ? {} : { rateLimitLimit }),
+    };
+  }
+
+  async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
+    if (!this.configured) throw new IntegrationError("missing_api_key", "Tavily no está configurado.");
+    const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetchFn(this.endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          api_key: this.apiKey,
+          query,
+          search_depth: "basic",
+          max_results: maxResults,
+          include_answer: false,
+          include_raw_content: false,
+        }),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw normalizeFetchError(error, "Tavily");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!response.ok) throw httpIntegrationError("Tavily", response.status, await readErrorType(response));
+    let body: Record<string, unknown>;
+    try {
+      body = await response.json() as Record<string, unknown>;
+    } catch (error) {
+      throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta que no es JSON.", { cause: error });
+    }
+    const usage = record(body.usage);
+    const rateLimit = record(body.rate_limit);
+    const rawResults = Array.isArray(body.results) ? body.results : [];
+    const responseUsage = numeric(body.usage);
+    const credits = numeric(body.credits) ?? numeric(usage?.credits);
+    const rateLimitRemaining = numeric(rateLimit?.remaining)
+      ?? headerNumber(response.headers, ["x-ratelimit-remaining", "ratelimit-remaining"]);
+    const rateLimitLimit = numeric(rateLimit?.limit)
+      ?? headerNumber(response.headers, ["x-ratelimit-limit", "ratelimit-limit"]);
+    return {
+      results: rawResults.slice(0, maxResults).map(discoveryResult),
+      metadata: {
+        status: response.status,
+        resultCount: Math.min(rawResults.length, maxResults),
+        ...(responseUsage === undefined ? {} : { usage: responseUsage }),
+        ...(credits === undefined ? {} : { credits }),
+        ...(rateLimitRemaining === undefined ? {} : { rateLimitRemaining }),
+        ...(rateLimitLimit === undefined ? {} : { rateLimitLimit }),
+      },
     };
   }
 }

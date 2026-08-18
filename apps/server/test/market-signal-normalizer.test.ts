@@ -168,3 +168,10 @@ describe("MarketSignal normalization", () => {
     expect(Value.Check(MarketSignalSchema, withoutIdentity)).toBe(false);
   });
 });
+
+
+  it("accepts the provider-neutral web discovery source", () => {
+    const normalized = normalizeMarketSignal(signal("web"));
+    expect(normalized.source).toBe("web");
+    expect(normalized.provenance.source).toBe("web");
+  });

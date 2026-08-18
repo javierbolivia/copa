@@ -6,4 +6,6 @@ export * from "./deepseek-provider.js";
 export * from "./tavily-provider.js";
 export * from "./exa-provider.js";
 export * from "./firecrawl-provider.js";
+export * from "./brave-search-provider.js";
+export * from "./web-discovery.js";
 export * from "./youtube-adapter.js";

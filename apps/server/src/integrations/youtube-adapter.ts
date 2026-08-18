@@ -123,8 +123,9 @@ export class YouTubeAdapter {
     return (await this.getVideos([videoId]))[0];
   }
 
-  async searchVideos(query:string,pageToken?:string):Promise<YouTubePage<YouTubeSearchResult>>{
-    const response=await this.get("search",{part:"snippet",type:"video",q:query,maxResults:"25",...(pageToken===undefined?{}:{pageToken})});
+  async searchVideos(query:string,pageToken?:string,maxResults?:number):Promise<YouTubePage<YouTubeSearchResult>>{
+    const boundedMaxResults = Math.min(25, Math.max(1, Math.floor(maxResults ?? 25)));
+    const response=await this.get("search",{part:"snippet",type:"video",q:query,maxResults:String(boundedMaxResults),...(pageToken===undefined?{}:{pageToken})});
     return {items:(Array.isArray(response.items)?response.items:[]).flatMap((raw):YouTubeSearchResult[]=>{
       if(typeof raw!=="object"||raw===null)return[];const item=raw as {id?:{videoId?:unknown};snippet?:Record<string,unknown>};const videoId=item.id?.videoId,snippet=item.snippet;
       if(typeof videoId!=="string"||typeof snippet!=="object"||snippet===null)return[];

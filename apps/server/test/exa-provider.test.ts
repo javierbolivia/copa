@@ -36,3 +36,19 @@ describe("ExaProvider", () => {
     await provider.search("x").catch((error: unknown) => expect(error instanceof Error ? error.message : "").not.toContain("exa-secret-value"));
   });
 });
+
+
+  it("expone discovery limitado con texto opcional", async () => {
+    const provider = new ExaProvider({
+      apiKey: "exa-test-key",
+      fetch: async () => new Response(JSON.stringify({
+        results: Array.from({ length: 6 }, (_, index) => ({ id: `id-${index}`, url: `https://example.test/${index}`, title: `R${index}`, text: "texto" })),
+        costDollars: 0.02,
+      }), { status: 200 }),
+    });
+
+    await expect(provider.discover("consulta", { maxResults: 99 })).resolves.toMatchObject({
+      results: Array.from({ length: 5 }, (_, index) => expect.objectContaining({ id: `id-${index}`, text: "texto" })),
+      metadata: { resultCount: 5, estimatedCost: 0.02 },
+    });
+  });

@@ -70,7 +70,7 @@ describe("DeepSeekProvider", () => {
     });
 
     await expect(provider.generate({ provider: "deepseek", model: provider.effectiveModel, systemInstructions: "x", input: "x" })).rejects.toMatchObject({
-      code: "authentication_failed",
+      code: "http_auth_error",
       status: 401,
       message: expect.not.stringContaining("deepseek-secret-value"),
     });

@@ -53,6 +53,10 @@ const firecrawl = new FirecrawlProvider({
 const deepSeek = new DeepSeekProvider({
   ...(process.env.DEEPSEEK_API_KEY ? { apiKey: process.env.DEEPSEEK_API_KEY } : {}),
   model: DEEPSEEK_DEFAULT_MODEL,
+  // Thinking mode is enabled by default and its chain of thought consumes the
+  // same completion budget, so a connectivity probe disables it to keep the
+  // bounded max_tokens sufficient for an actual final answer.
+  thinking: "disabled",
 });
 
 const [exaResult, firecrawlResult, deepSeekResult] = await Promise.all([
@@ -95,7 +99,7 @@ const [exaResult, firecrawlResult, deepSeekResult] = await Promise.all([
     model: DEEPSEEK_DEFAULT_MODEL,
     systemInstructions: "Responde de forma concisa.",
     input: "OK",
-    maxOutputTokens: 8,
+    maxOutputTokens: 32,
   }).then((result): CheckResult => ({
     configured: deepSeek.configured,
     success: true,

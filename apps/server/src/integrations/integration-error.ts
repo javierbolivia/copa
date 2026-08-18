@@ -8,7 +8,17 @@ export type IntegrationErrorCode =
   | "http_error"
   | "invalid_response"
   | "schema_mismatch"
-  | "fixture_missing";
+  | "fixture_missing"
+  // Granular categories used by clients that can distinguish the failing stage.
+  | "transport_error"
+  | "http_auth_error"
+  | "http_balance_error"
+  | "http_rate_limit"
+  | "http_provider_error"
+  | "non_json_response"
+  | "invalid_schema"
+  | "empty_completion"
+  | "unsupported_model";
 
 export interface IntegrationErrorOptions {
   readonly status?: number;

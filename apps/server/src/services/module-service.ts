@@ -9,6 +9,7 @@ import type { ProjectSettingsRepository } from "../repositories/project-settings
 import type { WorkflowRepository } from "../repositories/workflow-repository.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { GeminiProvider } from "../integrations/gemini-provider.js";
+import { DEEPSEEK_DEFAULT_MODEL, type DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import type { FileExporterService } from "./file-exporter-service.js";
 import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
@@ -42,6 +43,7 @@ export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 export interface ModuleServiceOptions {
   readonly openAI: OpenAIProvider;
   readonly gemini: GeminiProvider;
+  readonly deepSeek?: DeepSeekProvider;
   readonly economyModel?: string;
   readonly powerfulModel?: string;
   readonly economyInputCostPerMillion?: number;
@@ -71,7 +73,7 @@ export class ModuleService {
     private readonly options: ModuleServiceOptions,
   ) {}
 
-  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; defaultProvider: "mock" | "openai" | "gemini" } {
+  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; defaultProvider: "mock" | "openai" | "gemini" } {
     const projectSettings = projectId ? this.settings.get(projectId) : undefined;
     return {
       openai: {
@@ -80,6 +82,7 @@ export class ModuleService {
         powerfulModel: projectSettings?.powerfulModel?.trim() || this.options.powerfulModel || "gpt-5",
       },
       gemini:{configured:this.options.gemini.configured,economyModel:GEMINI_ANALYSIS_MODEL,powerfulModel:GEMINI_ANALYSIS_MODEL},
+      deepseek:{configured:this.options.deepSeek?.configured??false,model:this.options.deepSeek?.effectiveModel??DEEPSEEK_DEFAULT_MODEL},
       defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
     };
   }
@@ -137,14 +140,18 @@ export class ModuleService {
     if (!definition) throw new Error("Módulo desconocido.");
     const projectSettings = this.settings.get(projectId);
     const requestedProvider = provider ?? projectSettings?.preferredLlmProvider ?? "mock";
-    if (requestedProvider !== "mock" && requestedProvider !== "openai"&&requestedProvider!=="gemini") {
+    if (requestedProvider !== "mock" && requestedProvider !== "openai"&&requestedProvider!=="gemini"&&requestedProvider!=="deepseek") {
       throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
+    }
+    if (requestedProvider === "deepseek" && key !== "research") {
+      throw new Error("DeepSeek sólo está disponible para Research.");
     }
     const selectedProvider = key === "sources" ? "mock" : requestedProvider;
     if (selectedProvider === "openai" && !this.options.openAI.configured) {
       throw new Error("OpenAI no esta configurado. Define OPENAI_API_KEY o ejecuta con el proveedor Mock.");
     }
     if(selectedProvider==="gemini"&&!this.options.gemini.configured)throw new Error("Gemini no está configurado. Define GEMINI_API_KEY o ejecuta con Demo / Mock.");
+    if(selectedProvider==="deepseek"&&!this.options.deepSeek?.configured)throw new Error("DeepSeek no está configurado. Define DEEPSEEK_API_KEY o ejecuta con el proveedor Mock.");
     const startedAt = Date.now();
 
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
@@ -195,14 +202,14 @@ export class ModuleService {
     let providerInput: Record<string, unknown> | undefined;
     let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
-    if ((selectedProvider === "openai"||selectedProvider==="gemini") && key !== "sources") {
+    if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
       const prompt = getModulePrompt(key);
       if (!prompt) throw new Error(`No existe un prompt activo para el modulo ${key}.`);
       agentKey = prompt.agentKey;
       promptVersion = prompt.versionHash;
       promptHash = prompt.hash;
       promptPath = prompt.relativePath;
-      model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:resolveModel(prompt.modelTier, projectSettings, this.options);
+      model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:resolveModel(prompt.modelTier, projectSettings, this.options);
       providerInput = {
         project: { name: project.name, niche: project.niche }, settings: projectSettings,
         moduleKey: key, parentOutputs, evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
@@ -222,7 +229,7 @@ export class ModuleService {
         providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
         usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
       }
-      try{generated=await (selectedProvider==="gemini"?this.options.gemini:this.options.openAI).generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});}
+      try{generated=await (selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:this.options.openAI).generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});}
       catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`;this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,error instanceof Error?error.name:"generation_error",message,now,now);throw error;}
       output = generated.output;
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;

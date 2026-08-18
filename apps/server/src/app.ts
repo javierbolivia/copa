@@ -28,6 +28,7 @@ import {
 } from "./integrations/openai-provider.js";
 import type { ModuleServiceOptions } from "./services/module-service.js";
 import { GeminiProvider, type GeminiProviderOptions } from "./integrations/gemini-provider.js";
+import { DeepSeekProvider, type DeepSeekProviderOptions } from "./integrations/deepseek-provider.js";
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
 import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
@@ -47,7 +48,8 @@ export interface CreateAppOptions {
   readonly serveFrontend?: boolean;
   readonly openAI?: OpenAIProviderOptions;
   readonly gemini?: GeminiProviderOptions;
-  readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini">;
+  readonly deepSeek?: DeepSeekProviderOptions;
+  readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini"|"deepSeek">;
 }
 
 export async function createApp(
@@ -77,6 +79,11 @@ export async function createApp(
     ...options.openAI,
   });
   const gemini=new GeminiProvider({...(process.env.GEMINI_API_KEY?{apiKey:process.env.GEMINI_API_KEY}:{}),...options.gemini});
+  const deepSeek = new DeepSeekProvider({
+    ...(process.env.DEEPSEEK_API_KEY ? { apiKey: process.env.DEEPSEEK_API_KEY } : {}),
+    ...(process.env.DEEPSEEK_MODEL?.trim() ? { model: process.env.DEEPSEEK_MODEL } : {}),
+    ...options.deepSeek,
+  });
   const knowledge = new KnowledgeRepository(database);
   const vocabulary = new SemanticVocabularyRepository(database);
   const modules = new ModuleService(
@@ -90,6 +97,7 @@ export async function createApp(
     {
       openAI,
       gemini,
+      deepSeek,
       ...(process.env.OPENAI_ECONOMY_MODEL
         ? { economyModel: process.env.OPENAI_ECONOMY_MODEL }
         : {}),

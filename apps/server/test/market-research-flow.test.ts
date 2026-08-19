@@ -1,11 +1,17 @@
 import {
   MARKET_RESEARCH_BUDGETS,
+  filterMarketResearchSignalEvidence,
   groupMarketResearchFindings,
   marketResearchAnalyzerLabel,
+  marketResearchEvidenceFilterLabel,
+  marketResearchEvidenceFilters,
   marketResearchFindingCategoryLabel,
   marketResearchFindingEvidence,
   marketResearchProviderLabel,
   marketResearchProviderStateLabel,
+  marketResearchSignalEvidence,
+  marketResearchSignalSourceLabel,
+  researchTopicDefault,
   summarizeMarketResearchRun,
   type Generation,
   type LlmGenerateRequest,
@@ -456,5 +462,135 @@ describe("Phase 20.5 persisted Market Research reads", () => {
     expect(JSON.stringify(latest)).not.toContain("prompt");
     expect(primary.generate).not.toHaveBeenCalled();
     expect(discover).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("Phase 20.6 research topic sync and evidence traceability", () => {
+  const persisted: MarketResearchRun = {
+    runId: "01a018ce-d56f-74c3-b925-ab2b4a8aabae",
+    projectId: "019ff678-1319-71c2-a129-3294c901efbc",
+    topic: "huerto de balcón",
+    startedAt: referenceAt,
+    completedAt: referenceAt,
+    durationMs: 900,
+    providers: [
+      { provider: "youtube", state: "available", requested: 10, returned: 2, valid: 2, unique: 2, duplicates: 0, analyzed: 2, scrapedPages: 0, latencyMs: 10, failure: null, usage: null, credits: null },
+      { provider: "tavily", state: "available", requested: 5, returned: 1, valid: 1, unique: 1, duplicates: 0, analyzed: 1, scrapedPages: 0, latencyMs: 11, failure: null, usage: 1, credits: null },
+    ],
+    metrics: { requestedSignals: 15, returnedSignals: 3, validSignals: 3, uniqueSignals: 3, duplicatesRemoved: 0, analyzedSignals: 3, discardedByAnalysisBudget: 0, deepenedSignals: 0 },
+    analysis: { analyzer: "deepseek", model: DEEPSEEK_DEFAULT_MODEL, fallbackUsed: false, primaryFailure: null, analyzedSignals: 3, rejectedClaims: 0, inputTokens: 10, outputTokens: 5, failure: null },
+    findings: [
+      { id: "F1", category: "pains", statement: "El sustrato se seca demasiado rápido", customerLanguage: "se seca en un día", signalIds: ["Y1", "T1"], supportingSignals: 2, independentProviders: 2, domainDiversity: 2, recentSignals: 2, repeatedEvidence: true, contradictingSignals: 0, confidence: "cross_provider" },
+      { id: "F2", category: "risks", statement: "Riesgo de plagas en macetas", customerLanguage: null, signalIds: ["Y1"], supportingSignals: 1, independentProviders: 1, domainDiversity: 1, recentSignals: 1, repeatedEvidence: false, contradictingSignals: 0, confidence: "single_signal" },
+    ],
+    signals: [
+      signal(1, { id: "Y1", provider: "youtube", source: "youtube", sourceId: "yt:abc", url: "https://www.youtube.com/watch?v=abc", text: "El sustrato se seca en un día en mi balcón" }),
+      signal(2, { id: "Y2", provider: "youtube", source: "youtube", sourceId: null, url: null, text: "Comentario capturado sin citar" }),
+      signal(3, { id: "T1", provider: "tavily", source: "web", url: "https://tavily.test/riego", text: "Guía de riego para huerto de balcón" }),
+    ],
+  };
+
+  it("usa el Research Focus activo como tema por defecto en ambos campos", () => {
+    expect(researchTopicDefault("huerto de balcón", "", false)).toBe("huerto de balcón");
+    expect(researchTopicDefault("  huerto de balcón  ", "", false)).toBe("huerto de balcón");
+    // The same pure default seeds Fuentes Automáticas and the manual YouTube field.
+    expect(researchTopicDefault("huerto de balcón", "", false)).toBe(researchTopicDefault("huerto de balcón", "", false));
+  });
+
+  it("no arrastra el tema del proyecto anterior ni pisa la edición del usuario", () => {
+    // A project switch resets local state, so the previous topic cannot survive.
+    expect(researchTopicDefault(null, "", false)).toBe("");
+    expect(researchTopicDefault("", "", false)).toBe("");
+    // While the field is being edited the user's text always wins.
+    expect(researchTopicDefault("huerto de balcón", "tomates en maceta", true)).toBe("tomates en maceta");
+    expect(researchTopicDefault("huerto de balcón", "", true)).toBe("");
+    // Without an active focus a pristine field keeps whatever it already had.
+    expect(researchTopicDefault(null, "tomates en maceta", false)).toBe("tomates en maceta");
+  });
+
+  it("agrupa la evidencia persistida por proveedor y expone YouTube sin proveedores", () => {
+    expect(marketResearchEvidenceFilters(persisted)).toEqual(["all", "youtube", "tavily"]);
+    expect(marketResearchEvidenceFilters({ ...persisted, signals: [] })).toEqual([]);
+    expect(marketResearchEvidenceFilterLabel("all")).toBe("Todos");
+    expect(marketResearchEvidenceFilterLabel("youtube")).toBe("YouTube");
+
+    const evidence = marketResearchSignalEvidence(persisted);
+    expect(filterMarketResearchSignalEvidence(evidence, "all").map((item) => item.signal.id)).toEqual(["Y1", "Y2", "T1"]);
+    const youtube = filterMarketResearchSignalEvidence(evidence, "youtube");
+    expect(youtube.map((item) => item.signal.id)).toEqual(["Y1", "Y2"]);
+    expect(youtube[0]?.signal.url).toBe("https://www.youtube.com/watch?v=abc");
+    expect(marketResearchSignalSourceLabel(youtube[0]!.signal.source)).toBe("YouTube");
+    expect(filterMarketResearchSignalEvidence(evidence, "brave")).toEqual([]);
+  });
+
+  it("sólo declara citas deterministas y nunca inventa estado analizado por señal", () => {
+    const evidence = marketResearchSignalEvidence(persisted);
+    const [cited, captured, web] = evidence;
+    expect(cited).toMatchObject({ cited: true });
+    expect(cited?.citedBy.map((finding) => finding.id)).toEqual(["F1", "F2"]);
+    expect(cited?.categories.map(marketResearchFindingCategoryLabel)).toEqual(["Dolores", "Riesgos"]);
+    // Y2 is stored but no finding cites it: it stays "Capturada".
+    expect(captured).toMatchObject({ cited: false, citedBy: [], categories: [] });
+    expect(web?.categories).toEqual(["pains"]);
+    // Provider-level analyzed counts keep coming from persisted metrics only.
+    expect(persisted.providers.map((report) => report.analyzed)).toEqual([2, 1]);
+  });
+
+  it("renderiza con seguridad señales sin URL, sin sourceId o sin hallazgos", () => {
+    const sparse: MarketResearchRun = {
+      ...persisted,
+      findings: [],
+      signals: [signal(9, { id: "S9", sourceId: null, url: null, deepened: true })],
+    };
+    const evidence = marketResearchSignalEvidence(sparse);
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]).toMatchObject({ cited: false, categories: [] });
+    expect(evidence[0]?.signal.url).toBeNull();
+    expect(evidence[0]?.signal.sourceId).toBeNull();
+    expect(marketResearchEvidenceFilters(sparse)).toEqual(["all", "tavily"]);
+  });
+
+  it("mantiene el aislamiento por proyecto y la restauración latest/history intactas", async () => {
+    const [{ AppDatabase }, { ProjectRepository }, { MarketResearchService, MARKET_RESEARCH_AGENT_KEY }] = await Promise.all([
+      import("../src/database/database.js"),
+      import("../src/repositories/project-repository.js"),
+      import("../src/services/market-research-service.js"),
+    ]);
+    const database = new AppDatabase(":memory:");
+    try {
+      const projects = new ProjectRepository(database);
+      const balcony = projects.create({ name: "Huerto", niche: "Balcón" });
+      const other = projects.create({ name: "Fotos", niche: "Fotografía" });
+      const discover = vi.fn();
+      const primary = analyzer({ findings: [] });
+      const reader = new MarketResearchService(database, {
+        clients: { tavily: { name: "tavily", configured: true, discover: discover as WebDiscoveryProvider["discover"] } },
+        analyzers: { deepSeek: Object.assign(primary, { effectiveModel: DEEPSEEK_DEFAULT_MODEL }) },
+      });
+      const insert = (run: MarketResearchRun) => {
+        database.connection.prepare(`
+          INSERT INTO generations (
+            id, project_id, agent_key, provider, model, status, input_snapshot, output_data,
+            prompt_version, input_tokens, output_tokens, estimated_cost, duration_ms,
+            error_code, error_message, created_at, completed_at
+          ) VALUES (?, ?, ?, 'deepseek', 'deepseek-v4-flash', 'COMPLETED', '{}', ?, 'market-research-v1', 0, 0, 0, 1, NULL, NULL, ?, ?)
+        `).run(run.runId, run.projectId, MARKET_RESEARCH_AGENT_KEY, JSON.stringify(run), run.completedAt, run.completedAt);
+      };
+      insert({ ...persisted, runId: balcony.id, projectId: balcony.id });
+      insert({ ...persisted, runId: other.id, projectId: other.id, topic: "organización de fotografías digitales" });
+
+      const restored = reader.latest(balcony.id);
+      expect(restored?.topic).toBe("huerto de balcón");
+      expect(reader.history(balcony.id).map((item) => item.topic)).toEqual(["huerto de balcón"]);
+      expect(reader.latest(other.id)?.topic).toBe("organización de fotografías digitales");
+      // Evidence traceability is derived from the restored run, not from a new call.
+      expect(marketResearchSignalEvidence(restored!).filter((item) => item.cited).map((item) => item.signal.id)).toEqual(["Y1", "T1"]);
+      expect(filterMarketResearchSignalEvidence(marketResearchSignalEvidence(restored!), "youtube")).toHaveLength(2);
+      expect(discover).not.toHaveBeenCalled();
+      expect(primary.generate).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
   });
 });

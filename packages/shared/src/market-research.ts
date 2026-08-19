@@ -1,6 +1,6 @@
 import { Type, type Static } from "@sinclair/typebox";
 
-import { MarketSignalSourceSchema } from "./market-signal.js";
+import { MarketSignalSourceSchema, type MarketSignalSource } from "./market-signal.js";
 
 /** Acquisition providers wired into the real Research flow. */
 export const MARKET_RESEARCH_PROVIDERS = ["youtube", "tavily", "exa", "brave", "firecrawl"] as const;
@@ -328,4 +328,84 @@ export function marketResearchFindingEvidence(
 ): readonly MarketResearchSignal[] {
   const referenced = new Set(finding.signalIds);
   return run.signals.filter((signal) => referenced.has(signal.id));
+}
+
+const SIGNAL_SOURCE_LABELS: Readonly<Record<MarketSignalSource, string>> = {
+  youtube: "YouTube",
+  web: "Web",
+  google: "Google",
+  qa_forum: "Foro de preguntas",
+  competitor_ad: "Anuncio de competidor",
+  review: "Reseña",
+  reddit: "Reddit",
+};
+
+export function marketResearchSignalSourceLabel(source: MarketSignalSource): string {
+  return SIGNAL_SOURCE_LABELS[source];
+}
+
+/** "Todos" plus one entry per acquisition provider, for the evidence explorer. */
+export const MARKET_RESEARCH_EVIDENCE_FILTERS = ["all", ...MARKET_RESEARCH_PROVIDERS] as const;
+export type MarketResearchEvidenceFilter = (typeof MARKET_RESEARCH_EVIDENCE_FILTERS)[number];
+
+export function marketResearchEvidenceFilterLabel(filter: MarketResearchEvidenceFilter): string {
+  return filter === "all" ? "Todos" : marketResearchProviderLabel(filter);
+}
+
+/**
+ * One persisted signal plus the findings that literally cite it. The citation
+ * link is read from stored `signalIds` only, so nothing is inferred: a signal
+ * with no citing finding is reported as captured, never as analyzed.
+ */
+export interface MarketResearchSignalEvidence {
+  readonly signal: MarketResearchSignal;
+  readonly citedBy: readonly MarketResearchFinding[];
+  readonly categories: readonly MarketResearchFindingCategory[];
+  readonly cited: boolean;
+}
+
+/** Deterministic signal -> finding traceability derived from the persisted run. */
+export function marketResearchSignalEvidence(
+  run: MarketResearchRun,
+): readonly MarketResearchSignalEvidence[] {
+  return run.signals.map((signal) => {
+    const citedBy = run.findings.filter((finding) => finding.signalIds.includes(signal.id));
+    const categories = MARKET_RESEARCH_FINDING_CATEGORIES.filter((category) =>
+      citedBy.some((finding) => finding.category === category),
+    );
+    return { signal, citedBy, categories, cited: citedBy.length > 0 };
+  });
+}
+
+/** Filters persisted evidence by provider; "all" preserves run order. */
+export function filterMarketResearchSignalEvidence(
+  evidence: readonly MarketResearchSignalEvidence[],
+  filter: MarketResearchEvidenceFilter,
+): readonly MarketResearchSignalEvidence[] {
+  return filter === "all" ? evidence : evidence.filter((item) => item.signal.provider === filter);
+}
+
+/** Providers that actually persisted at least one signal in this run. */
+export function marketResearchEvidenceFilters(
+  run: MarketResearchRun,
+): readonly MarketResearchEvidenceFilter[] {
+  const providers = MARKET_RESEARCH_PROVIDERS.filter((provider) =>
+    run.signals.some((signal) => signal.provider === provider),
+  );
+  return providers.length === 0 ? [] : ["all", ...providers];
+}
+
+/**
+ * The active Research Focus is the canonical default for research topic inputs.
+ * It only seeds a pristine field: once the user edits the input, their text wins
+ * until the project changes and the caller resets its local state.
+ */
+export function researchTopicDefault(
+  focus: string | null,
+  current: string,
+  edited: boolean,
+): string {
+  if (edited) return current;
+  const trimmed = focus === null ? "" : focus.trim();
+  return trimmed === "" ? current : trimmed;
 }

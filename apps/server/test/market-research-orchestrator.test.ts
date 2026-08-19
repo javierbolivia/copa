@@ -91,7 +91,7 @@ describe("Phase 20.4 market research acquisition", () => {
     expect(result.providers.map((report) => report.provider)).toEqual(["youtube", "tavily", "exa", "brave", "firecrawl"]);
     expect(result.providers.every((report) => report.state === "available" && report.failure === null)).toBe(true);
     expect(result.providers.find((report) => report.provider === "tavily")).toMatchObject({ requested: 5, returned: 5, valid: 5, unique: 5 });
-    expect(result.providers.find((report) => report.provider === "youtube")).toMatchObject({ requested: 10, returned: 3, valid: 3, unique: 3 });
+    expect(result.providers.find((report) => report.provider === "youtube")).toMatchObject({ requested: MARKET_RESEARCH_BUDGETS.youtubeTargetComments, returned: 3, valid: 3, unique: 3 });
     expect(result.metrics).toMatchObject({ validSignals: 23, uniqueSignals: 23, analyzedSignals: 20, discardedByAnalysisBudget: 3, duplicatesRemoved: 0 });
     expect(result.signals).toHaveLength(MARKET_RESEARCH_BUDGETS.analysisSignals);
 
@@ -99,7 +99,7 @@ describe("Phase 20.4 market research acquisition", () => {
     expect(JSON.parse(String((tavilyClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ max_results: 5 });
     expect(JSON.parse(String((exaClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ numResults: 5 });
     expect((braveClient.fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.get("count")).toBe("5");
-    expect(youtube.listCommentThreads).toHaveBeenCalledWith({ videoId: "dQw4w9WgXcQ", maxResults: 10 });
+    expect(youtube.listCommentThreads).toHaveBeenCalledWith({ videoId: "dQw4w9WgXcQ", maxResults: MARKET_RESEARCH_BUDGETS.youtubeCommentPageSize });
     const firecrawlSearch = firecrawlClient.fetchMock.mock.calls.find((call) => !String(call[0]).includes("/scrape")) as unknown as [string, RequestInit];
     expect(JSON.parse(String(firecrawlSearch[1].body))).toMatchObject({ limit: 5, sources: ["web"] });
 

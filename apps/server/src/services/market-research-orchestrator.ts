@@ -15,10 +15,11 @@ import type { WebDiscoveryProvider, WebDiscoveryResponse } from "../integrations
 import type { YouTubeAdapter } from "../integrations/youtube-adapter.js";
 import { marketSignalDedupeKey } from "./market-intelligence-benchmark.js";
 import { adaptWebDiscoveryMarketSignals } from "./web-market-signal-adapter.js";
-import { acquireYouTubeBenchmarkSignals } from "./youtube-market-signal-benchmark-acquisition.js";
+import { acquireYouTubeDeepResearchSignals } from "./youtube-deep-research-acquisition.js";
 
 export type MarketResearchYouTubeClient =
   Pick<YouTubeAdapter, "searchVideos" | "getVideo" | "listCommentThreads">
+  & Partial<Pick<YouTubeAdapter, "getVideos" | "getChannels" | "listReplies">>
   & { readonly configured: boolean };
 
 /** Firecrawl is the only provider that also deepens a single explicit URL. */
@@ -152,7 +153,7 @@ async function acquireProvider(
       return { ...empty, state: "not_configured", latencyMs: 0, failure: null };
     }
     try {
-      const acquisition = await acquireYouTubeBenchmarkSignals(youtube, { query: input.topic, maxSignals: requested });
+      const acquisition = await acquireYouTubeDeepResearchSignals(youtube, { topic: input.topic });
       return {
         ...empty,
         state: "available",

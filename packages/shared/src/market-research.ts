@@ -27,7 +27,25 @@ export type MarketResearchProviderState = Static<typeof MarketResearchProviderSt
  * server-side before any provider I/O; the UI can only narrow the provider set.
  */
 export const MARKET_RESEARCH_BUDGETS = {
-  youtubeSignals: 10,
+  /**
+   * Adaptive YouTube acquisition. `youtubeTargetComments` is an early-stop
+   * condition; every `Max` value is a hard ceiling enforced before I/O.
+   * `youtubeTargetVideos` is the reported acquisition target: the enforced
+   * bound on selected videos is `youtubeMaxVideos`.
+   */
+  youtubeTargetVideos: 30,
+  youtubeMaxVideos: 40,
+  youtubeMaxVideosPerChannel: 3,
+  /** Candidate pool ceiling: wide enough for channel diversity, still bounded. */
+  youtubeMaxCandidates: 120,
+  youtubeSearchResultsPerQuery: 10,
+  youtubeTargetComments: 300,
+  youtubeMaxComments: 500,
+  youtubeMaxCommentsPerVideo: 25,
+  youtubeCommentPageSize: 50,
+  youtubeMaxCommentPagesPerVideo: 2,
+  youtubeMaxRepliesPerThread: 3,
+  youtubeMaxReplyRequests: 10,
   tavilyResults: 5,
   exaResults: 5,
   braveResults: 5,
@@ -44,7 +62,8 @@ export const MARKET_RESEARCH_TOPIC_MAX_LENGTH = 240;
 /** Discovery budget per acquisition provider, used by the server and reported to the UI. */
 export function marketResearchProviderBudget(provider: MarketResearchProvider): number {
   switch (provider) {
-    case "youtube": return MARKET_RESEARCH_BUDGETS.youtubeSignals;
+    // YouTube is bounded by retained comments, not by a single search page.
+    case "youtube": return MARKET_RESEARCH_BUDGETS.youtubeTargetComments;
     case "tavily": return MARKET_RESEARCH_BUDGETS.tavilyResults;
     case "exa": return MARKET_RESEARCH_BUDGETS.exaResults;
     case "brave": return MARKET_RESEARCH_BUDGETS.braveResults;

@@ -23,6 +23,20 @@ export interface YouTubeVideo {
   readonly duration?: string;
   readonly viewCount?: number;
   readonly likeCount?: number;
+  readonly tags?: readonly string[];
+  readonly categoryId?: string;
+  /** Only present when YouTube itself declares it; never inferred. */
+  readonly defaultAudioLanguage?: string;
+  readonly defaultLanguage?: string;
+}
+
+/** Channel metadata used to describe a video's origin; fields are optional by design. */
+export interface YouTubeChannel {
+  readonly channelId: string;
+  readonly title: string;
+  /** Declared channel country. Absent when YouTube does not publish one. */
+  readonly country?: string;
+  readonly defaultLanguage?: string;
 }
 
 export interface YouTubeSearchResult { readonly videoId:string; readonly title:string; readonly description:string; readonly channelId:string; readonly channelTitle:string; readonly publishedAt:string; readonly thumbnailUrl?:string; }
@@ -156,7 +170,34 @@ export class YouTubeAdapter {
       ...(typeof (video as {contentDetails?:Record<string,unknown>}).contentDetails?.duration==="string"?{duration:(video as {contentDetails:Record<string,string>}).contentDetails.duration}:{}),
       ...(video.statistics?.viewCount===undefined?{}:{viewCount:count(video.statistics.viewCount)}),
       ...(video.statistics?.likeCount===undefined?{}:{likeCount:count(video.statistics.likeCount)}),
+      // Declared metadata only: absent fields stay absent instead of being inferred.
+      ...(Array.isArray(snippet.tags)?{tags:snippet.tags.filter((tag):tag is string=>typeof tag==="string")}:{}),
+      ...(typeof snippet.categoryId==="string"?{categoryId:snippet.categoryId}:{}),
+      ...(typeof snippet.defaultAudioLanguage==="string"?{defaultAudioLanguage:snippet.defaultAudioLanguage}:{}),
+      ...(typeof snippet.defaultLanguage==="string"?{defaultLanguage:snippet.defaultLanguage}:{}),
     };
+  }
+
+  /**
+   * One bounded `channels.list` lookup for up to fifty channels. Country and
+   * language are reported only when YouTube declares them.
+   */
+  async getChannels(channelIds: readonly string[]): Promise<YouTubeChannel[]> {
+    const ids = [...new Set(channelIds)].slice(0, 50);
+    if (ids.length === 0) return [];
+    const response = await this.get("channels", { part: "snippet", id: ids.join(",") });
+    return (Array.isArray(response.items) ? response.items : []).flatMap((raw): YouTubeChannel[] => {
+      if (typeof raw !== "object" || raw === null) return [];
+      const item = raw as { id?: unknown; snippet?: Record<string, unknown> };
+      const snippet = item.snippet;
+      if (typeof item.id !== "string" || typeof snippet !== "object" || snippet === null) return [];
+      return [{
+        channelId: item.id,
+        title: typeof snippet.title === "string" ? snippet.title : "Canal desconocido",
+        ...(typeof snippet.country === "string" ? { country: snippet.country } : {}),
+        ...(typeof snippet.defaultLanguage === "string" ? { defaultLanguage: snippet.defaultLanguage } : {}),
+      }];
+    });
   }
 
   async listCommentThreads(input: { videoId: string; pageToken?: string; maxResults?: number; order?: "relevance" | "time" }): Promise<YouTubePage<YouTubeThread>> {

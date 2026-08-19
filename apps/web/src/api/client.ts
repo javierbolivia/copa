@@ -244,6 +244,10 @@ export const api = {
   setSourceAnalysis: (id:string,sourceId:string,included:boolean) => request<import("@our-platform/shared").Source>(`/api/projects/${id}/sources/${sourceId}/analysis`,json("PUT",{included})),
   marketResearchStatus: (id: string) =>
     request<MarketResearchStatus>(`/api/projects/${id}/market-research/status`),
+  latestMarketResearch: (id: string) =>
+    request<MarketResearchRun | null>(`/api/projects/${id}/market-research/latest`),
+  marketResearchHistory: (id: string) =>
+    request<import("@our-platform/shared").MarketResearchHistory>(`/api/projects/${id}/market-research/history`),
   runMarketResearch: (id: string, input: RunMarketResearchInput) =>
     request<MarketResearchRun>(`/api/projects/${id}/market-research`, json("POST", input)),
   researchFocus: (id:string) => request<{value:string|null;source:"user"|"youtube_query"|null}>(`/api/projects/${id}/research-focus`),

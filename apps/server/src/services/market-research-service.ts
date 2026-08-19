@@ -2,11 +2,14 @@ import {
   MARKET_RESEARCH_BUDGETS,
   MARKET_RESEARCH_PROVIDERS,
   marketResearchProviderBudget,
+  MarketResearchRunSchema,
   type MarketResearchProvider,
   type MarketResearchProviderState,
   type MarketResearchRun,
   type MarketResearchStatus,
 } from "@our-platform/shared";
+import { FormatRegistry } from "@sinclair/typebox";
+import { Value } from "@sinclair/typebox/value";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -44,6 +47,100 @@ export interface RunMarketResearchOptions {
 
 function providerState(configured: boolean | undefined): MarketResearchProviderState {
   return configured === true ? "available" : "not_configured";
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0 ? 29 : 28;
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
+/**
+ * Strict RFC 3339 date-time check. Date.parse is deliberately avoided because it
+ * silently normalizes impossible calendar dates (e.g. 2026-02-29), which would
+ * let a corrupted ledger timestamp pass validation.
+ */
+function isIsoDateTime(value: string): boolean {
+  const match = DATE_TIME_PATTERN.exec(value);
+  if (match === null) return false;
+  const [, year, month, day, hour, minute, second, , offsetHour, offsetMinute] = match;
+  const numericMonth = Number(month);
+  const numericDay = Number(day);
+  const numericHour = Number(hour);
+  const numericMinute = Number(minute);
+  const numericSecond = Number(second);
+  if (numericMonth < 1 || numericMonth > 12) return false;
+  if (numericDay < 1 || numericDay > daysInMonth(Number(year), numericMonth)) return false;
+  if (numericHour > 23 || numericMinute > 59) return false;
+  // Second 60 is only valid as a leap second at 23:59 UTC-equivalent minutes.
+  if (numericSecond > 60 || (numericSecond === 60 && numericMinute !== 59)) return false;
+  if (offsetHour !== undefined && (Number(offsetHour) > 23 || Number(offsetMinute) > 59)) return false;
+  return true;
+}
+
+// Value.Check deliberately relies on an application format registry. Register
+// only the standard formats used by the persisted shared contract.
+if (!FormatRegistry.Has("uuid")) FormatRegistry.Set("uuid", (value) => UUID_PATTERN.test(value));
+if (!FormatRegistry.Has("date-time")) FormatRegistry.Set("date-time", isIsoDateTime);
+
+function restorePersistedMarketResearchRun(
+  outputData: string | null,
+  projectId: string,
+  generationId: string,
+): MarketResearchRun | null {
+  if (outputData === null) return null;
+  try {
+    const candidate: unknown = JSON.parse(outputData);
+    if (!Value.Check(MarketResearchRunSchema, candidate)) return null;
+    const run = candidate as MarketResearchRun;
+    if (run.projectId !== projectId || run.runId !== generationId) return null;
+
+    // Explicit projection prevents legacy or manually altered ledger fields from
+    // becoming an accidental public response, even when the JSON is otherwise valid.
+    return {
+      runId: run.runId,
+      projectId: run.projectId,
+      topic: run.topic,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      durationMs: run.durationMs,
+      providers: run.providers.map((report) => ({
+        provider: report.provider, state: report.state, requested: report.requested,
+        returned: report.returned, valid: report.valid, unique: report.unique,
+        duplicates: report.duplicates, analyzed: report.analyzed, scrapedPages: report.scrapedPages,
+        latencyMs: report.latencyMs, failure: report.failure, usage: report.usage, credits: report.credits,
+      })),
+      metrics: {
+        requestedSignals: run.metrics.requestedSignals, returnedSignals: run.metrics.returnedSignals,
+        validSignals: run.metrics.validSignals, uniqueSignals: run.metrics.uniqueSignals,
+        duplicatesRemoved: run.metrics.duplicatesRemoved, analyzedSignals: run.metrics.analyzedSignals,
+        discardedByAnalysisBudget: run.metrics.discardedByAnalysisBudget, deepenedSignals: run.metrics.deepenedSignals,
+      },
+      analysis: {
+        analyzer: run.analysis.analyzer, model: run.analysis.model, fallbackUsed: run.analysis.fallbackUsed,
+        primaryFailure: run.analysis.primaryFailure, analyzedSignals: run.analysis.analyzedSignals,
+        rejectedClaims: run.analysis.rejectedClaims, inputTokens: run.analysis.inputTokens,
+        outputTokens: run.analysis.outputTokens, failure: run.analysis.failure,
+      },
+      findings: run.findings.map((finding) => ({
+        id: finding.id, category: finding.category, statement: finding.statement,
+        customerLanguage: finding.customerLanguage, signalIds: [...finding.signalIds],
+        supportingSignals: finding.supportingSignals, independentProviders: finding.independentProviders,
+        domainDiversity: finding.domainDiversity, recentSignals: finding.recentSignals,
+        repeatedEvidence: finding.repeatedEvidence, contradictingSignals: finding.contradictingSignals,
+        confidence: finding.confidence,
+      })),
+      signals: run.signals.map((signal) => ({
+        id: signal.id, provider: signal.provider, source: signal.source, sourceId: signal.sourceId,
+        url: signal.url, capturedAt: signal.capturedAt, text: signal.text, deepened: signal.deepened,
+      })),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -142,6 +239,38 @@ export class MarketResearchService {
    * tables or migrations. Only normalized, bounded run data is stored: no raw
    * provider payloads, headers or credentials.
    */
+  /**
+   * Reads only completed Market Research ledger entries. This path is deliberately
+   * isolated from acquisition and semantic mining, so restoring a saved run can
+   * never invoke a provider or an LLM.
+   */
+  latest(projectId: string): MarketResearchRun | null {
+    return this.history(projectId, 1)[0] ?? null;
+  }
+
+  /**
+   * Returns at most ten validated saved runs. The scan is intentionally bounded
+   * but tolerates malformed legacy rows so an older valid run can still restore.
+   */
+  history(projectId: string, limit = 10): readonly MarketResearchRun[] {
+    const safeLimit = Math.min(Math.max(limit, 1), 10);
+    const rows = this.database.connection.prepare(`
+      SELECT id, output_data
+      FROM generations
+      WHERE project_id = ? AND agent_key = ? AND status = 'COMPLETED'
+      ORDER BY completed_at DESC, created_at DESC, id DESC
+      LIMIT 50
+    `).all(projectId, MARKET_RESEARCH_AGENT_KEY) as Array<{ id: string; output_data: string | null }>;
+
+    const runs: MarketResearchRun[] = [];
+    for (const row of rows) {
+      const run = restorePersistedMarketResearchRun(row.output_data, projectId, row.id);
+      if (run !== null) runs.push(run);
+      if (runs.length === safeLimit) break;
+    }
+    return runs;
+  }
+
   private persist(run: MarketResearchRun): void {
     const inputTokens = run.analysis.inputTokens ?? 0;
     const outputTokens = run.analysis.outputTokens ?? 0;

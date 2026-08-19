@@ -170,6 +170,12 @@ export const MarketResearchRunSchema = Type.Object({
 });
 export type MarketResearchRun = Static<typeof MarketResearchRunSchema>;
 
+/** Bounded, safe response used to restore saved Market Research runs. */
+export const MarketResearchHistorySchema = Type.Object({
+  runs: Type.Array(MarketResearchRunSchema, { maxItems: 10 }),
+}, { additionalProperties: false });
+export type MarketResearchHistory = Static<typeof MarketResearchHistorySchema>;
+
 export const MarketResearchProviderStatusSchema = Type.Object({
   provider: MarketResearchProviderSchema,
   state: MarketResearchProviderStateSchema,

@@ -332,3 +332,129 @@ describe("Phase 20.4 Research UI derivations", () => {
     expect(marketResearchFindingEvidence(run, run.findings[1]!).map((item) => item.provider)).toEqual(["youtube"]);
   });
 });
+
+
+describe("Phase 20.5 persisted Market Research reads", () => {
+  let app: Awaited<ReturnType<typeof createApp>> | undefined;
+
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+  });
+
+  it("restores only validated completed Market Research runs without provider or LLM calls", async () => {
+    const [{ AppDatabase }, { ProjectRepository }, { MarketResearchService, MARKET_RESEARCH_AGENT_KEY }] = await Promise.all([
+      import("../src/database/database.js"),
+      import("../src/repositories/project-repository.js"),
+      import("../src/services/market-research-service.js"),
+    ]);
+    const database = new AppDatabase(":memory:");
+    try {
+      const projects = new ProjectRepository(database);
+      const project = projects.create({ name: "Persistencia", niche: "Fotografía" });
+      const otherProject = projects.create({ name: "Aislado", niche: "Música" });
+      const noRunsProject = projects.create({ name: "Vacío", niche: "Cocina" });
+      const discover = vi.fn();
+      const primary = analyzer({ findings: [] });
+      const reader = new MarketResearchService(database, {
+        clients: { tavily: { name: "tavily", configured: true, discover: discover as WebDiscoveryProvider["discover"] } },
+        analyzers: { deepSeek: Object.assign(primary, { effectiveModel: DEEPSEEK_DEFAULT_MODEL }) },
+      });
+      const persistedRun = (runId: string, topic: string, completedAt: string, projectId = project.id): MarketResearchRun => ({
+        runId,
+        projectId,
+        topic,
+        startedAt: completedAt,
+        completedAt,
+        durationMs: 1,
+        providers: [{ provider: "tavily", state: "available", requested: 5, returned: 1, valid: 1, unique: 1, duplicates: 0, analyzed: 1, scrapedPages: 0, latencyMs: 1, failure: null, usage: null, credits: null }],
+        metrics: { requestedSignals: 5, returnedSignals: 1, validSignals: 1, uniqueSignals: 1, duplicatesRemoved: 0, analyzedSignals: 1, discardedByAnalysisBudget: 0, deepenedSignals: 0 },
+        analysis: { analyzer: "deepseek", model: DEEPSEEK_DEFAULT_MODEL, fallbackUsed: false, primaryFailure: null, analyzedSignals: 1, rejectedClaims: 0, inputTokens: 1, outputTokens: 1, failure: null },
+        findings: [],
+        signals: [signal(1)],
+      });
+      const insert = (run: MarketResearchRun, options: { status?: "COMPLETED"|"FAILED"|"RUNNING"; agentKey?: string; output?: string; generationProjectId?: string } = {}) => {
+        database.connection.prepare(`
+          INSERT INTO generations (
+            id, project_id, agent_key, provider, model, status, input_snapshot, output_data,
+            prompt_version, input_tokens, output_tokens, estimated_cost, duration_ms,
+            error_code, error_message, created_at, completed_at
+          ) VALUES (?, ?, ?, 'deepseek', 'deepseek-v4-flash', ?, ?, ?, 'market-research-v1', 0, 0, 0, 1, NULL, NULL, ?, ?)
+        `).run(
+          run.runId, options.generationProjectId ?? project.id, options.agentKey ?? MARKET_RESEARCH_AGENT_KEY,
+          options.status ?? "COMPLETED", JSON.stringify({ prompt: "prompt-not-returned" }), options.output ?? JSON.stringify(run),
+          run.completedAt, run.completedAt,
+        );
+      };
+
+      for (let index = 1; index <= 13; index += 1) {
+        const run = persistedRun(`run-${index}`, `Tema ${index}`, new Date(Date.UTC(2026, 0, index)).toISOString());
+        insert(run, index === 12 ? { output: JSON.stringify({ ...run, internalSecret: "must-not-leak", metrics: { ...run.metrics, providerHeader: "must-not-leak" } }) } : {});
+      }
+      const malformed = persistedRun("malformed", "Malformado", "2026-02-14T00:00:00.000Z");
+      insert(malformed, { output: "{not-json" });
+      // A corrupted but JSON-valid timestamp must be rejected, not normalized.
+      const impossibleDate = persistedRun("impossible-date", "Fecha imposible", "2026-02-20T00:00:00.000Z");
+      insert(impossibleDate, { output: JSON.stringify({ ...impossibleDate, startedAt: "2026-02-29T00:00:00Z" }) });
+      const mismatched = persistedRun("mismatched", "Otro proyecto", "2026-02-15T00:00:00.000Z", otherProject.id);
+      insert(mismatched);
+      insert(persistedRun("failed", "Fallido", "2026-02-16T00:00:00.000Z"), { status: "FAILED" });
+      insert(persistedRun("running", "En curso", "2026-02-17T00:00:00.000Z"), { status: "RUNNING" });
+      insert(persistedRun("unrelated", "No investigación", "2026-02-18T00:00:00.000Z"), { agentKey: "problems" });
+      insert(persistedRun("other", "Proyecto aislado", "2026-02-19T00:00:00.000Z", otherProject.id), { generationProjectId: otherProject.id });
+
+      expect(reader.latest(noRunsProject.id)).toBeNull();
+      expect(reader.history(noRunsProject.id)).toEqual([]);
+      const latest = reader.latest(project.id);
+      const history = reader.history(project.id, 200);
+      expect(latest).toMatchObject({ runId: "run-13", topic: "Tema 13", projectId: project.id });
+      expect(history).toHaveLength(10);
+      expect(history[0]).toMatchObject({ runId: "run-13" });
+      expect(history.every((run) => run.projectId === project.id && run.topic !== "Malformado" && run.topic !== "Fecha imposible" && run.topic !== "Otro proyecto" && run.topic !== "Fallido" && run.topic !== "En curso" && run.topic !== "No investigación")).toBe(true);
+      // Valid UTC and offset timestamps still restore; only impossible dates are skipped.
+      expect(reader.history(project.id, 1)[0]?.startedAt).toBe("2026-01-13T00:00:00.000Z");
+      expect(JSON.stringify(history)).not.toContain("must-not-leak");
+      expect(JSON.stringify(history)).not.toContain("prompt-not-returned");
+      expect(discover).not.toHaveBeenCalled();
+      expect(primary.generate).not.toHaveBeenCalled();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns the latest persisted run through the read routes without re-running research", async () => {
+    const primary = analyzer(findingsOutput);
+    const discover = vi.fn(async () => ({
+      results: [
+        { url: "https://tavily.test/a", title: "A", text: "Los usuarios pierden tiempo buscando fotos duplicadas" },
+        { url: "https://tavily.test/b", title: "B", text: "Quieren una rutina mensual sostenible de respaldo" },
+      ],
+      metadata: { status: 200, resultCount: 2, usage: 2 },
+    }));
+    app = await createApp({
+      databasePath: ":memory:",
+      serveFrontend: false,
+      marketResearch: {
+        clients: { tavily: { name: "tavily", configured: true, discover: discover as WebDiscoveryProvider["discover"] } },
+        analyzers: { deepSeek: Object.assign(primary, { effectiveModel: DEEPSEEK_DEFAULT_MODEL }) },
+        now: () => new Date(referenceAt),
+      },
+    });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Ruta", niche: "Fotografía" } })).json<Project>();
+
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/latest` })).json()).toBeNull();
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/history` })).json()).toEqual({ runs: [] });
+    const created = (await app.inject({ method: "POST", url: `/api/projects/${project.id}/market-research`, payload: { topic: "fotos guardadas" } })).json<MarketResearchRun>();
+    primary.generate.mockClear();
+    discover.mockClear();
+
+    const latest = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/latest` })).json<MarketResearchRun>();
+    const history = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/history` })).json<{ runs: MarketResearchRun[] }>();
+    expect(latest).toEqual(created);
+    expect(history.runs).toEqual([created]);
+    expect(JSON.stringify(latest)).not.toContain("input_snapshot");
+    expect(JSON.stringify(latest)).not.toContain("prompt");
+    expect(primary.generate).not.toHaveBeenCalled();
+    expect(discover).not.toHaveBeenCalled();
+  });
+});

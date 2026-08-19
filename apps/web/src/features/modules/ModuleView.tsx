@@ -72,18 +72,18 @@ const PROVIDER_STATE_CLASS:Record<MarketResearchProviderState,string>={available
 function AutomaticSourcesPanel({projectId}:{projectId:string}) {
   const [status,setStatus]=useState<MarketResearchStatus|null>(null);
   const [topic,setTopic]=useState(""),[selected,setSelected]=useState<MarketResearchProvider[]>([]);
-  const [run,setRun]=useState<MarketResearchRun|null>(null),[running,setRunning]=useState(false),[phase,setPhase]=useState(0);
+  const [run,setRun]=useState<MarketResearchRun|null>(null),[history,setHistory]=useState<readonly MarketResearchRun[]>([]),[latestRunId,setLatestRunId]=useState<string|null>(null),[running,setRunning]=useState(false),[phase,setPhase]=useState(0);
   const [error,setError]=useState<string|null>(null),[openFindingId,setOpenFindingId]=useState<string|null>(null);
 
-  useEffect(()=>{void api.marketResearchStatus(projectId).then(next=>{setStatus(next);setSelected(next.providers.filter(provider=>provider.state==="available").map(provider=>provider.provider));}).catch(reason=>setError(messageOf(reason)));},[projectId]);
+  useEffect(()=>{let active=true;setStatus(null);setRun(null);setHistory([]);setLatestRunId(null);setError(null);void Promise.all([api.marketResearchStatus(projectId),api.latestMarketResearch(projectId),api.marketResearchHistory(projectId)]).then(([next,latest,recent])=>{if(!active)return;setStatus(next);setSelected(next.providers.filter(provider=>provider.state==="available").map(provider=>provider.provider));setRun(latest);setLatestRunId(latest?.runId??null);setHistory(recent.runs);}).catch(reason=>{if(active)setError(messageOf(reason));});return()=>{active=false;};},[projectId]);
   // Bounded, non-reasoning progress: phases advance to the last step and stop.
   useEffect(()=>{if(!running){setPhase(0);return;}const timer=window.setInterval(()=>setPhase(current=>Math.min(current+1,MARKET_RESEARCH_PROGRESS_PHASES.length-1)),1500);return()=>window.clearInterval(timer);},[running]);
 
   const available=status?.providers.filter(provider=>provider.state==="available")??[];
   const canRun=!running&&topic.trim().length>=3&&selected.length>0;
   const investigate=async()=>{
-    setRunning(true);setError(null);setRun(null);setOpenFindingId(null);
-    try{setRun(await api.runMarketResearch(projectId,{topic:topic.trim(),providers:selected}));}
+    setRunning(true);setError(null);setOpenFindingId(null);
+    try{const next=await api.runMarketResearch(projectId,{topic:topic.trim(),providers:selected});setRun(next);setLatestRunId(next.runId);setHistory((await api.marketResearchHistory(projectId)).runs);}
     catch(reason){setError(messageOf(reason));}
     finally{setRunning(false);}
   };
@@ -100,6 +100,8 @@ function AutomaticSourcesPanel({projectId}:{projectId:string}) {
     {status&&available.length===0&&<p className="form-hint">Ningún proveedor automático está configurado. Demo, texto manual y YouTube siguen disponibles.</p>}
     {running&&<p className="form-hint" role="status">{MARKET_RESEARCH_PROGRESS_PHASES[phase]}</p>}
     {error&&<InlineError message={error}/>}
+    {run&&<p className="form-hint"><strong>{run.runId===latestRunId?"Última investigación guardada":"Investigación guardada"}</strong> · {new Date(run.completedAt).toLocaleString("es")} · {run.topic}</p>}
+    {history.length>0&&<details className="analysis-details"><summary>Investigaciones anteriores ({history.length})</summary><div className="history-list">{history.map(item=><button type="button" className={run?.runId===item.runId?"active":""} key={item.runId} onClick={()=>{setRun(item);setOpenFindingId(null);}}><strong>{item.topic}</strong><small>{new Date(item.completedAt).toLocaleString("es")} · {marketResearchAnalyzerLabel(item.analysis.analyzer??"deepseek")} · {item.metrics.uniqueSignals} señales</small></button>)}</div></details>}
     {run&&summary&&<div className="market-research-result">
       <div className="metric-strip"><div><strong>{summary.totalFound}</strong><span>señales</span></div><div><strong>{summary.valid}</strong><span>válidas</span></div><div><strong>{summary.unique}</strong><span>únicas</span></div><div><strong>{summary.analyzed}</strong><span>analizadas</span></div></div>
       <div className="structured-output">

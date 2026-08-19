@@ -1,7 +1,10 @@
 import {
   ApiErrorSchema,
+  MarketResearchHistorySchema,
+  MarketResearchRunSchema,
   RunMarketResearchSchema,
   type ApiError,
+  type MarketResearchHistory,
   type MarketResearchRun,
   type MarketResearchStatus,
   type RunMarketResearchInput,
@@ -32,6 +35,24 @@ export function registerMarketResearchRoutes(
     async (request, reply) => {
       if (!projects.get(request.params.id)) return reply.code(404).send(missing);
       return research.status();
+    },
+  );
+
+  app.get<{ Params: { id: string }; Reply: MarketResearchRun | null | ApiError }>(
+    "/api/projects/:id/market-research/latest",
+    { schema: { params: ProjectParams, response: { 200: Type.Union([MarketResearchRunSchema, Type.Null()]), 404: ApiErrorSchema } } },
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send(missing);
+      return research.latest(request.params.id);
+    },
+  );
+
+  app.get<{ Params: { id: string }; Reply: MarketResearchHistory | ApiError }>(
+    "/api/projects/:id/market-research/history",
+    { schema: { params: ProjectParams, response: { 200: MarketResearchHistorySchema, 404: ApiErrorSchema } } },
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send(missing);
+      return { runs: [...research.history(request.params.id)] };
     },
   );
 

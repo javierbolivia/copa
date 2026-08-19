@@ -7,6 +7,7 @@ import {
   type MarketResearchProviderReport,
   type MarketResearchProviderState,
   type MarketResearchSignal,
+  type MarketResearchYouTubeMetadata,
   type NormalizedMarketSignal,
 } from "@our-platform/shared";
 
@@ -15,7 +16,7 @@ import type { WebDiscoveryProvider, WebDiscoveryResponse } from "../integrations
 import type { YouTubeAdapter } from "../integrations/youtube-adapter.js";
 import { marketSignalDedupeKey } from "./market-intelligence-benchmark.js";
 import { adaptWebDiscoveryMarketSignals } from "./web-market-signal-adapter.js";
-import { acquireYouTubeDeepResearchSignals } from "./youtube-deep-research-acquisition.js";
+import { acquireYouTubeDeepResearchSignals, type YouTubeDeepAcquisitionMetrics } from "./youtube-deep-research-acquisition.js";
 
 export type MarketResearchYouTubeClient =
   Pick<YouTubeAdapter, "searchVideos" | "getVideo" | "listCommentThreads">
@@ -61,6 +62,7 @@ interface ProviderAcquisition {
   readonly failure: string | null;
   readonly usage: number | null;
   readonly credits: number | null;
+  readonly youtube?: YouTubeDeepAcquisitionMetrics;
 }
 
 const RECENT_WINDOW_MS = 90 * 24 * 60 * 60 * 1_000;
@@ -70,6 +72,39 @@ const BOILERPLATE_LINE = /^(?:cookies?|aceptar cookies|accept cookies|subscribe|
 /** Safe failure category only; provider bodies and headers are never surfaced. */
 function failureCode(error: unknown): string {
   return error instanceof IntegrationError ? error.code : "unknown";
+}
+
+function youtubeMetadata(signal: NormalizedMarketSignal): MarketResearchYouTubeMetadata | undefined {
+  if (signal.source !== "youtube" || signal.query === null || signal.context === null) return undefined;
+  try {
+    const context: unknown = JSON.parse(signal.context);
+    if (typeof context !== "object" || context === null || Array.isArray(context)) return undefined;
+    const record = context as Record<string, unknown>;
+    const video = record.video;
+    const discovery = record.discovery;
+    if (typeof video !== "object" || video === null || Array.isArray(video)) return undefined;
+    const videoRecord = video as Record<string, unknown>;
+    const discoveryRecord = typeof discovery === "object" && discovery !== null && !Array.isArray(discovery)
+      ? discovery as Record<string, unknown> : null;
+    if (typeof videoRecord.videoId !== "string" || typeof videoRecord.channelId !== "string" || typeof videoRecord.channelTitle !== "string") return undefined;
+    const text = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
+    return {
+      videoId: videoRecord.videoId,
+      channelId: videoRecord.channelId,
+      channelTitle: videoRecord.channelTitle,
+      query: signal.query,
+      queryAngle: text(discoveryRecord?.angle),
+      queryLanguage: text(discoveryRecord?.language),
+      declaredLanguage: text(discoveryRecord?.declaredLanguage),
+      channelCountry: text(discoveryRecord?.channelCountry),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function analyzedSignalCap(): number {
+  return MARKET_RESEARCH_BUDGETS.youtubeSemanticBatchSignals * MARKET_RESEARCH_BUDGETS.youtubeSemanticMaxBatches;
 }
 
 /**
@@ -162,6 +197,7 @@ async function acquireProvider(
         signals: acquisition.signals,
         latencyMs: acquisition.latencyMs,
         failure: null,
+        youtube: acquisition.metrics,
       };
     } catch (error) {
       return { ...empty, state: "temporary_error", latencyMs: Date.now() - startedAt, failure: failureCode(error) };
@@ -237,7 +273,7 @@ async function deepenSignals(
   }
   // Deepen only the thinnest URL-bearing evidence that survived dedupe, never every result.
   const candidates = signals
-    .filter((signal): signal is MarketResearchSignal & { url: string } => signal.url !== null)
+    .filter((signal): signal is MarketResearchSignal & { url: string } => signal.provider !== "youtube" && signal.url !== null)
     .sort((left, right) => left.text.length - right.text.length || left.url.localeCompare(right.url))
     .slice(0, MARKET_RESEARCH_BUDGETS.firecrawlScrapePages);
 
@@ -315,7 +351,15 @@ export async function acquireMarketResearchSignals(
   }
 
   const ranked = rankForAnalysis(uniqueByProvider);
-  const retained = ranked.slice(0, MARKET_RESEARCH_BUDGETS.analysisSignals);
+  // Persist every cleaned YouTube signal for traceability and Evidence Explorer;
+  // the semantic miner enforces its own 12×25 batch ceiling. Other providers
+  // retain the established global analysis budget.
+  const youtubeRanked = uniqueByProvider.get("youtube") ?? [];
+  const nonYoutubeRanked = ranked.filter((entry) => entry.provider !== "youtube");
+  const retained = [
+    ...youtubeRanked,
+    ...nonYoutubeRanked.slice(0, MARKET_RESEARCH_BUDGETS.analysisSignals),
+  ];
   const initial: readonly MarketResearchSignal[] = retained.map((entry, index) => ({
     id: `S${index + 1}`,
     provider: entry.provider,
@@ -325,6 +369,10 @@ export async function acquireMarketResearchSignals(
     capturedAt: entry.signal.capturedAt,
     text: entry.text,
     deepened: false,
+    ...(entry.provider === "youtube" ? (() => {
+      const metadata = youtubeMetadata(entry.signal);
+      return metadata === undefined ? {} : { youtube: metadata };
+    })() : {}),
   }));
 
   const firecrawlEnabled = selected.includes("firecrawl");
@@ -348,6 +396,7 @@ export async function acquireMarketResearchSignals(
     failure: acquisition.failure,
     usage: acquisition.usage,
     credits: acquisition.credits,
+    ...(acquisition.youtube === undefined ? {} : { youtube: acquisition.youtube }),
   }));
 
   return {
@@ -360,7 +409,10 @@ export async function acquireMarketResearchSignals(
       uniqueSignals,
       duplicatesRemoved,
       analyzedSignals: signals.length,
-      discardedByAnalysisBudget: Math.max(0, ranked.length - retained.length),
+      discardedByAnalysisBudget: Math.max(
+        0,
+        nonYoutubeRanked.length - Math.min(nonYoutubeRanked.length, MARKET_RESEARCH_BUDGETS.analysisSignals),
+      ) + Math.max(0, youtubeRanked.length - analyzedSignalCap()),
       deepenedSignals: signals.filter((signal) => signal.deepened).length,
     },
   };

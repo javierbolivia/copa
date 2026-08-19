@@ -92,8 +92,10 @@ describe("Phase 20.4 market research acquisition", () => {
     expect(result.providers.every((report) => report.state === "available" && report.failure === null)).toBe(true);
     expect(result.providers.find((report) => report.provider === "tavily")).toMatchObject({ requested: 5, returned: 5, valid: 5, unique: 5 });
     expect(result.providers.find((report) => report.provider === "youtube")).toMatchObject({ requested: MARKET_RESEARCH_BUDGETS.youtubeTargetComments, returned: 3, valid: 3, unique: 3 });
-    expect(result.metrics).toMatchObject({ validSignals: 23, uniqueSignals: 23, analyzedSignals: 20, discardedByAnalysisBudget: 3, duplicatesRemoved: 0 });
-    expect(result.signals).toHaveLength(MARKET_RESEARCH_BUDGETS.analysisSignals);
+    expect(result.metrics).toMatchObject({ validSignals: 23, uniqueSignals: 23, analyzedSignals: 23, discardedByAnalysisBudget: 0, duplicatesRemoved: 0 });
+    expect(result.signals).toHaveLength(23);
+    expect(result.signals.filter((signal) => signal.provider === "youtube")).toHaveLength(3);
+    expect(result.signals.filter((signal) => signal.provider === "youtube").every((signal) => signal.youtube?.query === TOPIC)).toBe(true);
 
     // Budgets are applied at the network boundary, not merely post-filtered.
     expect(JSON.parse(String((tavilyClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ max_results: 5 });

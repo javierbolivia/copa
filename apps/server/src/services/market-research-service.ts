@@ -97,6 +97,8 @@ function restorePersistedMarketResearchRun(
     if (!Value.Check(MarketResearchRunSchema, candidate)) return null;
     const run = candidate as MarketResearchRun;
     if (run.projectId !== projectId || run.runId !== generationId) return null;
+    const persistedSignalIds = new Set(run.signals.map((signal) => signal.id));
+    if (run.findings.some((finding) => finding.signalIds.some((signalId) => !persistedSignalIds.has(signalId)))) return null;
 
     // Explicit projection prevents legacy or manually altered ledger fields from
     // becoming an accidental public response, even when the JSON is otherwise valid.
@@ -112,6 +114,28 @@ function restorePersistedMarketResearchRun(
         returned: report.returned, valid: report.valid, unique: report.unique,
         duplicates: report.duplicates, analyzed: report.analyzed, scrapedPages: report.scrapedPages,
         latencyMs: report.latencyMs, failure: report.failure, usage: report.usage, credits: report.credits,
+        ...(report.youtube === undefined ? {} : { youtube: {
+          queries: report.youtube.queries,
+          videosDiscovered: report.youtube.videosDiscovered,
+          videosSelected: report.youtube.videosSelected,
+          videosWithComments: report.youtube.videosWithComments,
+          videosSkipped: report.youtube.videosSkipped,
+          commentsFetched: report.youtube.commentsFetched,
+          commentsValid: report.youtube.commentsValid,
+          commentsUnique: report.youtube.commentsUnique,
+          commentsDiscarded: report.youtube.commentsDiscarded,
+          structurallyRejected: report.youtube.structurallyRejected,
+          qualityRejected: report.youtube.qualityRejected,
+          exactDuplicatesRemoved: report.youtube.exactDuplicatesRemoved,
+          nearDuplicatesRemoved: report.youtube.nearDuplicatesRemoved,
+          repliesRetained: report.youtube.repliesRetained,
+          distinctVideosRepresented: report.youtube.distinctVideosRepresented,
+          distinctChannelsRepresented: report.youtube.distinctChannelsRepresented,
+          maxCommentsFromOneVideo: report.youtube.maxCommentsFromOneVideo,
+          maxCommentsFromOneChannel: report.youtube.maxCommentsFromOneChannel,
+          lowYieldBatches: report.youtube.lowYieldBatches,
+          stopReason: report.youtube.stopReason,
+        } }),
       })),
       metrics: {
         requestedSignals: run.metrics.requestedSignals, returnedSignals: run.metrics.returnedSignals,
@@ -124,6 +148,19 @@ function restorePersistedMarketResearchRun(
         primaryFailure: run.analysis.primaryFailure, analyzedSignals: run.analysis.analyzedSignals,
         rejectedClaims: run.analysis.rejectedClaims, inputTokens: run.analysis.inputTokens,
         outputTokens: run.analysis.outputTokens, failure: run.analysis.failure,
+        ...(run.analysis.youtube === undefined ? {} : { youtube: {
+          semanticBatches: run.analysis.youtube.semanticBatches,
+          successfulBatches: run.analysis.youtube.successfulBatches,
+          failedBatches: run.analysis.youtube.failedBatches,
+          analyzedSignals: run.analysis.youtube.analyzedSignals,
+          candidateFindings: run.analysis.youtube.candidateFindings,
+          rejectedCandidates: run.analysis.youtube.rejectedCandidates,
+          citedSignals: run.analysis.youtube.citedSignals,
+          citedVideos: run.analysis.youtube.citedVideos,
+          citedChannels: run.analysis.youtube.citedChannels,
+          languages: [...run.analysis.youtube.languages],
+          fallbackBatches: run.analysis.youtube.fallbackBatches,
+        } }),
       },
       findings: run.findings.map((finding) => ({
         id: finding.id, category: finding.category, statement: finding.statement,
@@ -132,10 +169,24 @@ function restorePersistedMarketResearchRun(
         domainDiversity: finding.domainDiversity, recentSignals: finding.recentSignals,
         repeatedEvidence: finding.repeatedEvidence, contradictingSignals: finding.contradictingSignals,
         confidence: finding.confidence,
+        ...(finding.evidenceStrength === undefined ? {} : { evidenceStrength: finding.evidenceStrength }),
+        ...(finding.distinctVideos === undefined ? {} : { distinctVideos: finding.distinctVideos }),
+        ...(finding.distinctChannels === undefined ? {} : { distinctChannels: finding.distinctChannels }),
+        ...(finding.languages === undefined ? {} : { languages: [...finding.languages] }),
       })),
       signals: run.signals.map((signal) => ({
         id: signal.id, provider: signal.provider, source: signal.source, sourceId: signal.sourceId,
         url: signal.url, capturedAt: signal.capturedAt, text: signal.text, deepened: signal.deepened,
+        ...(signal.youtube === undefined ? {} : { youtube: {
+          videoId: signal.youtube.videoId,
+          channelId: signal.youtube.channelId,
+          channelTitle: signal.youtube.channelTitle,
+          query: signal.youtube.query,
+          queryAngle: signal.youtube.queryAngle,
+          queryLanguage: signal.youtube.queryLanguage,
+          declaredLanguage: signal.youtube.declaredLanguage,
+          channelCountry: signal.youtube.channelCountry,
+        } }),
       })),
     };
   } catch {
@@ -182,6 +233,10 @@ export class MarketResearchService {
         analysisSignals: MARKET_RESEARCH_BUDGETS.analysisSignals,
         analysisSignalChars: MARKET_RESEARCH_BUDGETS.analysisSignalChars,
         firecrawlScrapePages: MARKET_RESEARCH_BUDGETS.firecrawlScrapePages,
+        youtubeTargetVideos: MARKET_RESEARCH_BUDGETS.youtubeTargetVideos,
+        youtubeTargetComments: MARKET_RESEARCH_BUDGETS.youtubeTargetComments,
+        youtubeMaxVideos: MARKET_RESEARCH_BUDGETS.youtubeMaxVideos,
+        youtubeMaxComments: MARKET_RESEARCH_BUDGETS.youtubeMaxComments,
       },
     };
   }
@@ -199,7 +254,7 @@ export class MarketResearchService {
       ...(options.providers === undefined ? {} : { providers: options.providers }),
     });
 
-    const { findings, analysis } = await mineMarketResearchFindings({
+    const { findings, analysis, analyzedSignalIds } = await mineMarketResearchFindings({
       topic,
       signals: acquisition.signals,
       referenceAt: startedAt,
@@ -215,6 +270,13 @@ export class MarketResearchService {
       },
     });
 
+    const analyzed = new Set(analyzedSignalIds);
+    const analyzedByProvider = new Map<MarketResearchProvider, number>();
+    for (const signal of acquisition.signals) {
+      if (analyzed.has(signal.id)) {
+        analyzedByProvider.set(signal.provider, (analyzedByProvider.get(signal.provider) ?? 0) + 1);
+      }
+    }
     const completedAtDate = this.now();
     const runId = uuidv7();
     const run: MarketResearchRun = {
@@ -224,8 +286,11 @@ export class MarketResearchService {
       startedAt,
       completedAt: completedAtDate.toISOString(),
       durationMs: Math.max(0, completedAtDate.getTime() - startedMs),
-      providers: [...acquisition.providers],
-      metrics: acquisition.metrics,
+      providers: acquisition.providers.map((report) => ({
+        ...report,
+        analyzed: analyzedByProvider.get(report.provider) ?? 0,
+      })),
+      metrics: { ...acquisition.metrics, analyzedSignals: analyzedSignalIds.length },
       analysis,
       findings: [...findings],
       signals: [...acquisition.signals],

@@ -529,6 +529,12 @@ export async function acquireYouTubeDeepResearchSignals(
       video: videoRecord(candidate, videos.get(candidate.videoId)),
       query: candidate.query,
       threads: page.threads,
+      discovery: {
+        angle: candidate.angle,
+        language: candidate.queryLanguage,
+        declaredLanguage: candidate.defaultAudioLanguage ?? candidate.defaultLanguage,
+        channelCountry: candidate.channelCountry,
+      },
       ...(extraReplies.size === 0 ? {} : { extraReplies }),
     });
     structurallyRejected += adaptation.audit.rejected.length;

@@ -65,7 +65,9 @@ describe("YouTube MarketSignal adapter", () => {
   });
 
   it("preserves complete provenance, canonical video URL, query, engagement, and context", () => {
-    const result = adaptYouTubeMarketSignals(input());
+    const result = adaptYouTubeMarketSignals(input({
+      discovery: { angle: "frustration", language: "es", declaredLanguage: "es", channelCountry: "MX" },
+    }));
     const signal = result.signals[0]!;
 
     expect(result.audit).toEqual({ rejected: [], duplicates: [] });
@@ -106,6 +108,16 @@ describe("YouTube MarketSignal adapter", () => {
         viewCount: 1_000,
         likeCount: 25,
         commentCount: 4,
+        tags: [],
+        categoryId: null,
+        defaultAudioLanguage: null,
+        defaultLanguage: null,
+      },
+      discovery: {
+        angle: "frustration",
+        language: "es",
+        declaredLanguage: "es",
+        channelCountry: "MX",
       },
       comment: {
         commentId: "comment-1",

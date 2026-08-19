@@ -69,6 +69,14 @@ export const MARKET_RESEARCH_BUDGETS = {
   analysisSignals: 20,
   analysisSignalChars: 1_500,
   analysisMaxOutputTokens: 4_000,
+  /** Dedicated bounded semantic path for cleaned YouTube evidence. */
+  youtubeSemanticBatchSignals: 25,
+  youtubeSemanticSignalChars: 600,
+  youtubeSemanticMaxBatches: 12,
+  youtubeSemanticCandidatesPerBatch: 8,
+  youtubeSemanticCandidateEvidenceIds: 6,
+  youtubeSemanticConsolidationCandidates: 96,
+  youtubeSemanticMaxOutputTokens: 1_200,
 } as const;
 
 export const MARKET_RESEARCH_TOPIC_MIN_LENGTH = 3;
@@ -111,6 +119,29 @@ export const MarketResearchConfidenceSchema = Type.Union(
 );
 export type MarketResearchConfidence = Static<typeof MarketResearchConfidenceSchema>;
 
+export const MARKET_RESEARCH_EVIDENCE_STRENGTHS = ["isolated", "repeated", "strong_repeated"] as const;
+export const MarketResearchEvidenceStrengthSchema = Type.Union(
+  MARKET_RESEARCH_EVIDENCE_STRENGTHS.map((strength) => Type.Literal(strength)),
+);
+export type MarketResearchEvidenceStrength = Static<typeof MarketResearchEvidenceStrengthSchema>;
+
+/**
+ * Public, bounded YouTube provenance retained with a persisted Market Signal.
+ * Each value is provider-declared or captured during deterministic acquisition;
+ * nothing is inferred from region, query language, or the semantic model.
+ */
+export const MarketResearchYouTubeMetadataSchema = Type.Object({
+  videoId: Type.String({ minLength: 1, maxLength: 64 }),
+  channelId: Type.String({ minLength: 1, maxLength: 128 }),
+  channelTitle: Type.String({ minLength: 1, maxLength: 500 }),
+  query: Type.String({ minLength: 1, maxLength: 500 }),
+  queryAngle: Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()]),
+  queryLanguage: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
+  declaredLanguage: Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()]),
+  channelCountry: Type.Union([Type.String({ minLength: 1, maxLength: 16 }), Type.Null()]),
+}, { additionalProperties: false });
+export type MarketResearchYouTubeMetadata = Static<typeof MarketResearchYouTubeMetadataSchema>;
+
 /**
  * One retained signal exposed to the client. It carries the run-local reference
  * ID used to ground findings plus bounded provenance for evidence inspection.
@@ -125,6 +156,8 @@ export const MarketResearchSignalSchema = Type.Object({
   text: Type.String({ minLength: 1, maxLength: MARKET_RESEARCH_BUDGETS.analysisSignalChars }),
   /** True when Firecrawl scrape deepened this signal after dedupe. */
   deepened: Type.Boolean(),
+  /** Optional so historical runs restore without migration. */
+  youtube: Type.Optional(MarketResearchYouTubeMetadataSchema),
 });
 export type MarketResearchSignal = Static<typeof MarketResearchSignalSchema>;
 
@@ -142,8 +175,37 @@ export const MarketResearchFindingSchema = Type.Object({
   /** Signals shared with a risk/negative finding; deterministic, not inferred. */
   contradictingSignals: Type.Integer({ minimum: 0 }),
   confidence: MarketResearchConfidenceSchema,
+  /** Deterministic evidence diversity; optional for historical persisted runs. */
+  evidenceStrength: Type.Optional(MarketResearchEvidenceStrengthSchema),
+  distinctVideos: Type.Optional(Type.Integer({ minimum: 0 })),
+  distinctChannels: Type.Optional(Type.Integer({ minimum: 0 })),
+  languages: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 16 })),
 });
 export type MarketResearchFinding = Static<typeof MarketResearchFindingSchema>;
+
+export const MarketResearchYouTubeAcquisitionSchema = Type.Object({
+  queries: Type.Integer({ minimum: 0 }),
+  videosDiscovered: Type.Integer({ minimum: 0 }),
+  videosSelected: Type.Integer({ minimum: 0 }),
+  videosWithComments: Type.Integer({ minimum: 0 }),
+  videosSkipped: Type.Integer({ minimum: 0 }),
+  commentsFetched: Type.Integer({ minimum: 0 }),
+  commentsValid: Type.Integer({ minimum: 0 }),
+  commentsUnique: Type.Integer({ minimum: 0 }),
+  commentsDiscarded: Type.Integer({ minimum: 0 }),
+  structurallyRejected: Type.Integer({ minimum: 0 }),
+  qualityRejected: Type.Integer({ minimum: 0 }),
+  exactDuplicatesRemoved: Type.Integer({ minimum: 0 }),
+  nearDuplicatesRemoved: Type.Integer({ minimum: 0 }),
+  repliesRetained: Type.Integer({ minimum: 0 }),
+  distinctVideosRepresented: Type.Integer({ minimum: 0 }),
+  distinctChannelsRepresented: Type.Integer({ minimum: 0 }),
+  maxCommentsFromOneVideo: Type.Integer({ minimum: 0 }),
+  maxCommentsFromOneChannel: Type.Integer({ minimum: 0 }),
+  lowYieldBatches: Type.Integer({ minimum: 0 }),
+  stopReason: Type.String({ minLength: 1, maxLength: 64 }),
+});
+export type MarketResearchYouTubeAcquisition = Static<typeof MarketResearchYouTubeAcquisitionSchema>;
 
 export const MarketResearchProviderReportSchema = Type.Object({
   provider: MarketResearchProviderSchema,
@@ -160,8 +222,25 @@ export const MarketResearchProviderReportSchema = Type.Object({
   failure: Type.Union([Type.String(), Type.Null()]),
   usage: Type.Union([Type.Number(), Type.Null()]),
   credits: Type.Union([Type.Number(), Type.Null()]),
+  /** Bounded deterministic acquisition telemetry for the YouTube provider. */
+  youtube: Type.Optional(MarketResearchYouTubeAcquisitionSchema),
 });
 export type MarketResearchProviderReport = Static<typeof MarketResearchProviderReportSchema>;
+
+export const MarketResearchYouTubeAnalysisSchema = Type.Object({
+  semanticBatches: Type.Integer({ minimum: 0 }),
+  successfulBatches: Type.Integer({ minimum: 0 }),
+  failedBatches: Type.Integer({ minimum: 0 }),
+  analyzedSignals: Type.Integer({ minimum: 0 }),
+  candidateFindings: Type.Integer({ minimum: 0 }),
+  rejectedCandidates: Type.Integer({ minimum: 0 }),
+  citedSignals: Type.Integer({ minimum: 0 }),
+  citedVideos: Type.Integer({ minimum: 0 }),
+  citedChannels: Type.Integer({ minimum: 0 }),
+  languages: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 16 }),
+  fallbackBatches: Type.Integer({ minimum: 0 }),
+});
+export type MarketResearchYouTubeAnalysis = Static<typeof MarketResearchYouTubeAnalysisSchema>;
 
 export const MarketResearchAnalysisSchema = Type.Object({
   analyzer: Type.Union([MarketResearchAnalyzerSchema, Type.Null()]),
@@ -174,6 +253,8 @@ export const MarketResearchAnalysisSchema = Type.Object({
   inputTokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   outputTokens: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
   failure: Type.Union([Type.String(), Type.Null()]),
+  /** Dedicated YouTube batch-mining telemetry; absent on historical runs. */
+  youtube: Type.Optional(MarketResearchYouTubeAnalysisSchema),
 });
 export type MarketResearchAnalysis = Static<typeof MarketResearchAnalysisSchema>;
 
@@ -235,6 +316,10 @@ export const MarketResearchStatusSchema = Type.Object({
     analysisSignals: Type.Integer({ minimum: 1 }),
     analysisSignalChars: Type.Integer({ minimum: 1 }),
     firecrawlScrapePages: Type.Integer({ minimum: 0 }),
+    youtubeTargetVideos: Type.Integer({ minimum: 1 }),
+    youtubeTargetComments: Type.Integer({ minimum: 1 }),
+    youtubeMaxVideos: Type.Integer({ minimum: 1 }),
+    youtubeMaxComments: Type.Integer({ minimum: 1 }),
   }),
 });
 export type MarketResearchStatus = Static<typeof MarketResearchStatusSchema>;
@@ -283,6 +368,16 @@ const CONFIDENCE_LABELS: Readonly<Record<MarketResearchConfidence, string>> = {
   corroborated: "Corroborado",
   cross_provider: "Multi-fuente",
 };
+
+const EVIDENCE_STRENGTH_LABELS: Readonly<Record<MarketResearchEvidenceStrength, string>> = {
+  isolated: "Aislada",
+  repeated: "Patrón repetido",
+  strong_repeated: "Patrón fuertemente repetido",
+};
+
+export function marketResearchEvidenceStrengthLabel(strength: MarketResearchEvidenceStrength): string {
+  return EVIDENCE_STRENGTH_LABELS[strength];
+}
 
 export function marketResearchProviderLabel(provider: MarketResearchProvider): string {
   return PROVIDER_LABELS[provider];

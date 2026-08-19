@@ -12,6 +12,13 @@ export interface YouTubeMarketSignalInput {
   readonly video: YouTubeVideo;
   readonly query: string | null;
   readonly threads: readonly YouTubeThread[];
+  /** Query-lane provenance recorded during the bounded Market Research acquisition. */
+  readonly discovery?: {
+    readonly angle: string;
+    readonly language: string;
+    readonly channelCountry?: string | null;
+    readonly declaredLanguage?: string | null;
+  };
   /** Replies fetched after the embedded replies in a comment thread. */
   readonly extraReplies?: ReadonlyMap<string, readonly YouTubeComment[]>;
 }
@@ -198,7 +205,7 @@ function videoUrl(videoId: string): string {
   return `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
 }
 
-function buildContext(video: YouTubeVideo, occurrence: ValidYouTubeCommentOccurrence): string {
+function buildContext(input: Readonly<YouTubeMarketSignalInput>, video: YouTubeVideo, occurrence: ValidYouTubeCommentOccurrence): string {
   const { comment, thread, origin } = occurrence;
   return JSON.stringify({
     video: {
@@ -213,6 +220,16 @@ function buildContext(video: YouTubeVideo, occurrence: ValidYouTubeCommentOccurr
       viewCount: video.viewCount ?? null,
       likeCount: video.likeCount ?? null,
       commentCount: video.commentCount ?? null,
+      tags: video.tags ?? [],
+      categoryId: video.categoryId ?? null,
+      defaultAudioLanguage: video.defaultAudioLanguage ?? null,
+      defaultLanguage: video.defaultLanguage ?? null,
+    },
+    discovery: input.discovery === undefined ? null : {
+      angle: input.discovery.angle,
+      language: input.discovery.language,
+      declaredLanguage: input.discovery.declaredLanguage ?? video.defaultAudioLanguage ?? video.defaultLanguage ?? null,
+      channelCountry: input.discovery.channelCountry ?? null,
     },
     comment: {
       commentId: comment.commentId,
@@ -342,7 +359,7 @@ export function adaptYouTubeMarketSignals(input: Readonly<YouTubeMarketSignalInp
         capturedAt: occurrence.comment.publishedAt,
         text: occurrence.comment.text,
         engagement: buildEngagement(video, occurrence),
-        context: buildContext(video, occurrence),
+        context: buildContext(input, video, occurrence),
         pain: null,
         desiredOutcome: null,
         failedAttempt: null,

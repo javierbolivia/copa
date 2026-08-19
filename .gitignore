@@ -20,4 +20,5 @@ backups/
 .DS_Store
 Thumbs.db
 .vite/
+.playwright-mcp/
 *.tsbuildinfo

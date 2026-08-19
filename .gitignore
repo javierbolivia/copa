@@ -21,4 +21,5 @@ backups/
 Thumbs.db
 .vite/
 .playwright-mcp/
+_legacy-reference/
 *.tsbuildinfo

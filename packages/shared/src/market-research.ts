@@ -46,6 +46,21 @@ export const MARKET_RESEARCH_BUDGETS = {
   youtubeMaxCommentPagesPerVideo: 2,
   youtubeMaxRepliesPerThread: 3,
   youtubeMaxReplyRequests: 10,
+  /** Hard ceiling on raw comments processed, so chasing the target cannot run away. */
+  youtubeMaxRawComments: 2_000,
+  /**
+   * Deterministic acquisition saturation: a video yielding fewer than
+   * `youtubeMinNewUniquePerBatch` new unique items is a low-yield batch, and
+   * acquisition stops only after `youtubeSaturationBatches` consecutive ones.
+   * This is acquisition saturation, never a semantic claim.
+   */
+  youtubeMinNewUniquePerBatch: 3,
+  youtubeSaturationBatches: 3,
+  /** Conservative near-duplicate rule; short comments are never merged. */
+  youtubeNearDuplicateThreshold: 0.85,
+  youtubeNearDuplicateMinTokens: 5,
+  youtubeNearDuplicateMaxComparisons: 48,
+  youtubeNearDuplicatePostings: 64,
   tavilyResults: 5,
   exaResults: 5,
   braveResults: 5,

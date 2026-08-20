@@ -266,16 +266,21 @@ export function assessYouTubeCommentRelevance(input: Readonly<YouTubeCommentRele
     return "research_irrelevant";
   }
   if (relationLinks.length < 2 && focus.length < 3) return "research_irrelevant";
-  const focusRequiresRelation = focus.length >= 3;
-  const focusRelation = hasFocusRelation(text, focus);
-  if (focusRequiresRelation && !focusRelation) return "research_irrelevant";
-
   const informative = informativeCommentTerms(text, focus);
   const failedSolution = FAILED_ATTEMPT.test(normalized) && FAILURE_CONNECTOR.test(normalized);
   const desiredOutcome = DESIRED_OUTCOME.test(normalized) && informative.length > 0;
   const specificPain = STRONG_PAIN.test(normalized) || PRICE_OBJECTION.test(normalized);
   const detailedGenericPain = GENERIC_PAIN.test(normalized) && informative.length > 0;
-  if (focusRelation || specificPain || failedSolution || desiredOutcome || detailedGenericPain) return "research_relevant";
+  // Strong evidence can qualify without causal wording only when it covers the
+  // Focus itself, rather than combining one matching term with unrelated pain.
+  const strongTopicCoverage = relationLinks.length >= Math.min(2, focus.length)
+    && relationLinks.length * 4 >= focus.length * 3;
+  if (strongTopicCoverage && (specificPain || failedSolution || desiredOutcome)) return "research_relevant";
+
+  const focusRequiresRelation = focus.length >= 3;
+  const focusRelation = hasFocusRelation(text, focus);
+  if (focusRequiresRelation && !focusRelation) return "research_irrelevant";
+  if (focusRelation || detailedGenericPain) return "research_relevant";
 
   if (STORY_OR_TRAVEL.test(normalized)
     || PRAISE_OR_EMOTION.test(normalized)

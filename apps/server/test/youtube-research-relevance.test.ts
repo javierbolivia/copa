@@ -120,6 +120,24 @@ describe("20.7D deterministic YouTube relevance", () => {
     })).toBe(expected);
   });
 
+  it.each([
+    "La organización de fotografías digitales es demasiado lenta y no funciona para mí",
+    "Probé otro sistema de organización de fotografías digitales y no funcionó",
+    "Busco una organización de fotografías digitales que ahorre tiempo cada semana",
+  ])("keeps strong evidence linked to an ordinary multi-term Focus: %s", (text) => {
+    expect(assessYouTubeCommentRelevance({
+      text,
+      topicTerms: topicTerms("organización de fotografías digitales"),
+    })).toBe("research_relevant");
+  });
+
+  it("rejects superficial multi-term overlap without a problem, failed solution, or desired outcome", () => {
+    expect(assessYouTubeCommentRelevance({
+      text: "La organización de fotografías digitales aparece en este video",
+      topicTerms: topicTerms("organización de fotografías digitales"),
+    })).toBe("research_irrelevant");
+  });
+
   it("requires an explicit Focus relation before generic pain can qualify a rich Focus", () => {
     const relationTerms = topicTerms(
       "problemas y necesidades de dueños de perros que ladran, lloran, destruyen objetos o muestran ansiedad cuando se quedan solos: causas, errores, entrenamiento y soluciones que no funcionan",

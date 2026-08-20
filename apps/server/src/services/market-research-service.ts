@@ -7,6 +7,7 @@ import {
   type MarketResearchProviderState,
   type MarketResearchRun,
   type MarketResearchStatus,
+  type MarketResearchYouTubeRelevanceProvenance,
 } from "@our-platform/shared";
 import { FormatRegistry } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
@@ -23,6 +24,8 @@ import {
   mineMarketResearchFindings,
   type MarketResearchAnalyzerClient,
 } from "./market-research-semantic-miner.js";
+import { createYouTubeRelevanceReviewer } from "./youtube-relevance-reviewer.js";
+import { resolveYouTubeMinimumDurationSeconds } from "./youtube-research-relevance.js";
 
 export const MARKET_RESEARCH_AGENT_KEY = "market_research";
 
@@ -43,6 +46,7 @@ export interface MarketResearchServiceOptions {
 export interface RunMarketResearchOptions {
   readonly topic: string;
   readonly providers?: readonly MarketResearchProvider[];
+  readonly youtubeMinimumDurationSeconds?: number;
 }
 
 function providerState(configured: boolean | undefined): MarketResearchProviderState {
@@ -85,6 +89,34 @@ function isIsoDateTime(value: string): boolean {
 // only the standard formats used by the persisted shared contract.
 if (!FormatRegistry.Has("uuid")) FormatRegistry.Set("uuid", (value) => UUID_PATTERN.test(value));
 if (!FormatRegistry.Has("date-time")) FormatRegistry.Set("date-time", isIsoDateTime);
+
+function projectYouTubeRelevance(
+  relevance: MarketResearchYouTubeRelevanceProvenance,
+): MarketResearchYouTubeRelevanceProvenance {
+  return {
+    version: relevance.version,
+    deterministic: {
+      decision: relevance.deterministic.decision,
+      reason: relevance.deterministic.reason,
+      matchedTerms: [...relevance.deterministic.matchedTerms],
+      durationSeconds: relevance.deterministic.durationSeconds,
+      minimumDurationSeconds: relevance.deterministic.minimumDurationSeconds,
+    },
+    reviewer: relevance.reviewer === null ? null : {
+      decision: relevance.reviewer.decision,
+      provider: relevance.reviewer.provider,
+      model: relevance.reviewer.model,
+      fallback: relevance.reviewer.fallback,
+      reason: relevance.reviewer.reason,
+      matchedAspects: [...relevance.reviewer.matchedAspects],
+      failure: relevance.reviewer.failure,
+    },
+    final: {
+      eligible: relevance.final.eligible,
+      rejectionReason: relevance.final.rejectionReason,
+    },
+  };
+}
 
 function restorePersistedMarketResearchRun(
   outputData: string | null,
@@ -135,6 +167,29 @@ function restorePersistedMarketResearchRun(
           maxCommentsFromOneChannel: report.youtube.maxCommentsFromOneChannel,
           lowYieldBatches: report.youtube.lowYieldBatches,
           stopReason: report.youtube.stopReason,
+          ...(report.youtube.videoMetadataFailures === undefined ? {} : { videoMetadataFailures: report.youtube.videoMetadataFailures }),
+          ...(report.youtube.videoDurationRejects === undefined ? {} : { videoDurationRejects: report.youtube.videoDurationRejects }),
+          ...(report.youtube.deterministicRelevantVideos === undefined ? {} : { deterministicRelevantVideos: report.youtube.deterministicRelevantVideos }),
+          ...(report.youtube.deterministicBorderlineVideos === undefined ? {} : { deterministicBorderlineVideos: report.youtube.deterministicBorderlineVideos }),
+          ...(report.youtube.deterministicIrrelevantVideos === undefined ? {} : { deterministicIrrelevantVideos: report.youtube.deterministicIrrelevantVideos }),
+          ...(report.youtube.successfulBorderlineReviews === undefined ? {} : { successfulBorderlineReviews: report.youtube.successfulBorderlineReviews }),
+          ...(report.youtube.borderlineReviewerFailures === undefined ? {} : { borderlineReviewerFailures: report.youtube.borderlineReviewerFailures }),
+          ...(report.youtube.finalRelevantVideos === undefined ? {} : { finalRelevantVideos: report.youtube.finalRelevantVideos }),
+          ...(report.youtube.researchRelevantComments === undefined ? {} : { researchRelevantComments: report.youtube.researchRelevantComments }),
+          ...(report.youtube.researchIrrelevantComments === undefined ? {} : { researchIrrelevantComments: report.youtube.researchIrrelevantComments }),
+          ...(report.youtube.creatorPromotionalCommentsExcluded === undefined ? {} : { creatorPromotionalCommentsExcluded: report.youtube.creatorPromotionalCommentsExcluded }),
+          ...(report.youtube.relevanceReviewerAttempts === undefined ? {} : { relevanceReviewerAttempts: report.youtube.relevanceReviewerAttempts }),
+          ...(report.youtube.relevanceReviewerFallbackAttempts === undefined ? {} : { relevanceReviewerFallbackAttempts: report.youtube.relevanceReviewerFallbackAttempts }),
+          ...(report.youtube.relevanceReviewerInputTokens === undefined ? {} : { relevanceReviewerInputTokens: report.youtube.relevanceReviewerInputTokens }),
+          ...(report.youtube.relevanceReviewerOutputTokens === undefined ? {} : { relevanceReviewerOutputTokens: report.youtube.relevanceReviewerOutputTokens }),
+          ...(report.youtube.videoRelevanceDecisionAudit === undefined ? {} : {
+            videoRelevanceDecisionAudit: report.youtube.videoRelevanceDecisionAudit.map((record) => ({
+              videoId: record.videoId,
+              channelId: record.channelId,
+              selectionOrder: record.selectionOrder,
+              relevance: projectYouTubeRelevance(record.relevance),
+            })),
+          }),
         } }),
       })),
       metrics: {
@@ -186,6 +241,9 @@ function restorePersistedMarketResearchRun(
           queryLanguage: signal.youtube.queryLanguage,
           declaredLanguage: signal.youtube.declaredLanguage,
           channelCountry: signal.youtube.channelCountry,
+          ...(signal.youtube.relevance === undefined ? {} : {
+            relevance: projectYouTubeRelevance(signal.youtube.relevance),
+          }),
         } }),
       })),
     };
@@ -237,6 +295,7 @@ export class MarketResearchService {
         youtubeTargetComments: MARKET_RESEARCH_BUDGETS.youtubeTargetComments,
         youtubeMaxVideos: MARKET_RESEARCH_BUDGETS.youtubeMaxVideos,
         youtubeMaxComments: MARKET_RESEARCH_BUDGETS.youtubeMaxComments,
+        youtubeMinimumDurationSeconds: MARKET_RESEARCH_BUDGETS.youtubeMinimumDurationSeconds,
       },
     };
   }
@@ -244,6 +303,7 @@ export class MarketResearchService {
   async run(projectId: string, options: Readonly<RunMarketResearchOptions>): Promise<MarketResearchRun> {
     const topic = options.topic.trim();
     if (topic.length === 0) throw new Error("El tema a investigar es obligatorio.");
+    const youtubeMinimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(options.youtubeMinimumDurationSeconds);
     const startedAtDate = this.now();
     const startedAt = startedAtDate.toISOString();
     const startedMs = startedAtDate.getTime();
@@ -251,6 +311,11 @@ export class MarketResearchService {
     const acquisition = await acquireMarketResearchSignals(this.options.clients, {
       topic,
       retrievedAt: startedAt,
+      youtubeMinimumDurationSeconds,
+      youtubeRelevanceReviewer: createYouTubeRelevanceReviewer(
+        { analyzer: "deepseek", model: this.options.analyzers.deepSeek?.effectiveModel ?? DEEPSEEK_DEFAULT_MODEL, client: this.options.analyzers.deepSeek },
+        { analyzer: "gemini", model: GEMINI_ANALYSIS_MODEL, client: this.options.analyzers.gemini },
+      ),
       ...(options.providers === undefined ? {} : { providers: options.providers }),
     });
 

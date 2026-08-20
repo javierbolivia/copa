@@ -40,10 +40,10 @@ function thread(videoIndex: number, threadIndex: number, options: { readonly tex
   const embedded = options.embedded ?? 0;
   return {
     threadId: `t-${videoIndex}-${threadIndex}`,
-    topLevelComment: comment(topId, options.text ?? `El sustrato del video ${videoIndex} se seca en un día, comentario ${threadIndex}`),
+    topLevelComment: comment(topId, options.text ?? `El sustrato del video ${videoIndex} se seca en un día en mi huerto de balcón, comentario ${threadIndex}`),
     totalReplyCount: options.totalReplyCount ?? embedded,
     embeddedReplies: Array.from({ length: embedded }, (_, replyIndex) =>
-      comment(`${topId}-r${replyIndex}`, `Respuesta ${replyIndex} del hilo ${threadIndex}`, { parentCommentId: topId, isReply: true })),
+      comment(`${topId}-r${replyIndex}`, `Respuesta ${replyIndex} del hilo ${threadIndex} sobre mi huerto de balcón`, { parentCommentId: topId, isReply: true })),
   };
 }
 
@@ -104,21 +104,25 @@ function client(options: ClientOptions = {}): MockedYouTubeClient {
   };
   return {
     ...base,
-    ...(options.withEnrichment !== true ? {} : {
-      getVideos: vi.fn(async (ids: readonly string[]) => ids.map((id) => ({
-        videoId: id,
-        title: `Video enriquecido ${id}`,
-        channelId: "channel-1",
-        channelTitle: "Canal 1",
-        publishedAt: "2026-02-01T00:00:00Z",
-        viewCount: 12_000,
-        likeCount: 400,
-        commentCount: 250,
-        duration: "PT8M20S",
-        tags: ["huerto", "balcón"],
-        categoryId: "26",
-        defaultAudioLanguage: "es",
-      }))),
+    ...(options.withEnrichment === false ? {} : {
+      getVideos: vi.fn(async (ids: readonly string[]) => ids.map((id) => {
+        const result = results.find((candidate) => candidate.videoId === id);
+        return {
+          videoId: id,
+          title: result?.title ?? `Video enriquecido ${id}`,
+          description: result?.description ?? "",
+          channelId: result?.channelId ?? "channel-1",
+          channelTitle: result?.channelTitle ?? "Canal 1",
+          publishedAt: result?.publishedAt ?? "2026-02-01T00:00:00Z",
+          viewCount: 12_000,
+          likeCount: 400,
+          commentCount: 250,
+          duration: "PT8M20S",
+          tags: ["huerto", "balcón"],
+          categoryId: "26",
+          defaultAudioLanguage: "es",
+        };
+      })),
       getChannels: vi.fn(async (ids: readonly string[]) => ids.map((id) => ({
         channelId: id,
         title: `Canal ${id}`,
@@ -128,7 +132,7 @@ function client(options: ClientOptions = {}): MockedYouTubeClient {
     ...(options.withReplies !== true ? {} : {
       listReplies: vi.fn(async (request: { parentCommentId: string }) => ({
         items: Array.from({ length: 5 }, (_, index) =>
-          comment(`${request.parentCommentId}-x${index}`, `Respuesta extra ${index} sobre el riego del balcón`, {
+          comment(`${request.parentCommentId}-x${index}`, `El riego no funciona y pierdo plantas en mi huerto de balcón, respuesta ${index}`, {
             parentCommentId: request.parentCommentId,
             isReply: true,
           })),
@@ -178,6 +182,24 @@ describe("Phase 20.7A YouTube discovery plan", () => {
     expect(repeated.length).toBeLessThanOrEqual(YOUTUBE_RESEARCH_MAX_QUERIES);
   });
 
+  it("compacta un Focus extenso en intención de sujeto y dolor sin añadir vías", () => {
+    const verbose = "problemas y necesidades de dueños de perros que ladran, lloran, destruyen objetos o muestran ansiedad cuando se quedan solos: causas, errores, entrenamiento y soluciones que no funcionan";
+    const queries = deriveYouTubeResearchQueries(verbose);
+
+    expect(queries).toHaveLength(11);
+    expect(queries[0]).toMatchObject({ query: "perros ansiedad solos", language: "global" });
+    expect(queries.find((query) => query.language === "es" && query.angle === "direct_problem")?.query)
+      .toBe("perros ansiedad solos problemas");
+    expect(queries.find((query) => query.language === "en" && query.angle === "direct_problem")?.query)
+      .toBe("perros ansiedad solos problems");
+    expect(queries.every((query) => query.query.length <= 80)).toBe(true);
+    expect([...new Set(queries.map((query) => query.language))]).toEqual(["global", "es", "en"]);
+
+    const unrelated = deriveYouTubeResearchQueries("fotografías digitales generan ansiedad y pérdida de tiempo para profesionales");
+    expect(unrelated[0]?.query).toBe("fotografías ansiedad pérdida");
+    expect(unrelated[0]?.query).not.toMatch(/perros|dogs?/iu);
+  });
+
   it("selecciona con diversidad de canal sin superar el máximo por canal", () => {
     const candidates = Array.from({ length: 12 }, (_, index) => ({
       videoId: videoId(index),
@@ -215,6 +237,11 @@ describe("Phase 20.7A YouTube acquisition bounds", () => {
         { ...searchResult(2, 2), title: "ベランダ菜園", channelTitle: "日本チャンネル" },
       ],
     });
+    (youtube.getVideos as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { ...searchResult(1), title: "Balcony garden mistakes", channelTitle: "Global Channel", duration: "PT8M", tags: ["huerto", "balcón"] },
+      { ...searchResult(2, 2), title: "ベランダ菜園", channelTitle: "日本チャンネル", duration: "PT8M", tags: ["huerto", "balcón"] },
+    ]);
+    (youtube.getChannels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
     const acquisition = await acquire(youtube);
 
@@ -224,8 +251,9 @@ describe("Phase 20.7A YouTube acquisition bounds", () => {
     expect(acquisition.candidates.every((candidate) => candidate.defaultAudioLanguage === null
       && candidate.defaultLanguage === null
       && candidate.channelCountry === null
-      && candidate.enriched === false)).toBe(true);
+      && candidate.enriched === true)).toBe(true);
     expect(acquisition.metrics.declaredLanguages).toEqual([]);
+    expect(acquisition.metrics.finalRelevantVideos).toBe(2);
     expect(acquisition.valid).toBe(6);
   });
 
@@ -275,8 +303,11 @@ describe("Phase 20.7A YouTube acquisition bounds", () => {
 
     const acquisition = await acquire(youtube);
 
-    expect(acquisition.candidates[0]).toMatchObject({ enriched: false, viewCount: null, duration: null });
-    expect(acquisition.valid).toBe(3);
+    // Metadata is mandatory for eligibility, but one failed candidate does not abort discovery.
+    expect(acquisition.candidates).toEqual([]);
+    expect(acquisition.metrics).toMatchObject({ videoMetadataFailures: 1, finalRelevantVideos: 0 });
+    expect(acquisition.valid).toBe(0);
+    expect(youtube.listCommentThreads).not.toHaveBeenCalled();
   });
 
   it("omite con seguridad los vídeos con comentarios desactivados y sigue con el resto", async () => {
@@ -376,7 +407,7 @@ describe("Phase 20.7A YouTube acquisition bounds", () => {
   });
 
   it("conserva la trazabilidad consulta -> vídeo -> comentario y el texto original intacto", async () => {
-    const original = "  El sustrato   se seca en un día\ny nada sobrevive  ";
+    const original = "  El sustrato   se seca en un día\ny nada sobrevive en mi huerto de balcón  ";
     const youtube = client({ results: [searchResult(7, 3)], threadsPerVideo: 1, withEnrichment: true });
     youtube.listCommentThreads.mockImplementation(async () => ({
       items: [{
@@ -400,7 +431,7 @@ describe("Phase 20.7A YouTube acquisition bounds", () => {
     expect(signal?.provenance).toMatchObject({ provider: "youtube-data-api/v3", source: "youtube", query: TOPIC });
     // Only the surrounding whitespace is trimmed: inner spacing, line breaks and
     // wording stay byte-for-byte as the customer wrote them.
-    expect(signal?.text).toBe("El sustrato   se seca en un día\ny nada sobrevive");
+    expect(signal?.text).toBe("El sustrato   se seca en un día\ny nada sobrevive en mi huerto de balcón");
     const context = JSON.parse(signal?.context ?? "{}") as { video?: Record<string, unknown>; comment?: Record<string, unknown> };
     expect(context.video).toMatchObject({ videoId: videoId(7), viewCount: 12_000, commentCount: 250 });
     expect(context.comment).toMatchObject({ commentId: "c-7-0", threadId: "t-7-0", isReply: false });

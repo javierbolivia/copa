@@ -65,6 +65,9 @@ export function registerMarketResearchRoutes(
         return await research.run(request.params.id, {
           topic: request.body.topic,
           ...(request.body.providers === undefined ? {} : { providers: request.body.providers }),
+          ...(request.body.youtubeMinimumDurationSeconds === undefined
+            ? {}
+            : { youtubeMinimumDurationSeconds: request.body.youtubeMinimumDurationSeconds }),
         });
       } catch (error) {
         request.log.error({ err: error instanceof Error ? error.name : "unknown" }, "market research run failed");

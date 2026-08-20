@@ -66,6 +66,20 @@ function clientWithTexts(
   return {
     searchVideos: vi.fn(async () => ({ items: results })),
     getVideo: vi.fn(async () => undefined),
+    getVideos: vi.fn(async (ids: readonly string[]) => ids.map((id) => {
+      const result = results.find((candidate) => candidate.videoId === id);
+      return {
+        videoId: id,
+        title: result?.title ?? "Huerto de balcón",
+        description: result?.description ?? "",
+        channelId: result?.channelId ?? "channel-1",
+        channelTitle: result?.channelTitle ?? "Canal 1",
+        publishedAt: result?.publishedAt ?? "2026-02-01T00:00:00Z",
+        duration: "PT8M",
+        tags: ["huerto", "balcón"],
+        defaultAudioLanguage: "es",
+      };
+    })),
     listCommentThreads: vi.fn(async (request: { videoId: string }) => {
       const index = (Number(request.videoId.replace(/^v0*/u, "")) || 1) - 1;
       const texts = textsByVideo[index] ?? [];
@@ -185,14 +199,14 @@ describe("Phase 20.7B exact and near duplicate detection", () => {
 describe("Phase 20.7B filtering during acquisition", () => {
   it("descuenta la basura y cuenta cada motivo de rechazo", async () => {
     const youtube = clientWithTexts([[
-      "El sustrato se seca en un solo día y pierdo las plantas",
+      "El sustrato se seca en un solo día y pierdo las plantas en mi huerto de balcón",
       "   ",
       "https://spam.test/oferta",
       "🔥🔥🔥",
       "jajajajaja",
       "gracias",
-      "El sustrato se seca en un solo día y pierdo las plantas",
-      "Mis tomates no germinan con este riego automático",
+      "El sustrato se seca en un solo día y pierdo las plantas en mi huerto de balcón",
+      "El riego automático no funciona y pierdo los tomates en mi huerto de balcón",
     ]]);
 
     const acquisition = await acquire(youtube);
@@ -201,16 +215,17 @@ describe("Phase 20.7B filtering during acquisition", () => {
     // Whitespace-only text cannot even be normalized, so it is a structural
     // rejection; the quality gate reports the four it is responsible for.
     expect(acquisition.metrics.structurallyRejected).toBe(1);
-    expect(acquisition.metrics.qualityRejected).toBe(4);
+    expect(acquisition.metrics.qualityRejected).toBe(0);
+    expect(acquisition.metrics.researchIrrelevantComments).toBe(4);
     expect(acquisition.metrics.qualityRejections).toMatchObject({
-      blank: 0, link_only: 1, symbols_only: 1, repeated_characters: 1, low_information: 1, creator_boilerplate: 0,
+      blank: 0, link_only: 0, symbols_only: 0, repeated_characters: 0, low_information: 0, creator_boilerplate: 0,
     });
     expect(acquisition.metrics.exactDuplicatesRemoved).toBe(1);
     expect(acquisition.valid).toBe(2);
     expect(acquisition.metrics.commentsValid).toBe(2);
     expect(acquisition.signals.map((signal) => signal.text)).toEqual([
-      "El sustrato se seca en un solo día y pierdo las plantas",
-      "Mis tomates no germinan con este riego automático",
+      "El sustrato se seca en un solo día y pierdo las plantas en mi huerto de balcón",
+      "El riego automático no funciona y pierdo los tomates en mi huerto de balcón",
     ]);
   });
 
@@ -220,14 +235,14 @@ describe("Phase 20.7B filtering during acquisition", () => {
     const texts = Array.from({ length: 20 }, (_, videoIndex) =>
       Array.from({ length: 50 }, (_, index) => index % 2 === 0
         ? "🔥"
-        : `Video ${videoIndex + 1} problema ${index}: el sustrato se seca y las plantas mueren`));
+        : `Video ${videoIndex + 1} problema ${index}: el sustrato se seca y las plantas mueren en mi huerto de balcón`));
     const youtube = clientWithTexts(texts);
 
     const acquisition = await acquire(youtube);
 
     expect(acquisition.valid).toBe(MARKET_RESEARCH_BUDGETS.youtubeTargetComments);
     expect(acquisition.metrics.stopReason).toBe("target_reached");
-    expect(acquisition.metrics.qualityRejected).toBeGreaterThan(0);
+    expect(acquisition.metrics.researchIrrelevantComments).toBeGreaterThan(0);
     // Raw fetched greatly exceeds retained, and retained is the target.
     expect(acquisition.metrics.commentsFetched).toBeGreaterThan(acquisition.valid);
     expect(acquisition.metrics.commentsFetched).toBeLessThanOrEqual(MARKET_RESEARCH_BUDGETS.youtubeMaxRawComments);
@@ -250,7 +265,7 @@ describe("Phase 20.7B filtering during acquisition", () => {
 
   it("conserva el bound por vídeo y la diversidad de canales en la evidencia retenida", async () => {
     const texts = Array.from({ length: 6 }, (_, videoIndex) =>
-      Array.from({ length: 40 }, (_, index) => `Video ${videoIndex + 1} caso ${index}: el riego automático falla y el sustrato se seca`));
+      Array.from({ length: 40 }, (_, index) => `Video ${videoIndex + 1} caso ${index}: el riego automático falla y el sustrato se seca en mi huerto de balcón`));
     // Two videos per channel: three channels in total.
     const youtube = clientWithTexts(texts, { channelIndexes: [1, 1, 2, 2, 3, 3] });
 
@@ -264,10 +279,16 @@ describe("Phase 20.7B filtering during acquisition", () => {
   });
 
   it("las respuestas participan en el filtro y el dedupe sin perder su relación", async () => {
-    const parentText = "El sustrato se seca en un día entero y pierdo el cultivo";
+    const parentText = "El sustrato se seca en un día entero y pierdo el cultivo en mi huerto de balcón";
     const youtube: MockedYouTubeClient = {
       searchVideos: vi.fn(async () => ({ items: [searchResult(1)] })),
       getVideo: vi.fn(async () => undefined),
+      getVideos: vi.fn(async () => [{
+        ...searchResult(1),
+        duration: "PT8M",
+        tags: ["huerto", "balcón"],
+        defaultAudioLanguage: "es",
+      }]),
       listCommentThreads: vi.fn(async () => ({
         items: [{
           threadId: "t-1-0",
@@ -279,7 +300,7 @@ describe("Phase 20.7B filtering during acquisition", () => {
             // Rejected: exact duplicate of its parent.
             comment("c-1-0-r1", parentText, { parentCommentId: "c-1-0", isReply: true }),
             // Retained: genuine additional evidence.
-            comment("c-1-0-r2", "A mí me pasó igual pero con lechugas en pleno agosto", { parentCommentId: "c-1-0", isReply: true }),
+            comment("c-1-0-r2", "En mi huerto de balcón el riego falló y perdí las lechugas en agosto", { parentCommentId: "c-1-0", isReply: true }),
           ],
         }],
       })),
@@ -288,15 +309,15 @@ describe("Phase 20.7B filtering during acquisition", () => {
     const acquisition = await acquire(youtube);
 
     expect(acquisition.valid).toBe(2);
-    expect(acquisition.metrics).toMatchObject({ repliesRetained: 1, exactDuplicatesRemoved: 1, qualityRejected: 1 });
+    expect(acquisition.metrics).toMatchObject({ repliesRetained: 1, exactDuplicatesRemoved: 1, researchIrrelevantComments: 1 });
     const reply = acquisition.signals[1];
-    expect(reply?.text).toBe("A mí me pasó igual pero con lechugas en pleno agosto");
+    expect(reply?.text).toBe("En mi huerto de balcón el riego falló y perdí las lechugas en agosto");
     const context = JSON.parse(reply?.context ?? "{}") as { comment?: { parentCommentId?: string; threadId?: string; isReply?: boolean } };
     expect(context.comment).toMatchObject({ parentCommentId: "c-1-0", threadId: "t-1-0", isReply: true });
   });
 
   it("conserva toda la procedencia y la compatibilidad con MarketSignal tras filtrar", async () => {
-    const youtube = clientWithTexts([["🔥", "El riego automático del balcón nunca funcionó como prometían"]]);
+    const youtube = clientWithTexts([["🔥", "El riego automático no funciona y pierdo plantas en mi huerto de balcón"]]);
 
     const acquisition = await acquire(youtube);
     const signal = acquisition.signals[0];
@@ -308,7 +329,7 @@ describe("Phase 20.7B filtering during acquisition", () => {
       query: TOPIC,
       capturedAt: "2026-02-02T00:00:00.000Z",
     });
-    expect(signal?.text).toBe("El riego automático del balcón nunca funcionó como prometían");
+    expect(signal?.text).toBe("El riego automático no funciona y pierdo plantas en mi huerto de balcón");
     expect(signal?.provenance).toMatchObject({
       provider: "youtube-data-api/v3",
       source: "youtube",
@@ -321,12 +342,12 @@ describe("Phase 20.7B filtering during acquisition", () => {
 
 describe("Phase 20.7B acquisition saturation", () => {
   const lowYield = (videoIndex: number) => [
-    `Video ${videoIndex} único: el sustrato se seca demasiado rápido en verano`,
+    `Video ${videoIndex} único: el sustrato se seca demasiado rápido en verano en mi huerto de balcón`,
     "🔥",
     "gracias",
   ];
   const highYield = (videoIndex: number) =>
-    Array.from({ length: 10 }, (_, index) => `Video ${videoIndex} caso ${index}: el riego automático falla siempre`);
+    Array.from({ length: 10 }, (_, index) => `Video ${videoIndex} caso ${index}: el riego automático falla siempre en mi huerto de balcón`);
 
   it("no se detiene por un solo lote pobre", async () => {
     const youtube = clientWithTexts([lowYield(1), highYield(2), highYield(3), highYield(4)]);

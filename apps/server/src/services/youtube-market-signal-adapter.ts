@@ -1,4 +1,4 @@
-import type { NormalizedMarketSignal } from "@our-platform/shared";
+import type { MarketResearchYouTubeRelevanceProvenance, NormalizedMarketSignal } from "@our-platform/shared";
 import type { YouTubeComment, YouTubeThread, YouTubeVideo } from "../integrations/youtube-adapter.js";
 import { normalizeMarketSignal } from "./market-signal-normalizer.js";
 
@@ -12,12 +12,13 @@ export interface YouTubeMarketSignalInput {
   readonly video: YouTubeVideo;
   readonly query: string | null;
   readonly threads: readonly YouTubeThread[];
-  /** Query-lane provenance recorded during the bounded Market Research acquisition. */
+  /** Query-lane and relevance-gate provenance from bounded acquisition. */
   readonly discovery?: {
     readonly angle: string;
     readonly language: string;
     readonly channelCountry?: string | null;
     readonly declaredLanguage?: string | null;
+    readonly relevance?: MarketResearchYouTubeRelevanceProvenance;
   };
   /** Replies fetched after the embedded replies in a comment thread. */
   readonly extraReplies?: ReadonlyMap<string, readonly YouTubeComment[]>;
@@ -230,6 +231,7 @@ function buildContext(input: Readonly<YouTubeMarketSignalInput>, video: YouTubeV
       language: input.discovery.language,
       declaredLanguage: input.discovery.declaredLanguage ?? video.defaultAudioLanguage ?? video.defaultLanguage ?? null,
       channelCountry: input.discovery.channelCountry ?? null,
+      ...(input.discovery.relevance === undefined ? {} : { relevance: input.discovery.relevance }),
     },
     comment: {
       commentId: comment.commentId,

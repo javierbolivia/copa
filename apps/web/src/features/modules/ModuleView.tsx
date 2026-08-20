@@ -94,7 +94,10 @@ function AutomaticSourcesPanel({projectId}:{projectId:string}) {
   const canRun=!running&&topic.trim().length>=3&&selected.length>0;
   const investigate=async()=>{
     setRunning(true);setError(null);setOpenFindingId(null);
-    try{const next=await api.runMarketResearch(projectId,{topic:topic.trim(),providers:selected});setRun(next);setLatestRunId(next.runId);setHistory((await api.marketResearchHistory(projectId)).runs);}
+    try{
+      const focus=await api.researchFocus(projectId);
+      const submittedTopic=researchTopicDefault(focus.value,topic,topicEdited).trim();
+      const next=await api.runMarketResearch(projectId,{topic:submittedTopic,providers:selected});setRun(next);setLatestRunId(next.runId);setHistory((await api.marketResearchHistory(projectId)).runs);}
     catch(reason){setError(messageOf(reason));}
     finally{setRunning(false);}
   };

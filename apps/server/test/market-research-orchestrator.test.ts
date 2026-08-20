@@ -20,7 +20,14 @@ function json(body: unknown, status = 200): Response {
 }
 
 function youtubeClient(count: number, overrides: Partial<MarketResearchYouTubeClient> = {}): MarketResearchYouTubeClient {
-  const video = { videoId: "dQw4w9WgXcQ", title: "Video", channelId: "channel", channelTitle: "Channel", publishedAt: "2026-02-01T00:00:00Z" };
+  const video = { videoId: "dQw4w9WgXcQ", title: "Organización de fotografías digitales", channelId: "channel", channelTitle: "Organización de fotografías", publishedAt: "2026-02-01T00:00:00Z" };
+  const enrichedVideo = {
+    ...video,
+    description: "Guía para organización de fotografías digitales",
+    duration: "PT8M",
+    tags: ["organización", "fotografías", "digitales"],
+    defaultAudioLanguage: "es",
+  };
   const thread = (index: number) => ({
     threadId: `thread-${index}`,
     totalReplyCount: 0,
@@ -29,7 +36,7 @@ function youtubeClient(count: number, overrides: Partial<MarketResearchYouTubeCl
       commentId: `comment-${index}`,
       parentCommentId: null,
       author: "Autor",
-      text: `Comentario de YouTube con dolor explícito número ${index}`,
+      text: `La organización de fotografías digitales es demasiado lenta y no funciona para mí, caso ${index}`,
       likes: index,
       publishedAt: "2026-02-02T00:00:00Z",
       updatedAt: "2026-02-02T00:00:00Z",
@@ -39,7 +46,8 @@ function youtubeClient(count: number, overrides: Partial<MarketResearchYouTubeCl
   return {
     configured: true,
     searchVideos: vi.fn(async () => ({ items: [{ ...video, description: "" }] })),
-    getVideo: vi.fn(async () => video),
+    getVideo: vi.fn(async () => enrichedVideo),
+    getVideos: vi.fn(async () => [enrichedVideo]),
     listCommentThreads: vi.fn(async () => ({ items: Array.from({ length: count }, (_, index) => thread(index)) })),
     ...overrides,
   } as unknown as MarketResearchYouTubeClient;

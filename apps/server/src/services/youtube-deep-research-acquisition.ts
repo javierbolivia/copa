@@ -1,4 +1,11 @@
-import { MARKET_RESEARCH_BUDGETS, type NormalizedMarketSignal } from "@our-platform/shared";
+import {
+  MARKET_RESEARCH_BUDGETS,
+  MARKET_RESEARCH_YOUTUBE_RELEVANCE_GATE_VERSION,
+  type MarketResearchYouTubeRelevanceProvenance,
+  type MarketResearchYouTubeRelevanceReview,
+  type MarketResearchYouTubeVideoDecisionAudit,
+  type NormalizedMarketSignal,
+} from "@our-platform/shared";
 
 import type {
   YouTubeAdapter,
@@ -15,6 +22,14 @@ import {
   youtubeCommentRejection,
   type YouTubeCommentRejection,
 } from "./youtube-evidence-quality.js";
+import type { YouTubeRelevanceReviewBatch, YouTubeRelevanceReviewer } from "./youtube-relevance-reviewer.js";
+import {
+  assessYouTubeCommentRelevance,
+  assessYouTubeVideoRelevance,
+  resolveYouTubeMinimumDurationSeconds,
+  topicTerms,
+  type YouTubeVideoRelevance,
+} from "./youtube-research-relevance.js";
 import {
   deriveYouTubeResearchQueries,
   type YouTubeResearchAngle,
@@ -23,10 +38,10 @@ import {
 } from "./youtube-research-queries.js";
 
 /**
- * The client surface used for deep acquisition. Search, single-video lookup and
- * comment threads are required; the batch metadata and reply endpoints are
- * optional so an environment (or a test double) without them degrades to a
- * shallower but still bounded acquisition instead of failing.
+ * Search and comment threads are required. The legacy single-video lookup
+ * remains in the client contract for compatibility but is intentionally not
+ * used here; batch/channel metadata and replies are optional. Missing batch
+ * records fail only their candidates without additional metadata requests.
  */
 export type YouTubeDeepResearchClient =
   Pick<YouTubeAdapter, "searchVideos" | "getVideo" | "listCommentThreads">
@@ -70,6 +85,8 @@ export interface YouTubeResearchVideoCandidate {
   readonly defaultAudioLanguage: string | null;
   readonly defaultLanguage: string | null;
   readonly channelCountry: string | null;
+  /** Full final gate provenance, populated only for eligible videos. */
+  readonly relevance: MarketResearchYouTubeRelevanceProvenance | null;
   readonly enriched: boolean;
 }
 
@@ -103,6 +120,22 @@ export interface YouTubeDeepAcquisitionMetrics {
   readonly commentRequests: number;
   readonly replyRequests: number;
   readonly channelsRepresented: number;
+  readonly videoMetadataFailures: number;
+  readonly videoDurationRejects: number;
+  readonly deterministicRelevantVideos: number;
+  readonly deterministicBorderlineVideos: number;
+  readonly deterministicIrrelevantVideos: number;
+  readonly successfulBorderlineReviews: number;
+  readonly borderlineReviewerFailures: number;
+  readonly finalRelevantVideos: number;
+  readonly researchRelevantComments: number;
+  readonly researchIrrelevantComments: number;
+  readonly creatorPromotionalCommentsExcluded: number;
+  readonly relevanceReviewerAttempts: number;
+  readonly relevanceReviewerFallbackAttempts: number;
+  readonly relevanceReviewerInputTokens: number;
+  readonly relevanceReviewerOutputTokens: number;
+  readonly videoRelevanceDecisionAudit: MarketResearchYouTubeVideoDecisionAudit[];
   /** Distinct declared audio/default languages; empty when YouTube declared none. */
   readonly declaredLanguages: readonly string[];
   readonly queryLanguages: readonly YouTubeResearchQueryLanguage[];
@@ -124,10 +157,72 @@ export interface YouTubeDeepAcquisition {
 
 export interface YouTubeDeepResearchInput {
   readonly topic: string;
+  readonly youtubeMinimumDurationSeconds?: number;
+  /** Optional bounded review of deterministic borderline video metadata only. */
+  readonly relevanceReviewer?: YouTubeRelevanceReviewer;
 }
 
 const VIDEO_ID = /^[\w-]{11}$/u;
 const COMMENT_SOURCE_PREFIX = "youtube-comment:";
+
+interface AssessedVideoCandidate {
+  readonly candidate: YouTubeResearchVideoCandidate;
+  readonly assessment: YouTubeVideoRelevance;
+}
+
+function emptyReviewBatch(): YouTubeRelevanceReviewBatch {
+  return {
+    results: new Map(),
+    attempts: 0,
+    fallbackAttempts: 0,
+    successes: 0,
+    failures: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function failedReviewBatch(videoIds: readonly string[]): YouTubeRelevanceReviewBatch {
+  const failure: MarketResearchYouTubeRelevanceReview = {
+    decision: null,
+    provider: null,
+    model: null,
+    fallback: false,
+    reason: "fail_closed:reviewer_unhandled_failure",
+    matchedAspects: [],
+    failure: "reviewer_unhandled_failure",
+  };
+  return {
+    results: new Map(videoIds.map((videoId) => [videoId, failure])),
+    attempts: 0,
+    fallbackAttempts: 0,
+    successes: 0,
+    failures: videoIds.length,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function relevanceProvenance(
+  assessment: YouTubeVideoRelevance,
+  minimumDurationSeconds: number,
+  reviewer: MarketResearchYouTubeRelevanceProvenance["reviewer"],
+  eligible: boolean,
+  rejectionReason: string | null,
+): MarketResearchYouTubeRelevanceProvenance {
+  return {
+    version: MARKET_RESEARCH_YOUTUBE_RELEVANCE_GATE_VERSION,
+    deterministic: {
+      decision: assessment.decision,
+      reason: assessment.reason,
+      matchedTerms: [...assessment.matchedTerms],
+      durationSeconds: assessment.durationSeconds,
+      minimumDurationSeconds,
+    },
+    reviewer,
+    final: { eligible, rejectionReason },
+  };
+}
 
 function emptyRejectionTally(): Record<YouTubeCommentRejection, number> {
   return Object.fromEntries(YOUTUBE_COMMENT_REJECTIONS.map((reason) => [reason, 0])) as Record<YouTubeCommentRejection, number>;
@@ -199,6 +294,7 @@ function candidateFrom(
     defaultAudioLanguage: null,
     defaultLanguage: null,
     channelCountry: null,
+    relevance: null,
     enriched: false,
   };
 }
@@ -273,7 +369,7 @@ export function selectDiverseYouTubeCandidates(
   return selected;
 }
 
-/** Trims embedded replies so one thread cannot fill a video's whole allowance. */
+/** Trims embedded replies to the configured per-thread and remaining raw limits. */
 function trimThread(thread: YouTubeThread, maxReplies: number): YouTubeThread {
   return thread.embeddedReplies.length <= maxReplies
     ? thread
@@ -286,7 +382,7 @@ function occurrenceCount(thread: YouTubeThread): number {
 
 interface VideoCommentPage {
   readonly threads: readonly YouTubeThread[];
-  /** Raw occurrences the API returned, before trimming or validation. */
+  /** Raw thread/reply occurrences retained for processing after hard limits. */
   readonly fetched: number;
   readonly requests: number;
   readonly unavailable: boolean;
@@ -295,25 +391,35 @@ interface VideoCommentPage {
 /**
  * Bounded comment-thread pagination for one video: at most
  * `youtubeMaxCommentPagesPerVideo` pages, stopping as soon as the video's
- * allowance is covered or YouTube stops returning a page token. A video with
- * comments disabled or otherwise unavailable is skipped, never retried.
+ * allowance is covered, the run's remaining raw allowance is exhausted, or
+ * YouTube stops returning a page token. A video with comments disabled or
+ * otherwise unavailable is skipped, never retried.
  */
 async function fetchVideoThreads(
   client: YouTubeDeepResearchClient,
   videoId: string,
   allowance: number,
+  remainingRawAllowance: number,
 ): Promise<VideoCommentPage> {
   const threads: YouTubeThread[] = [];
   let fetched = 0;
   let requests = 0;
   let pageToken: string | undefined;
-  for (let page = 0; page < MARKET_RESEARCH_BUDGETS.youtubeMaxCommentPagesPerVideo; page += 1) {
+  if (allowance <= 0 || remainingRawAllowance <= 0) {
+    return { threads, fetched, requests, unavailable: false };
+  }
+  for (let page = 0;
+    page < MARKET_RESEARCH_BUDGETS.youtubeMaxCommentPagesPerVideo && fetched < remainingRawAllowance;
+    page += 1) {
     let response: Awaited<ReturnType<YouTubeDeepResearchClient["listCommentThreads"]>>;
     try {
       requests += 1;
       response = await client.listCommentThreads({
         videoId,
-        maxResults: MARKET_RESEARCH_BUDGETS.youtubeCommentPageSize,
+        maxResults: Math.min(
+          MARKET_RESEARCH_BUDGETS.youtubeCommentPageSize,
+          remainingRawAllowance - fetched,
+        ),
         ...(pageToken === undefined ? {} : { pageToken }),
       });
     } catch {
@@ -321,12 +427,18 @@ async function fetchVideoThreads(
       return { threads, fetched, requests, unavailable: threads.length === 0 };
     }
     for (const thread of response.items) {
-      fetched += occurrenceCount(thread);
-      threads.push(trimThread(thread, MARKET_RESEARCH_BUDGETS.youtubeMaxRepliesPerThread));
+      const remaining = remainingRawAllowance - fetched;
+      if (remaining <= 0) break;
+      const boundedThread = trimThread(
+        thread,
+        Math.min(MARKET_RESEARCH_BUDGETS.youtubeMaxRepliesPerThread, remaining - 1),
+      );
+      threads.push(boundedThread);
+      fetched += occurrenceCount(boundedThread);
     }
     const covered = threads.reduce((total, thread) => total + occurrenceCount(thread), 0);
     pageToken = response.nextPageToken;
-    if (covered >= allowance || pageToken === undefined) break;
+    if (covered >= allowance || fetched >= remainingRawAllowance || pageToken === undefined) break;
   }
   return { threads, fetched, requests, unavailable: false };
 }
@@ -339,7 +451,9 @@ async function fetchVideoThreads(
  * subset within the hard video ceiling. Comments are acquired per video under a
  * per-video ceiling and a global ceiling, with bounded pagination and bounded
  * reply expansion. Every retained comment keeps its full provenance through the
- * existing MarketSignal adapter; no model is invoked anywhere in this path.
+ * existing MarketSignal adapter. The only optional model call is the bounded
+ * metadata review for deterministic borderline videos; comments are never sent
+ * to a model.
  */
 export async function acquireYouTubeDeepResearchSignals(
   client: YouTubeDeepResearchClient,
@@ -347,6 +461,7 @@ export async function acquireYouTubeDeepResearchSignals(
 ): Promise<YouTubeDeepAcquisition> {
   const startedAt = Date.now();
   const requested = MARKET_RESEARCH_BUDGETS.youtubeTargetComments;
+  const minimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(input.youtubeMinimumDurationSeconds);
   const queries = deriveYouTubeResearchQueries(input.topic);
 
   // ---- Discovery: one bounded page per query lane, deduped by video ID. ----
@@ -403,6 +518,22 @@ export async function acquireYouTubeDeepResearchSignals(
     commentRequests: 0,
     replyRequests: 0,
     channelsRepresented: 0,
+    videoMetadataFailures: 0,
+    videoDurationRejects: 0,
+    deterministicRelevantVideos: 0,
+    deterministicBorderlineVideos: 0,
+    deterministicIrrelevantVideos: 0,
+    successfulBorderlineReviews: 0,
+    borderlineReviewerFailures: 0,
+    finalRelevantVideos: 0,
+    researchRelevantComments: 0,
+    researchIrrelevantComments: 0,
+    creatorPromotionalCommentsExcluded: 0,
+    relevanceReviewerAttempts: 0,
+    relevanceReviewerFallbackAttempts: 0,
+    relevanceReviewerInputTokens: 0,
+    relevanceReviewerOutputTokens: 0,
+    videoRelevanceDecisionAudit: [],
     declaredLanguages: [],
     queryLanguages: [...new Set(queries.map((query) => query.language))],
     stopReason,
@@ -417,16 +548,16 @@ export async function acquireYouTubeDeepResearchSignals(
     };
   }
 
-  const selectedCandidates = selectDiverseYouTubeCandidates([...discovered.values()], {
+  const preGateCandidates = selectDiverseYouTubeCandidates([...discovered.values()], {
     maxVideos: MARKET_RESEARCH_BUDGETS.youtubeMaxVideos,
     maxPerChannel: MARKET_RESEARCH_BUDGETS.youtubeMaxVideosPerChannel,
   });
 
-  // ---- Enrichment: bounded batch metadata, never per-comment lookups. ----
+  // ---- Enrichment: bounded batch metadata; missing records fail only their candidate. ----
   const videos = new Map<string, YouTubeVideo>();
   const channels = new Map<string, YouTubeChannel>();
   let enrichmentRequests = 0;
-  const videoIds = selectedCandidates.map((candidate) => candidate.videoId);
+  const videoIds = preGateCandidates.map((candidate) => candidate.videoId);
   if (client.getVideos !== undefined) {
     for (let index = 0; index < videoIds.length; index += 50) {
       try {
@@ -435,12 +566,12 @@ export async function acquireYouTubeDeepResearchSignals(
           videos.set(video.videoId, video);
         }
       } catch {
-        // Enrichment is optional: acquisition continues with search metadata.
+        // A failed batch stays unavailable; omitted records already remain absent.
       }
     }
   }
   if (client.getChannels !== undefined) {
-    const channelIds = [...new Set(selectedCandidates.map((candidate) => candidate.channelId))].slice(0, 50);
+    const channelIds = [...new Set(preGateCandidates.map((candidate) => candidate.channelId))].slice(0, 50);
     if (channelIds.length > 0) {
       try {
         enrichmentRequests += 1;
@@ -451,8 +582,88 @@ export async function acquireYouTubeDeepResearchSignals(
     }
   }
 
-  const candidates = selectedCandidates.map((candidate) =>
-    enrichCandidate(candidate, videos.get(candidate.videoId), channels.get(candidate.channelId)));
+  const assessed: AssessedVideoCandidate[] = preGateCandidates.map((candidate) => {
+    const enriched = enrichCandidate(candidate, videos.get(candidate.videoId), channels.get(candidate.channelId));
+    return {
+      candidate: enriched,
+      assessment: assessYouTubeVideoRelevance({
+        topic: input.topic,
+        query: enriched.query,
+        title: enriched.title,
+        description: enriched.description,
+        tags: enriched.tags,
+        channelTitle: enriched.channelTitle,
+        duration: enriched.duration,
+        metadataAvailable: enriched.enriched,
+        minimumDurationSeconds,
+      }),
+    };
+  });
+  const researchTopicTerms = topicTerms(input.topic);
+  const deterministicRelevantVideos = assessed.filter(({ assessment }) => assessment.decision === "relevant").length;
+  const deterministicBorderlineVideos = assessed.filter(({ assessment }) => assessment.decision === "borderline").length;
+  const deterministicIrrelevantVideos = assessed.filter(({ assessment }) => assessment.decision === "irrelevant").length;
+  const videoMetadataFailures = assessed.filter(({ assessment }) =>
+    assessment.reason === "video_metadata_unavailable" || assessment.reason === "duration_unavailable").length;
+  const videoDurationRejects = assessed.filter(({ assessment }) =>
+    assessment.reason === "duration_below_minimum").length;
+  const borderline = assessed.filter(({ assessment }) => assessment.decision === "borderline");
+
+  let reviewBatch = emptyReviewBatch();
+  if (deterministicRelevantVideos < MARKET_RESEARCH_BUDGETS.youtubeTargetVideos
+    && borderline.length > 0
+    && input.relevanceReviewer !== undefined) {
+    const reviewCandidates = borderline.slice(0, MARKET_RESEARCH_BUDGETS.youtubeRelevanceMaxBorderlineVideos);
+    try {
+      reviewBatch = await input.relevanceReviewer.review(
+        input.topic,
+        reviewCandidates.map(({ candidate }) => ({
+          videoId: candidate.videoId,
+          title: candidate.title,
+          description: candidate.description,
+          tags: candidate.tags,
+          channelTitle: candidate.channelTitle,
+          declaredLanguage: candidate.defaultAudioLanguage ?? candidate.defaultLanguage,
+        })),
+      );
+    } catch {
+      reviewBatch = failedReviewBatch(reviewCandidates.map(({ candidate }) => candidate.videoId));
+    }
+  }
+
+  // Final eligibility is resolved in the original diversity order. Rejections
+  // leave room for later pre-gate candidates to backfill up to the target.
+  const candidates: YouTubeResearchVideoCandidate[] = [];
+  const videoRelevanceDecisionAudit: MarketResearchYouTubeVideoDecisionAudit[] = [];
+  for (const [index, item] of assessed.entries()) {
+    const review = reviewBatch.results.get(item.candidate.videoId) ?? null;
+    const qualifies = item.assessment.decision === "relevant"
+      || (item.assessment.decision === "borderline" && review?.failure === null && review.decision === "relevant");
+    const eligible = qualifies && candidates.length < MARKET_RESEARCH_BUDGETS.youtubeTargetVideos;
+    let rejectionReason: string | null = null;
+    if (!eligible) {
+      if (qualifies) rejectionReason = "final_target_reached";
+      else if (item.assessment.decision === "irrelevant") rejectionReason = item.assessment.reason;
+      else if (review === null) rejectionReason = "borderline_not_reviewed";
+      else if (review.failure !== null || review.decision === null) rejectionReason = "review_failed";
+      else if (review.decision === "borderline") rejectionReason = "reviewer_borderline";
+      else rejectionReason = "reviewer_irrelevant";
+    }
+    const provenance = relevanceProvenance(
+      item.assessment,
+      minimumDurationSeconds,
+      review,
+      eligible,
+      rejectionReason,
+    );
+    videoRelevanceDecisionAudit.push({
+      videoId: item.candidate.videoId,
+      channelId: item.candidate.channelId,
+      selectionOrder: index + 1,
+      relevance: provenance,
+    });
+    if (eligible) candidates.push({ ...item.candidate, relevance: provenance });
+  }
 
   // ---- Comment acquisition under per-video, global and raw ceilings. ----
   const signals: NormalizedMarketSignal[] = [];
@@ -473,6 +684,9 @@ export async function acquireYouTubeDeepResearchSignals(
   let exactDuplicatesRemoved = 0;
   let nearDuplicatesRemoved = 0;
   let repliesRetained = 0;
+  let researchRelevantComments = 0;
+  let researchIrrelevantComments = 0;
+  let creatorPromotionalCommentsExcluded = 0;
   let lowYieldBatches = 0;
   let stopReason: YouTubeAcquisitionStopReason = "videos_exhausted";
 
@@ -487,9 +701,10 @@ export async function acquireYouTubeDeepResearchSignals(
       MARKET_RESEARCH_BUDGETS.youtubeMaxCommentsPerVideo,
       MARKET_RESEARCH_BUDGETS.youtubeMaxComments - signals.length,
     );
-    if (allowance <= 0) { stopReason = "comment_limit_reached"; break; }
+    const remainingRawAllowance = MARKET_RESEARCH_BUDGETS.youtubeMaxRawComments - commentsFetched;
+    if (allowance <= 0 || remainingRawAllowance <= 0) { stopReason = "comment_limit_reached"; break; }
 
-    const page = await fetchVideoThreads(client, candidate.videoId, allowance);
+    const page = await fetchVideoThreads(client, candidate.videoId, allowance, remainingRawAllowance);
     commentsFetched += page.fetched;
     commentRequests += page.requests;
     if (page.threads.length === 0) {
@@ -497,22 +712,29 @@ export async function acquireYouTubeDeepResearchSignals(
       continue;
     }
 
-    // Bounded reply expansion: one page per thread, only while the video still
-    // has allowance and the run still has reply-request budget.
+    // Bounded reply expansion: one page per thread, only while the video and
+    // run still have raw allowance and the run has reply-request budget.
     const extraReplies = new Map<string, readonly YouTubeComment[]>();
     if (client.listReplies !== undefined) {
       let covered = page.threads.reduce((total, thread) => total + occurrenceCount(thread), 0);
       for (const thread of page.threads) {
-        if (covered >= allowance) break;
+        const remainingVideoAllowance = allowance - covered;
+        const remainingRawReplyAllowance = MARKET_RESEARCH_BUDGETS.youtubeMaxRawComments - commentsFetched;
+        if (remainingVideoAllowance <= 0 || remainingRawReplyAllowance <= 0) break;
         if (replyRequests >= MARKET_RESEARCH_BUDGETS.youtubeMaxReplyRequests) break;
         if (thread.totalReplyCount <= thread.embeddedReplies.length) continue;
+        const replyAllowance = Math.min(
+          MARKET_RESEARCH_BUDGETS.youtubeMaxRepliesPerThread,
+          remainingVideoAllowance,
+          remainingRawReplyAllowance,
+        );
         try {
           replyRequests += 1;
           const replies = await client.listReplies({
             parentCommentId: thread.topLevelComment.commentId,
-            maxResults: MARKET_RESEARCH_BUDGETS.youtubeMaxRepliesPerThread,
+            maxResults: replyAllowance,
           });
-          const bounded = replies.items.slice(0, MARKET_RESEARCH_BUDGETS.youtubeMaxRepliesPerThread);
+          const bounded = replies.items.slice(0, replyAllowance);
           if (bounded.length === 0) continue;
           extraReplies.set(thread.topLevelComment.commentId, bounded);
           repliesFetched += bounded.length;
@@ -534,13 +756,14 @@ export async function acquireYouTubeDeepResearchSignals(
         language: candidate.queryLanguage,
         declaredLanguage: candidate.defaultAudioLanguage ?? candidate.defaultLanguage,
         channelCountry: candidate.channelCountry,
+        ...(candidate.relevance === null ? {} : { relevance: candidate.relevance }),
       },
       ...(extraReplies.size === 0 ? {} : { extraReplies }),
     });
     structurallyRejected += adaptation.audit.rejected.length;
 
-    // Quality and dedupe run before anything is retained, so the comment target
-    // counts usable unique evidence rather than raw fetched comments.
+    // Structural adaptation is followed by topical relevance, then the existing
+    // semantic-quality rules, then exact/near dedupe. The counters stay disjoint.
     const occurrences = commentOccurrenceIndex(page.threads, extraReplies);
     const declaredLanguage = candidate.defaultAudioLanguage ?? candidate.defaultLanguage;
     let retainedForVideo = 0;
@@ -549,6 +772,22 @@ export async function acquireYouTubeDeepResearchSignals(
       if (retainedForVideo >= allowance) break;
       if (signals.length >= MARKET_RESEARCH_BUDGETS.youtubeMaxComments) break;
       const occurrence = occurrences.get(commentIdOf(signal.sourceId));
+      const commentRelevance = assessYouTubeCommentRelevance({
+        text: signal.text,
+        topicTerms: researchTopicTerms,
+        ...(occurrence?.author === undefined ? {} : { author: occurrence.author }),
+        channelTitle: candidate.channelTitle,
+      });
+      if (commentRelevance === "creator_promotion") {
+        creatorPromotionalCommentsExcluded += 1;
+        continue;
+      }
+      if (commentRelevance !== "research_relevant") {
+        researchIrrelevantComments += 1;
+        continue;
+      }
+      researchRelevantComments += 1;
+
       const rejection = youtubeCommentRejection({
         text: signal.text,
         author: occurrence?.author,
@@ -573,6 +812,10 @@ export async function acquireYouTubeDeepResearchSignals(
       retainedByVideo.set(candidate.videoId, retainedForVideo);
       retainedByChannel.set(candidate.channelId, (retainedByChannel.get(candidate.channelId) ?? 0) + retainedForVideo);
     }
+    if (commentsFetched >= MARKET_RESEARCH_BUDGETS.youtubeMaxRawComments) {
+      stopReason = "comment_limit_reached";
+      break;
+    }
 
     // Acquisition saturation: only videos that actually returned comments count
     // toward the window, and several consecutive low-yield batches are required.
@@ -587,8 +830,10 @@ export async function acquireYouTubeDeepResearchSignals(
     }
   }
 
-  if (signals.length >= MARKET_RESEARCH_BUDGETS.youtubeMaxComments) stopReason = "comment_limit_reached";
-  else if (stopReason === "videos_exhausted" && signals.length >= MARKET_RESEARCH_BUDGETS.youtubeTargetComments) {
+  if (commentsFetched >= MARKET_RESEARCH_BUDGETS.youtubeMaxRawComments
+    || signals.length >= MARKET_RESEARCH_BUDGETS.youtubeMaxComments) {
+    stopReason = "comment_limit_reached";
+  } else if (stopReason === "videos_exhausted" && signals.length >= MARKET_RESEARCH_BUDGETS.youtubeTargetComments) {
     stopReason = "target_reached";
   }
 
@@ -606,7 +851,7 @@ export async function acquireYouTubeDeepResearchSignals(
     metrics: {
       queries: queries.length,
       videosDiscovered: discovered.size,
-      videosSelected: candidates.length,
+      videosSelected: preGateCandidates.length,
       videosWithComments,
       videosSkipped,
       commentsFetched,
@@ -630,6 +875,22 @@ export async function acquireYouTubeDeepResearchSignals(
       commentRequests,
       replyRequests,
       channelsRepresented: new Set(candidates.slice(0, processedVideos).map((candidate) => candidate.channelId)).size,
+      videoMetadataFailures,
+      videoDurationRejects,
+      deterministicRelevantVideos,
+      deterministicBorderlineVideos,
+      deterministicIrrelevantVideos,
+      successfulBorderlineReviews: reviewBatch.successes,
+      borderlineReviewerFailures: reviewBatch.failures,
+      finalRelevantVideos: candidates.length,
+      researchRelevantComments,
+      researchIrrelevantComments,
+      creatorPromotionalCommentsExcluded,
+      relevanceReviewerAttempts: reviewBatch.attempts,
+      relevanceReviewerFallbackAttempts: reviewBatch.fallbackAttempts,
+      relevanceReviewerInputTokens: reviewBatch.inputTokens,
+      relevanceReviewerOutputTokens: reviewBatch.outputTokens,
+      videoRelevanceDecisionAudit,
       declaredLanguages,
       queryLanguages: [...new Set(queries.map((query) => query.language))],
       stopReason,

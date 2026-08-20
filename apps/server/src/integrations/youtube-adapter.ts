@@ -150,7 +150,14 @@ export class YouTubeAdapter {
   async getVideos(videoIds:readonly string[]):Promise<YouTubeVideo[]> {
     if(videoIds.length===0)return[];
     const response = await this.get("videos", { part: "snippet,contentDetails,statistics", id: videoIds.slice(0,50).join(",") });
-    return (Array.isArray(response.items)?response.items:[]).map((item)=>this.mapVideo(item));
+    return (Array.isArray(response.items)?response.items:[]).flatMap((item):YouTubeVideo[]=>{
+      try {
+        return [this.mapVideo(item)];
+      } catch (error) {
+        if (error instanceof IntegrationError) return [];
+        throw error;
+      }
+    });
   }
 
   private mapVideo(item:unknown):YouTubeVideo {

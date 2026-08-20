@@ -1,6 +1,7 @@
 import {
   MARKET_RESEARCH_BUDGETS,
   MARKET_RESEARCH_PROVIDERS,
+  MarketResearchYouTubeRelevanceProvenanceSchema,
   marketResearchProviderBudget,
   type MarketResearchMetrics,
   type MarketResearchProvider,
@@ -8,8 +9,10 @@ import {
   type MarketResearchProviderState,
   type MarketResearchSignal,
   type MarketResearchYouTubeMetadata,
+  type MarketResearchYouTubeRelevanceProvenance,
   type NormalizedMarketSignal,
 } from "@our-platform/shared";
+import { Value } from "@sinclair/typebox/value";
 
 import { IntegrationError } from "../integrations/integration-error.js";
 import type { WebDiscoveryProvider, WebDiscoveryResponse } from "../integrations/web-discovery.js";
@@ -17,6 +20,8 @@ import type { YouTubeAdapter } from "../integrations/youtube-adapter.js";
 import { marketSignalDedupeKey } from "./market-intelligence-benchmark.js";
 import { adaptWebDiscoveryMarketSignals } from "./web-market-signal-adapter.js";
 import { acquireYouTubeDeepResearchSignals, type YouTubeDeepAcquisitionMetrics } from "./youtube-deep-research-acquisition.js";
+import type { YouTubeRelevanceReviewer } from "./youtube-relevance-reviewer.js";
+import { resolveYouTubeMinimumDurationSeconds } from "./youtube-research-relevance.js";
 
 export type MarketResearchYouTubeClient =
   Pick<YouTubeAdapter, "searchVideos" | "getVideo" | "listCommentThreads">
@@ -40,6 +45,9 @@ export interface MarketResearchAcquisitionInput {
   readonly topic: string;
   /** Caller-supplied retrieval time so signal adapters stay pure. */
   readonly retrievedAt: string;
+  /** Optional bounded metadata review, composed by MarketResearchService. */
+  readonly youtubeRelevanceReviewer?: YouTubeRelevanceReviewer;
+  readonly youtubeMinimumDurationSeconds?: number;
   /** Optional narrowing only; it can never raise a budget or add a provider. */
   readonly providers?: readonly MarketResearchProvider[];
 }
@@ -74,6 +82,34 @@ function failureCode(error: unknown): string {
   return error instanceof IntegrationError ? error.code : "unknown";
 }
 
+function parsedYouTubeRelevance(value: unknown): MarketResearchYouTubeRelevanceProvenance | undefined {
+  if (!Value.Check(MarketResearchYouTubeRelevanceProvenanceSchema, value)) return undefined;
+  const relevance = value as MarketResearchYouTubeRelevanceProvenance;
+  return {
+    version: relevance.version,
+    deterministic: {
+      decision: relevance.deterministic.decision,
+      reason: relevance.deterministic.reason,
+      matchedTerms: [...relevance.deterministic.matchedTerms],
+      durationSeconds: relevance.deterministic.durationSeconds,
+      minimumDurationSeconds: relevance.deterministic.minimumDurationSeconds,
+    },
+    reviewer: relevance.reviewer === null ? null : {
+      decision: relevance.reviewer.decision,
+      provider: relevance.reviewer.provider,
+      model: relevance.reviewer.model,
+      fallback: relevance.reviewer.fallback,
+      reason: relevance.reviewer.reason,
+      matchedAspects: [...relevance.reviewer.matchedAspects],
+      failure: relevance.reviewer.failure,
+    },
+    final: {
+      eligible: relevance.final.eligible,
+      rejectionReason: relevance.final.rejectionReason,
+    },
+  };
+}
+
 function youtubeMetadata(signal: NormalizedMarketSignal): MarketResearchYouTubeMetadata | undefined {
   if (signal.source !== "youtube" || signal.query === null || signal.context === null) return undefined;
   try {
@@ -88,6 +124,7 @@ function youtubeMetadata(signal: NormalizedMarketSignal): MarketResearchYouTubeM
       ? discovery as Record<string, unknown> : null;
     if (typeof videoRecord.videoId !== "string" || typeof videoRecord.channelId !== "string" || typeof videoRecord.channelTitle !== "string") return undefined;
     const text = (value: unknown): string | null => typeof value === "string" && value.trim().length > 0 ? value : null;
+    const relevance = parsedYouTubeRelevance(discoveryRecord?.relevance);
     return {
       videoId: videoRecord.videoId,
       channelId: videoRecord.channelId,
@@ -97,6 +134,7 @@ function youtubeMetadata(signal: NormalizedMarketSignal): MarketResearchYouTubeM
       queryLanguage: text(discoveryRecord?.language),
       declaredLanguage: text(discoveryRecord?.declaredLanguage),
       channelCountry: text(discoveryRecord?.channelCountry),
+      ...(relevance === undefined ? {} : { relevance }),
     };
   } catch {
     return undefined;
@@ -188,7 +226,13 @@ async function acquireProvider(
       return { ...empty, state: "not_configured", latencyMs: 0, failure: null };
     }
     try {
-      const acquisition = await acquireYouTubeDeepResearchSignals(youtube, { topic: input.topic });
+      const acquisition = await acquireYouTubeDeepResearchSignals(youtube, {
+        topic: input.topic,
+        ...(input.youtubeMinimumDurationSeconds === undefined
+          ? {}
+          : { youtubeMinimumDurationSeconds: input.youtubeMinimumDurationSeconds }),
+        ...(input.youtubeRelevanceReviewer === undefined ? {} : { relevanceReviewer: input.youtubeRelevanceReviewer }),
+      });
       return {
         ...empty,
         state: "available",
@@ -312,9 +356,14 @@ export async function acquireMarketResearchSignals(
   if (!topic) throw new Error("market research topic must not be empty");
   const referenceAt = new Date(input.retrievedAt).getTime();
   if (Number.isNaN(referenceAt)) throw new Error("market research retrievedAt must be valid");
+  const youtubeMinimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(input.youtubeMinimumDurationSeconds);
 
   const selected = requestedProviders(clients, input.providers);
-  const acquisitions = await Promise.all(selected.map((provider) => acquireProvider(clients, provider, { ...input, topic })));
+  const acquisitions = await Promise.all(selected.map((provider) => acquireProvider(clients, provider, {
+    ...input,
+    topic,
+    youtubeMinimumDurationSeconds,
+  })));
 
   const seen = new Set<string>();
   const uniqueByProvider = new Map<MarketResearchProvider, RankedSignal[]>();

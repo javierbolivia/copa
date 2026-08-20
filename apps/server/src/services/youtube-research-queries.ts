@@ -47,21 +47,67 @@ const ENGLISH_TEMPLATES: Readonly<Record<YouTubeResearchAngle, (topic: string) =
   desired_outcome: (topic) => `${topic} real results`,
 };
 
-const MAX_TOPIC_LENGTH = 120;
+const MAX_DISCOVERY_TERMS = 4;
+const MAX_VERBATIM_FOCUS_CHARS = 60;
+const MAX_FALLBACK_QUERY_CHARS = 80;
+
+/** General research framing words that add little retrieval precision. */
+const RETRIEVAL_FILLER = new Set([
+  "a", "al", "and", "are", "as", "at", "causa", "causas", "con", "cuando", "de", "del", "do", "dueño", "dueños",
+  "el", "en", "errores", "error", "for", "how", "la", "las", "los", "muestran", "necesidad", "necesidades", "need", "needs",
+  "no", "o", "of", "owner", "owners", "para", "personas", "people", "por", "problem", "problems", "problema", "problemas",
+  "que", "quedan", "se", "solution", "solutions", "solución", "soluciones", "the", "to", "training", "entrenamiento", "usuarios", "users", "y",
+]);
+
+/** Domain-general pain anchors; they only select words already present in the focus. */
+const PAIN_INTENT = new Set([
+  "anxiety", "ansiedad", "burnout", "dificultad", "dolor", "estrés", "estress", "fear", "frustración", "frustracion",
+  "miedo", "pain", "stress", "struggle", "struggles",
+]);
+
+function boundedWords(value: string, maximum: number): string {
+  if (value.length <= maximum) return value;
+  const bounded = value.slice(0, maximum + 1);
+  const boundary = bounded.lastIndexOf(" ");
+  return (boundary > 0 ? bounded.slice(0, boundary) : bounded.slice(0, maximum)).trim();
+}
+
+function conciseDiscoveryIntent(value: string): string {
+  const terms = value.match(/[\p{L}\p{N}]{2,}/gu) ?? [];
+  const content = terms.filter((term) => !RETRIEVAL_FILLER.has(term.toLocaleLowerCase("und")));
+  if (content.length === 0) return boundedWords(value, MAX_FALLBACK_QUERY_CHARS);
+  if (content.length <= MAX_DISCOVERY_TERMS) return content.join(" ");
+
+  const selected = new Set<number>([0]);
+  const painIndex = content.findIndex((term) => PAIN_INTENT.has(term.toLocaleLowerCase("und")));
+  if (painIndex >= 0) {
+    selected.add(painIndex);
+    if (painIndex + 1 < content.length) selected.add(painIndex + 1);
+    return [...selected].sort((left, right) => left - right).map((index) => content[index]).join(" ");
+  }
+  for (let index = 1; selected.size < MAX_DISCOVERY_TERMS && index < content.length; index += 1) {
+    selected.add(index);
+  }
+  return [...selected].sort((left, right) => left - right).map((index) => content[index]).join(" ");
+}
 
 /**
- * Canonical topic form used to build queries: collapsed whitespace with quote
- * and operator characters removed so a focus can never inject search syntax.
+ * Canonical query intent derived only from the Research Focus. It removes
+ * generic framing and keeps a small subject-plus-pain phrase, never a copied
+ * long-form brief or a niche-specific synonym.
  */
 export function youtubeResearchTopic(topic: string): string {
-  return topic
+  const normalized = topic
     .normalize("NFC")
     .replace(/["'|()\[\]{}]/gu, " ")
     .replace(/[+\-]+/gu, " ")
     .replace(/\s+/gu, " ")
-    .trim()
-    .slice(0, MAX_TOPIC_LENGTH)
     .trim();
+  return normalized === ""
+    ? ""
+    : normalized.length <= MAX_VERBATIM_FOCUS_CHARS
+      ? normalized
+      : conciseDiscoveryIntent(normalized);
 }
 
 /** Case/diacritic-insensitive comparison form used only to collapse equal queries. */

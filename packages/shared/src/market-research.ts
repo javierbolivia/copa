@@ -39,6 +39,19 @@ export const MARKET_RESEARCH_BUDGETS = {
   /** Candidate pool ceiling: wide enough for channel diversity, still bounded. */
   youtubeMaxCandidates: 120,
   youtubeSearchResultsPerQuery: 10,
+  /** Default and hard ceiling for the caller-configurable long-form video gate. */
+  youtubeMinimumDurationSeconds: 4 * 60,
+  youtubeMaximumMinimumDurationSeconds: 24 * 60 * 60,
+  youtubeRelevanceMaxBorderlineVideos: 8,
+  youtubeRelevanceMaxCharsPerItem: 600,
+  youtubeRelevanceMaxTags: 8,
+  youtubeRelevanceMaxMatchedTerms: 24,
+  youtubeRelevanceMaxMatchedAspects: 8,
+  youtubeRelevanceMaxReasonChars: 240,
+  youtubeRelevanceMaxSerializedChars: 32_000,
+  youtubeRelevanceMaxOutputTokens: 800,
+  /** One primary batch plus, at most, one per-candidate fallback request. */
+  youtubeRelevanceMaxAttempts: 9,
   youtubeTargetComments: 300,
   youtubeMaxComments: 500,
   youtubeMaxCommentsPerVideo: 25,
@@ -125,6 +138,79 @@ export const MarketResearchEvidenceStrengthSchema = Type.Union(
 );
 export type MarketResearchEvidenceStrength = Static<typeof MarketResearchEvidenceStrengthSchema>;
 
+export const MARKET_RESEARCH_YOUTUBE_RELEVANCE_GATE_VERSION = "youtube-relevance-gate/v1" as const;
+export const MARKET_RESEARCH_YOUTUBE_MAX_REPORTED_DURATION_SECONDS = 365 * 24 * 60 * 60;
+export const MARKET_RESEARCH_YOUTUBE_RELEVANCE_DECISIONS = ["relevant", "borderline", "irrelevant"] as const;
+export const MarketResearchYouTubeRelevanceDecisionSchema = Type.Union([
+  Type.Literal("relevant"),
+  Type.Literal("borderline"),
+  Type.Literal("irrelevant"),
+]);
+export type MarketResearchYouTubeRelevanceDecision = Static<typeof MarketResearchYouTubeRelevanceDecisionSchema>;
+
+export const MARKET_RESEARCH_YOUTUBE_DETERMINISTIC_REASONS = [
+  "video_metadata_unavailable",
+  "duration_unavailable",
+  "duration_below_minimum",
+  "no_meaningful_topic_terms",
+  "no_topic_overlap",
+  "strong_title_topic_overlap",
+  "strong_metadata_topic_overlap",
+  "limited_topic_overlap",
+] as const;
+export const MarketResearchYouTubeDeterministicReasonSchema = Type.Union(
+  MARKET_RESEARCH_YOUTUBE_DETERMINISTIC_REASONS.map((reason) => Type.Literal(reason)),
+);
+export type MarketResearchYouTubeDeterministicReason = Static<typeof MarketResearchYouTubeDeterministicReasonSchema>;
+
+/** Strict, bounded output of one optional borderline metadata review. */
+export const MarketResearchYouTubeRelevanceReviewSchema = Type.Object({
+  decision: Type.Union([MarketResearchYouTubeRelevanceDecisionSchema, Type.Null()]),
+  provider: Type.Union([MarketResearchAnalyzerSchema, Type.Null()]),
+  model: Type.Union([Type.String({ minLength: 1, maxLength: 128 }), Type.Null()]),
+  fallback: Type.Boolean(),
+  reason: Type.String({ minLength: 1, maxLength: MARKET_RESEARCH_BUDGETS.youtubeRelevanceMaxReasonChars }),
+  matchedAspects: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+    maxItems: MARKET_RESEARCH_BUDGETS.youtubeRelevanceMaxMatchedAspects,
+  }),
+  failure: Type.Union([Type.String({ minLength: 1, maxLength: 160 }), Type.Null()]),
+}, { additionalProperties: false });
+export type MarketResearchYouTubeRelevanceReview = Static<typeof MarketResearchYouTubeRelevanceReviewSchema>;
+
+/** Full relevance-gate provenance retained for accepted and rejected selections. */
+export const MarketResearchYouTubeRelevanceProvenanceSchema = Type.Object({
+  version: Type.Literal(MARKET_RESEARCH_YOUTUBE_RELEVANCE_GATE_VERSION),
+  deterministic: Type.Object({
+    decision: MarketResearchYouTubeRelevanceDecisionSchema,
+    reason: MarketResearchYouTubeDeterministicReasonSchema,
+    matchedTerms: Type.Array(Type.String({ minLength: 1, maxLength: 80 }), {
+      maxItems: MARKET_RESEARCH_BUDGETS.youtubeRelevanceMaxMatchedTerms,
+    }),
+    durationSeconds: Type.Union([
+      Type.Integer({ minimum: 0, maximum: MARKET_RESEARCH_YOUTUBE_MAX_REPORTED_DURATION_SECONDS }),
+      Type.Null(),
+    ]),
+    minimumDurationSeconds: Type.Integer({
+      minimum: MARKET_RESEARCH_BUDGETS.youtubeMinimumDurationSeconds,
+      maximum: MARKET_RESEARCH_BUDGETS.youtubeMaximumMinimumDurationSeconds,
+    }),
+  }, { additionalProperties: false }),
+  reviewer: Type.Union([MarketResearchYouTubeRelevanceReviewSchema, Type.Null()]),
+  final: Type.Object({
+    eligible: Type.Boolean(),
+    rejectionReason: Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()]),
+  }, { additionalProperties: false }),
+}, { additionalProperties: false });
+export type MarketResearchYouTubeRelevanceProvenance = Static<typeof MarketResearchYouTubeRelevanceProvenanceSchema>;
+
+export const MarketResearchYouTubeVideoDecisionAuditSchema = Type.Object({
+  videoId: Type.String({ minLength: 1, maxLength: 64 }),
+  channelId: Type.String({ minLength: 1, maxLength: 128 }),
+  selectionOrder: Type.Integer({ minimum: 1, maximum: MARKET_RESEARCH_BUDGETS.youtubeMaxVideos }),
+  relevance: MarketResearchYouTubeRelevanceProvenanceSchema,
+}, { additionalProperties: false });
+export type MarketResearchYouTubeVideoDecisionAudit = Static<typeof MarketResearchYouTubeVideoDecisionAuditSchema>;
+
 /**
  * Public, bounded YouTube provenance retained with a persisted Market Signal.
  * Each value is provider-declared or captured during deterministic acquisition;
@@ -139,6 +225,8 @@ export const MarketResearchYouTubeMetadataSchema = Type.Object({
   queryLanguage: Type.Union([Type.String({ minLength: 1, maxLength: 32 }), Type.Null()]),
   declaredLanguage: Type.Union([Type.String({ minLength: 1, maxLength: 64 }), Type.Null()]),
   channelCountry: Type.Union([Type.String({ minLength: 1, maxLength: 16 }), Type.Null()]),
+  /** Optional so signals from historical runs restore without migration. */
+  relevance: Type.Optional(MarketResearchYouTubeRelevanceProvenanceSchema),
 }, { additionalProperties: false });
 export type MarketResearchYouTubeMetadata = Static<typeof MarketResearchYouTubeMetadataSchema>;
 
@@ -204,6 +292,25 @@ export const MarketResearchYouTubeAcquisitionSchema = Type.Object({
   maxCommentsFromOneChannel: Type.Integer({ minimum: 0 }),
   lowYieldBatches: Type.Integer({ minimum: 0 }),
   stopReason: Type.String({ minLength: 1, maxLength: 64 }),
+  /** Optional relevance-gate telemetry; historical persisted runs omit it. */
+  videoMetadataFailures: Type.Optional(Type.Integer({ minimum: 0 })),
+  videoDurationRejects: Type.Optional(Type.Integer({ minimum: 0 })),
+  deterministicRelevantVideos: Type.Optional(Type.Integer({ minimum: 0 })),
+  deterministicBorderlineVideos: Type.Optional(Type.Integer({ minimum: 0 })),
+  deterministicIrrelevantVideos: Type.Optional(Type.Integer({ minimum: 0 })),
+  successfulBorderlineReviews: Type.Optional(Type.Integer({ minimum: 0 })),
+  borderlineReviewerFailures: Type.Optional(Type.Integer({ minimum: 0 })),
+  finalRelevantVideos: Type.Optional(Type.Integer({ minimum: 0 })),
+  researchRelevantComments: Type.Optional(Type.Integer({ minimum: 0 })),
+  researchIrrelevantComments: Type.Optional(Type.Integer({ minimum: 0 })),
+  creatorPromotionalCommentsExcluded: Type.Optional(Type.Integer({ minimum: 0 })),
+  relevanceReviewerAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
+  relevanceReviewerFallbackAttempts: Type.Optional(Type.Integer({ minimum: 0 })),
+  relevanceReviewerInputTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+  relevanceReviewerOutputTokens: Type.Optional(Type.Integer({ minimum: 0 })),
+  videoRelevanceDecisionAudit: Type.Optional(Type.Array(MarketResearchYouTubeVideoDecisionAuditSchema, {
+    maxItems: MARKET_RESEARCH_BUDGETS.youtubeMaxVideos,
+  })),
 });
 export type MarketResearchYouTubeAcquisition = Static<typeof MarketResearchYouTubeAcquisitionSchema>;
 
@@ -320,6 +427,11 @@ export const MarketResearchStatusSchema = Type.Object({
     youtubeTargetComments: Type.Integer({ minimum: 1 }),
     youtubeMaxVideos: Type.Integer({ minimum: 1 }),
     youtubeMaxComments: Type.Integer({ minimum: 1 }),
+    /** Server default used when a run does not override the long-form gate. */
+    youtubeMinimumDurationSeconds: Type.Integer({
+      minimum: MARKET_RESEARCH_BUDGETS.youtubeMinimumDurationSeconds,
+      maximum: MARKET_RESEARCH_BUDGETS.youtubeMaximumMinimumDurationSeconds,
+    }),
   }),
 });
 export type MarketResearchStatus = Static<typeof MarketResearchStatusSchema>;
@@ -327,6 +439,11 @@ export type MarketResearchStatus = Static<typeof MarketResearchStatusSchema>;
 export const RunMarketResearchSchema = Type.Object({
   topic: Type.String({ minLength: MARKET_RESEARCH_TOPIC_MIN_LENGTH, maxLength: MARKET_RESEARCH_TOPIC_MAX_LENGTH }),
   providers: Type.Optional(Type.Array(MarketResearchProviderSchema, { minItems: 1, maxItems: MARKET_RESEARCH_PROVIDERS.length })),
+  youtubeMinimumDurationSeconds: Type.Optional(Type.Integer({
+    minimum: MARKET_RESEARCH_BUDGETS.youtubeMinimumDurationSeconds,
+    maximum: MARKET_RESEARCH_BUDGETS.youtubeMaximumMinimumDurationSeconds,
+    default: MARKET_RESEARCH_BUDGETS.youtubeMinimumDurationSeconds,
+  })),
 }, { additionalProperties: false });
 export type RunMarketResearchInput = Static<typeof RunMarketResearchSchema>;
 

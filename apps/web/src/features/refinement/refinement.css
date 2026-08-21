@@ -4,14 +4,6 @@
 .refinement-feedback{margin:0 0 12px;padding:12px 16px;border:1px solid #b8d99d;border-radius:10px;background:#f0f9e8;color:#34552a;font-weight:700}.refinement-approval-bar,.refinement-save-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 14px;padding:10px 14px;border:1px solid #dfe6e1;border-radius:10px;background:#fff}.refinement-save-bar{margin-top:12px}.refinement-dialog-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:20px;background:#142018aa}.refinement-dialog{width:min(820px,100%);max-height:88vh;overflow:auto;padding:24px;border-radius:16px;background:#fff;box-shadow:0 24px 80px #0005}.refinement-dialog>header{display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid #e4e9e5}.refinement-dialog>header button{align-self:flex-start;border:0;background:transparent;font-size:28px}.refinement-trace-chain{display:grid;gap:8px;margin-top:18px}.refinement-trace-chain article{display:grid;gap:3px;padding:12px;border-left:3px solid #a8dc63;border-radius:8px;background:#f7faf6}.refinement-trace-sources,.refinement-trace-evidence{margin-top:18px}.refinement-trace-evidence blockquote{margin:8px 0;padding:12px;border-left:3px solid #7fa957;background:#f8faf8}.refinement-trace-evidence footer{margin-top:6px;color:#718078;font-size:11px}@media(max-width:600px){.refinement-approval-bar,.refinement-save-bar{align-items:stretch;flex-direction:column}.refinement-dialog{padding:16px}}
 
 
-/* COPA redesign — re-theme acento a azul */
-.rf-button--primary{color:#fff;background:var(--primary)}
-.rf-button--primary:hover{background:var(--primary-hover)}
-.rf-button--quiet{color:var(--text);border-color:var(--border);background:var(--bg-surface)}
-.rf-section-nav button.is-active{color:var(--primary);background:var(--bg-active)}
-.rf-landing-editor nav button.is-active{color:var(--primary);background:var(--bg-active)}
-.rf-preview-toggle button.is-active{color:var(--text);background:var(--bg-surface);box-shadow:0 2px 7px rgba(0,0,0,.08)}
-
 /* Premium module decision + editing workspace */
 .refined-module-shell{--module-accent:var(--accent);--module-accent-soft:var(--accent-soft);display:grid;gap:14px;min-width:0}
 .refined-module-shell--avatar{--module-accent:#22d3ee;--module-accent-soft:rgba(34,211,238,.11)}

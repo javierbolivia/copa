@@ -1,6 +1,6 @@
 ---
 name: copa-engineering
-description: Guardrails de ingeniería COPA para cambios acotados y verificables.
+description: Guardrails de ingeniería Hallazia para cambios acotados y verificables.
 ---
 
 - Inspecciona antes de editar.

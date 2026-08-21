@@ -1,6 +1,6 @@
-# COPA Engineering Instructions
+# Hallazia Engineering Instructions
 
-Persistent engineering guidance for the COPA repository (`our-platform`). Read this before
+Persistent engineering guidance for the Hallazia repository (`our-platform`). Read this before
 any change. It constrains behavior but does not override an explicit user instruction in a
 given session; when an explicit instruction conflicts with a rule here, follow the explicit
 instruction and report the deviation.

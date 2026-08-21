@@ -1,6 +1,6 @@
-# Our Platform
+# Hallazia
 
-Aplicación personal y local que convierte evidencia de mercado en productos digitales y activos comerciales trazables. El recorrido completo funciona sin claves con datos `DEMO` claramente identificados.
+Hallazia es una aplicación personal y local que convierte evidencia de mercado en decisiones, productos digitales y activos comerciales trazables. El recorrido completo funciona sin claves con datos `DEMO` claramente identificados.
 
 ## Iniciar normal
 

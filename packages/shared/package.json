@@ -1,6 +1,7 @@
 {
   "name": "@our-platform/shared",
   "version": "0.1.0",
+  "description": "Contratos TypeScript compartidos de Hallazia.",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",

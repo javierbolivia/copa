@@ -543,10 +543,6 @@
 }
 
 
-/* COPA redesign — re-theme acento a azul */
-.ps-cost-bar{border-color:var(--border);background:var(--bg-surface)}
-.ps-tabs button.active{color:var(--primary);background:var(--bg-active)}
-
 /* Premium Product Studio */
 .ps-root{min-width:0;padding:23px;border:1px solid var(--border);border-radius:16px;color:var(--text);background:radial-gradient(circle at 88% -18%,var(--module-accent-soft,var(--accent-soft)),transparent 34%),linear-gradient(145deg,#131c2d,#0e1624);box-shadow:var(--shadow-panel),inset 0 1px rgba(255,255,255,.03)}
 .ps-cost-bar{border-color:rgba(245,184,73,.25);color:var(--text-secondary);background:var(--warning-soft)}.ps-cost-bar span{color:var(--text-muted)}

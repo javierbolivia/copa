@@ -1,20 +1,20 @@
 ---
 name: diagnosing-bugs
-description: Diagnosis workflow for hard bugs and runtime regressions in the COPA monorepo. Use ONLY when something is broken, a test passes but the real runtime differs, a regression appeared, or the root cause is unknown. Do NOT use for documentation, simple commits, cosmetic changes, clearly-specified features, or routine Git tasks.
+description: Diagnosis workflow for hard bugs and runtime regressions in the Hallazia monorepo. Use ONLY when something is broken, a test passes but the real runtime differs, a regression appeared, or the root cause is unknown. Do NOT use for documentation, simple commits, cosmetic changes, clearly-specified features, or routine Git tasks.
 ---
 
-# Diagnosing Bugs (COPA adaptation)
+# Diagnosing Bugs (Hallazia adaptation)
 
-A discipline for hard bugs, adapted for the COPA monorepo. **AGENTS.md is the superior
-authority** and the **COPA Senior Engineer** agent defines the surrounding workflow; this
+A discipline for hard bugs, adapted for the Hallazia monorepo. **AGENTS.md is the superior
+authority** and the **Hallazia Senior Engineer** agent defines the surrounding workflow; this
 skill is the specialized diagnostic loop invoked inside that workflow. Skip phases only when
 explicitly justified.
 
 When exploring the codebase, read `AGENTS.md` (repo root) for the architectural mental model,
 the Problem Quality Engine rules, and the testing/Git safety policies. Do not rely on an
-external `CONTEXT.md` or ADRs — COPA documents architecture in `AGENTS.md` and `docs/`.
+external `CONTEXT.md` or ADRs — Hallazia documents architecture in `AGENTS.md` and `docs/`.
 
-## Redact & protect (COPA)
+## Redact & protect (Hallazia)
 
 This skill has you show commands, outputs and captured artifacts. **Before showing anything,
 redact every secret** — write `<REDACTED>` in its place.
@@ -23,7 +23,7 @@ redact every secret** — write `<REDACTED>` in its place.
   before printing or pasting. If redaction is insufficient to diagnose, say so and ask the user.
 - **Never upload artifacts, logs, or DB dumps outside the local environment.**
 
-## COPA-specific constraints
+## Hallazia-specific constraints
 
 - Distinguish a **deterministic bug** (same input -> same wrong output) from **generative-model
   variability** (Gemini / OpenAI / YouTube output varies run to run). The Problem Quality Engine
@@ -54,7 +54,7 @@ Construct one, roughly in this order:
    failure mode.
 7. **Bisection / differential loop** — old vs new version, or two configs, diff outputs.
 8. **HITL fallback** — if a human must click, drive _them_ with a structured loop; captured output
-   feeds back. (No `scripts/hitl-loop.template.sh` exists in COPA; describe the steps instead.)
+   feeds back. (No `scripts/hitl-loop.template.sh` exists in Hallazia; describe the steps instead.)
 
 A tight, deterministic, fast, agent-runnable loop that can go red on the user's exact symptom is
 the bar. If you catch yourself reading code to build a theory before this command exists, **stop**.
@@ -86,7 +86,7 @@ Each probe maps to a Phase-3 prediction. Change **one variable at a time**.
 2. Targeted logs at boundaries that distinguish hypotheses — **never "log everything and grep"**.
 3. Tag every debug log with a unique prefix, e.g. `[DEBUG-a4f2]`, so cleanup is a single grep.
 For **performance regressions**, measure first (timing harness, profiler, query plan), then bisect.
-For COPA persisted data, prefer read-only DB queries over mutating instrumentation.
+For Hallazia persisted data, prefer read-only DB queries over mutating instrumentation.
 
 ## Phase 5 — Fix + regression test
 
@@ -114,6 +114,6 @@ Required before declaring done:
 Adapted from `mattpocock/skills` → `skills/engineering/diagnosing-bugs/SKILL.md`.
 Source repository: https://github.com/mattpocock/skills (MIT License, © 2026 Matt Pocock).
 Upstream commit referenced: `1dab98299c3b81f560026c01b7ebf55ed5d91373` (2026-08-15).
-Adapted for COPA: AGENTS.md made the superior authority; `.env`/secret handling, Git safety,
+Adapted for Hallazia: AGENTS.md made the superior authority; `.env`/secret handling, Git safety,
 Problem Quality Engine threshold protection, and deterministic-vs-generative distinction added per
-COPA policy. MIT permission notice retained; reuse/modification permitted with attribution.
+Hallazia policy. MIT permission notice retained; reuse/modification permitted with attribution.

@@ -3,10 +3,6 @@
 @media(max-width:650px){.refinement-heading,.refinement-email-card>header{align-items:stretch;flex-direction:column}.refinement-expand{grid-template-columns:34px 1fr}.refinement-expand small{grid-column:2}.refinement-editor-grid,.refinement-inline-editor{grid-template-columns:1fr}.refinement-editor-grid .is-wide,.refinement-inline-editor .is-wide{grid-column:auto}.refinement-content-grid,.refinement-kpis{grid-template-columns:1fr}.refinement-file-card{grid-template-columns:44px 1fr}.refinement-file-actions{grid-column:1/-1;justify-content:flex-start}.refinement-generation-list>button{grid-template-columns:1fr auto}.refinement-generation-list>button>span:nth-child(2){grid-row:2;grid-column:1/-1}.refinement-filters>span{width:100%;margin:0}.refinement-card-actions{flex-wrap:wrap}}
 
 
-/* COPA redesign — re-theme acento a azul */
-.refinement-funnel-node.is-active{border-color:var(--primary);box-shadow:0 0 0 3px rgba(41,98,255,.22)}
-.refinement-node-index{background:var(--bg-active);color:var(--primary)}
-
 /* Premium campaign workspaces */
 .refinement-workspace,.refinement-analytics{min-width:0;color:var(--text)}
 .refinement-workspace{padding:23px;border:1px solid var(--border);border-radius:16px;background:radial-gradient(circle at 92% -20%,var(--module-accent-soft,var(--accent-soft)),transparent 34%),linear-gradient(145deg,#131c2d,#0e1624);box-shadow:var(--shadow-panel),inset 0 1px rgba(255,255,255,.03)}

@@ -32,7 +32,7 @@ export function AppShell({ project, active, workflow, health, onNavigate, onProj
   const progress = project?.workflowTotalSteps ? Math.round(project.workflowCompletedSteps / project.workflowTotalSteps * 100) : 0;
   return <div className="app-shell">
     <aside className="sidebar">
-      <div className="brand"><div className="brand-mark" aria-hidden="true">C</div><div><strong>COPA</strong><span>Investigación · Creación</span></div></div>
+      <div className="brand"><div className="brand-mark" aria-hidden="true"><svg viewBox="0 0 36 36" focusable="false"><path d="M10 9v18M26 9v18M10 18h16"/><circle cx="10" cy="9" r="2.4"/><circle cx="26" cy="9" r="2.4"/><circle cx="10" cy="27" r="2.4"/><circle cx="26" cy="27" r="2.4"/><circle cx="18" cy="18" r="2.1"/></svg></div><div><strong>Hallazia</strong><span>Research intelligence</span></div></div>
       {project&&<div className="sidebar-project"><span>Proyecto activo</span><strong>{project.name}</strong><small>{project.niche}</small><div className="sidebar-progress" aria-label={`${project.workflowCompletedSteps} de ${project.workflowTotalSteps} etapas ejecutadas`}><span style={{width:`${progress}%`}}/></div><small>{project.workflowCompletedSteps}/{project.workflowTotalSteps} etapas ejecutadas</small></div>}
       <nav aria-label="Módulos de la plataforma">
         <button title="Mis Proyectos" className={!project ? "nav-item active" : "nav-item"} onClick={onProjects}><span className="nav-icon"><FolderKanban size={18} strokeWidth={1.8}/></span><span>Mis Proyectos</span></button>

@@ -1,0 +1,17 @@
+{
+  "name": "Hallazia",
+  "short_name": "Hallazia",
+  "description": "Research intelligence basada en evidencia real de mercado.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#070a12",
+  "theme_color": "#080c15",
+  "icons": [
+    {
+      "src": "/hallazia-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

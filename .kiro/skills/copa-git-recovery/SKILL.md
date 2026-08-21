@@ -1,9 +1,9 @@
 ---
 name: copa-git-recovery
-description: Reglas operativas para inspección, recuperación, commits y pushes Git seguros en COPA.
+description: Reglas operativas para inspección, recuperación, commits y pushes Git seguros en Hallazia.
 ---
 
-# COPA Safe Git Recovery
+# Hallazia Safe Git Recovery
 
 ## Safe inspection
 

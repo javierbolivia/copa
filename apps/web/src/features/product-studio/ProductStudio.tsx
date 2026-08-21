@@ -741,7 +741,7 @@ function Wizard({
   };
   return (
     <form className="ps-wizard detail-card" onSubmit={submit}>
-      <span>CREAR PRODUCTO DIGITAL</span>
+      <span>PRODUCT STUDIO</span>
       <h2>Empieza por la estructura</h2>
       <p>El contenido se genera después, capítulo por capítulo.</p>
       {error && <div className="error-banner inline">{error}</div>}

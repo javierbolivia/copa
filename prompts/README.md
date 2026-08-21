@@ -1,6 +1,6 @@
 # Prompts originales
 
-Instrucciones propias de Our Platform, versionadas separadamente del código. Cada archivo declara `agent_key`, versión, tier y estado.
+Instrucciones propias de Hallazia, versionadas separadamente del código. Cada archivo declara `agent_key`, versión, tier y estado.
 
 Reglas comunes:
 

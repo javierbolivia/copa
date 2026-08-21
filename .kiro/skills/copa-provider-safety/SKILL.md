@@ -1,9 +1,9 @@
 ---
 name: copa-provider-safety
-description: Reglas operativas para evitar llamadas innecesarias, desperdicio de cuota y reintentos de producción en COPA.
+description: Reglas operativas para evitar llamadas innecesarias, desperdicio de cuota y reintentos de producción en Hallazia.
 ---
 
-# COPA Provider Safety
+# Hallazia Provider Safety
 
 ## Default rule
 

@@ -380,9 +380,9 @@ describe("PHASE 4B — Domain vocabulary discovery service", () => {
   });
 
   /* ================================================================ */
-  /*  TEST G — conceptKey is COPA-generated, not provider proposedKey */
+  /*  TEST G — conceptKey is Hallazia-generated, not provider proposedKey */
   /* ================================================================ */
-  it("G: persisted conceptKey is COPA-generated, not provider proposedKey", async () => {
+  it("G: persisted conceptKey is Hallazia-generated, not provider proposedKey", async () => {
     const project = projects.create({ name: "P", niche: "fotografía" });
     seedAnalysisSet(db, project.id, [
       { eid: "e1", cid: "c1", sid: "s1", quote: "La foto tiene ruido digital" },

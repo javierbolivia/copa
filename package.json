@@ -2,7 +2,7 @@
   "name": "our-platform",
   "version": "0.1.0",
   "private": true,
-  "description": "Plataforma local de investigación y creación de productos digitales.",
+  "description": "Hallazia: plataforma local de investigación y creación basada en evidencia.",
   "workspaces": [
     "apps/*",
     "packages/*"

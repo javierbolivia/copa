@@ -1,6 +1,7 @@
 {
   "name": "@our-platform/server",
   "version": "0.1.0",
+  "description": "Backend local de Hallazia.",
   "private": true,
   "type": "module",
   "scripts": {

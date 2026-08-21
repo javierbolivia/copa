@@ -1,9 +1,9 @@
 ---
 name: copa-market-research-engineering
-description: Arquitectura operativa, invariantes y depuración segura del Market Research de COPA.
+description: Arquitectura operativa, invariantes y depuración segura del Market Research de Hallazia.
 ---
 
-# COPA Market Research Engineering
+# Hallazia Market Research Engineering
 
 Use this skill for changes or diagnostics in the production Market Research path. Inspect the current code and saved run telemetry before changing behavior. Keep acquisition, deterministic validation, semantic analysis, and persistence as separate boundaries.
 

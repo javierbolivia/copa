@@ -541,3 +541,8 @@
     display: none;
   }
 }
+
+
+/* COPA redesign — re-theme acento a azul */
+.ps-cost-bar{border-color:var(--border);background:var(--bg-surface)}
+.ps-tabs button.active{color:var(--primary);background:var(--bg-active)}

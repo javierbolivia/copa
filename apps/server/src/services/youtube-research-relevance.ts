@@ -265,7 +265,7 @@ export function assessYouTubeCommentRelevance(input: Readonly<YouTubeCommentRele
   if (RELIGIOUS.test(normalized) || LOCATION_OR_LISTENING.test(normalized)) {
     return "research_irrelevant";
   }
-  if (relationLinks.length < 2 && focus.length < 3) return "research_irrelevant";
+  if (relationLinks.length < 1 && focus.length < 2) return "research_irrelevant";
   const informative = informativeCommentTerms(text, focus);
   const failedSolution = FAILED_ATTEMPT.test(normalized) && FAILURE_CONNECTOR.test(normalized);
   const desiredOutcome = DESIRED_OUTCOME.test(normalized) && informative.length > 0;
@@ -274,7 +274,7 @@ export function assessYouTubeCommentRelevance(input: Readonly<YouTubeCommentRele
   // Strong evidence can qualify without causal wording only when it covers the
   // Focus itself, rather than combining one matching term with unrelated pain.
   const strongTopicCoverage = relationLinks.length >= Math.min(2, focus.length)
-    && relationLinks.length * 4 >= focus.length * 3;
+    && relationLinks.length * 6 >= focus.length * 3;
   if (strongTopicCoverage && (specificPain || failedSolution || desiredOutcome)) return "research_relevant";
 
   const focusRequiresRelation = focus.length >= 3;

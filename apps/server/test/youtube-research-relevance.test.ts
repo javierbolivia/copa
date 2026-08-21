@@ -59,21 +59,22 @@ describe("20.7D deterministic YouTube relevance", () => {
   });
 
   it.each([
-    [undefined, 240],
+    [undefined, 60],
+    [60, 60],
     [240, 240],
     [86400, 86400],
   ])("resolves allowed minimum duration %s", (input, expected) => {
     expect(resolveYouTubeMinimumDurationSeconds(input)).toBe(expected);
   });
 
-  it.each([0, 239, 86401, 1.5])("rejects unsupported minimum duration %s", (input) => {
+  it.each([0, 59, 86401, 1.5])("rejects unsupported minimum duration %s", (input) => {
     expect(() => resolveYouTubeMinimumDurationSeconds(input)).toThrow(RangeError);
   });
 
   it.each([
     [video({ metadataAvailable: false }), "irrelevant", "video_metadata_unavailable"],
     [video({ duration: null }), "irrelevant", "duration_unavailable"],
-    [video({ duration: "PT3M59S" }), "irrelevant", "duration_below_minimum"],
+    [video({ duration: "PT59S" }), "irrelevant", "duration_below_minimum"],
     [video({ topic: "problemas" }), "irrelevant", "no_meaningful_topic_terms"],
     [video({ title: "Receta de sopa", description: "Cocina", tags: ["cocina"] }), "irrelevant", "no_topic_overlap"],
     [video({ title: "Huerto de balcón: errores", description: "", tags: [] }), "relevant", "strong_title_topic_overlap"],

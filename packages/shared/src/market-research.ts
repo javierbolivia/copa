@@ -39,8 +39,8 @@ export const MARKET_RESEARCH_BUDGETS = {
   /** Candidate pool ceiling: wide enough for channel diversity, still bounded. */
   youtubeMaxCandidates: 120,
   youtubeSearchResultsPerQuery: 10,
-  /** Default and hard ceiling for the caller-configurable long-form video gate. */
-  youtubeMinimumDurationSeconds: 4 * 60,
+  /** Default and hard floor for the caller-configurable video duration gate. */
+  youtubeMinimumDurationSeconds: 60,
   youtubeMaximumMinimumDurationSeconds: 24 * 60 * 60,
   youtubeRelevanceMaxBorderlineVideos: 8,
   youtubeRelevanceMaxCharsPerItem: 600,

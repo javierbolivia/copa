@@ -29,11 +29,13 @@ export function AppShell({ project, active, workflow, health, onNavigate, onProj
   const states = new Map(workflow?.steps.map((step) => [step.stepKey, step]));
   const info = moduleInfo(active);
   const Icon = NAV_ICONS[active] ?? LayoutDashboard;
+  const progress = project?.workflowTotalSteps ? Math.round(project.workflowCompletedSteps / project.workflowTotalSteps * 100) : 0;
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark" aria-hidden="true">C</div><div><strong>COPA</strong><span>Investigación · Creación</span></div></div>
+      {project&&<div className="sidebar-project"><span>Proyecto activo</span><strong>{project.name}</strong><small>{project.niche}</small><div className="sidebar-progress" aria-label={`${project.workflowCompletedSteps} de ${project.workflowTotalSteps} etapas ejecutadas`}><span style={{width:`${progress}%`}}/></div><small>{project.workflowCompletedSteps}/{project.workflowTotalSteps} etapas ejecutadas</small></div>}
       <nav aria-label="Módulos de la plataforma">
-        <button className={!project ? "nav-item active" : "nav-item"} onClick={onProjects}><span className="nav-icon"><FolderKanban size={18} strokeWidth={1.8}/></span><span>Mis Proyectos</span></button>
+        <button title="Mis Proyectos" className={!project ? "nav-item active" : "nav-item"} onClick={onProjects}><span className="nav-icon"><FolderKanban size={18} strokeWidth={1.8}/></span><span>Mis Proyectos</span></button>
         {project && GROUPS.map((group) => (
           <div className="nav-group" key={group.label}>
             <p className="nav-label">{group.label}</p>
@@ -54,11 +56,10 @@ export function AppShell({ project, active, workflow, health, onNavigate, onProj
     <main className="main-area">
       <header className="topbar">
         <div className="topbar-context">
-          <span className="topbar-breadcrumb"><span className="topbar-project">{project ? project.name : "Mis Proyectos"}</span>{project && active !== "overview" && <><span className="topbar-sep">/</span><span className="topbar-module">{info.label}</span></>}</span>
           <span className="topbar-context-icon" aria-hidden="true"><Icon size={16} strokeWidth={1.8}/></span>
-          {project && active !== "overview" && <span className="topbar-description">{info.description}</span>}
+          <div className="topbar-copy"><span className="topbar-breadcrumb"><span className="topbar-project">{project ? project.name : "Workspace"}</span><span className="topbar-sep">/</span><span className="topbar-module">{project ? info.label : "Mis Proyectos"}</span></span><span className="topbar-description">{project ? info.description : "Organiza y abre tus espacios de trabajo"}</span></div>
         </div>
-        {project && <button className="button secondary topbar-back" onClick={onProjects}>← Proyectos</button>}
+        <div className="topbar-actions"><span className={`topbar-system ${health?.status==="ok"?"online":""}`}><i/>Local</span>{project && <button className="button secondary topbar-back" onClick={onProjects}>Todos los proyectos</button>}</div>
       </header>
       {children}
     </main>

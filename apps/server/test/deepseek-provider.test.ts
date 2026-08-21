@@ -26,7 +26,10 @@ describe("DeepSeekProvider", () => {
     expect(DEEPSEEK_DEFAULT_MODEL).toBe("deepseek-v4-flash");
     expect(result).toMatchObject({ requestedModel: DEEPSEEK_DEFAULT_MODEL, reportedModel: DEEPSEEK_DEFAULT_MODEL, usage: { inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" }, finishReason: "stop" });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body))).toMatchObject({ model: DEEPSEEK_DEFAULT_MODEL, response_format: { type: "json_object" } });
+    const body=JSON.parse(String(init.body));
+    expect(body).toMatchObject({ model: DEEPSEEK_DEFAULT_MODEL, response_format: { type: "json_object" } });
+    expect(body.messages[0].content).toContain("CONTRATO DE SALIDA JSON");
+    expect(body.messages[0].content).toContain('"type":"object"');
   });
 
   it("rechaza V4 Pro configurado antes de crear un cliente de red", () => {
@@ -61,6 +64,15 @@ describe("DeepSeekProvider", () => {
     expect(result).toMatchObject({ requestedModel: "allowed-request-model", reportedModel: "reported-custom-model", finishReason: "stop" });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toMatchObject({ model: "allowed-request-model" });
+  });
+
+  it("acepta un único bloque JSON cercado y rechaza objetos que no cumplen el schema",async()=>{
+    const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
+    const fenced=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:vi.fn(async()=>response("```json\n{\"ok\":true}\n```")) as typeof fetch});
+    await expect(fenced.generate({provider:"deepseek",model:fenced.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).resolves.toMatchObject({output:{ok:true}});
+
+    const invalid=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:vi.fn(async()=>response({other:true})) as typeof fetch});
+    await expect(invalid.generate({provider:"deepseek",model:invalid.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).rejects.toMatchObject({code:"invalid_schema"});
   });
 
   it("no filtra la clave en errores", async () => {

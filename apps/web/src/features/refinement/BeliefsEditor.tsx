@@ -21,6 +21,5 @@ export function BeliefsEditor({value, onSave, saving, readOnly, onOpenTraceabili
     const labelByKey: Record<typeof key, string> = {currentBeliefs: "Creencias actuales", bridgeBeliefs: "Creencias puente", requiredBeliefs: "Creencias necesarias", objections: "Objeciones"};
     return <StringListField label={labelByKey[key]} value={draft[key]} editing={editing} onChange={(items) => setDraft({...draft, [key]: items})} traceability={onOpenTraceability ? () => onOpenTraceability(key) : undefined}/>;
   }, [onOpenTraceability]);
-  return <EditorScaffold title="Creencias" description="Diseña el cambio de perspectiva que conecta el problema con la oferta." value={value} sections={sections} cloneValue={cloneBeliefs} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Belief Progression Workspace" description="Modela el cambio de perspectiva que conecta el problema con la oferta." value={value} sections={sections} cloneValue={cloneBeliefs} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
 }
-

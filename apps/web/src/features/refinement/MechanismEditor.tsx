@@ -20,6 +20,5 @@ export function MechanismEditor({value, onSave, saving, readOnly, onOpenTraceabi
     if (sectionId === "steps") return <StringListField label="Pasos del mecanismo" value={draft.steps} editing={editing} onChange={(steps) => setDraft({...draft, steps})}/>;
     return <StringListField label="Pruebas y razones para creer" value={draft.proof} editing={editing} onChange={(proof) => setDraft({...draft, proof})} traceability={trace("proof")}/>;
   }, [onOpenTraceability]);
-  return <EditorScaffold title="Mecanismo" description="Explica de forma clara qué cambia, cómo funciona y por qué es distinto." value={value} sections={sections} cloneValue={cloneMechanism} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Mechanism Design Workspace" description="Diseña qué cambia, cómo funciona y por qué esta vía es diferente." value={value} sections={sections} cloneValue={cloneMechanism} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
 }
-

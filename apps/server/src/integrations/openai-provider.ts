@@ -9,6 +9,7 @@ import {
   normalizeFetchError,
   readErrorType,
 } from "./integration-error.js";
+import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
 
 interface OpenAIResponse {
   id?: unknown;
@@ -134,11 +135,8 @@ export class OpenAIProvider implements LlmProvider {
 
     let output: unknown = outputText;
     if (request.structuredOutput) {
-      try {
-        output = JSON.parse(outputText);
-      } catch (error) {
-        throw new IntegrationError("schema_mismatch", "La salida estructurada de OpenAI no contiene JSON válido.", { cause: error });
-      }
+      output=parseStructuredJson(outputText);
+      if(output===undefined)throw new IntegrationError("schema_mismatch", "La salida estructurada de OpenAI no contiene JSON válido.");
       if (!matchesJsonSchema(request.structuredOutput.jsonSchema, output)) {
         throw new IntegrationError("schema_mismatch", "La salida estructurada de OpenAI no cumple el schema solicitado.");
       }
@@ -164,25 +162,4 @@ export class OpenAIProvider implements LlmProvider {
       ...(finishReason === undefined ? {} : { finishReason }),
     };
   }
-}
-
-function matchesJsonSchema(schema:Readonly<Record<string,unknown>>,value:unknown):boolean{
-  if(Array.isArray(schema.enum)&&!schema.enum.some(item=>Object.is(item,value)))return false;
-  if("const" in schema&&!Object.is(schema.const,value))return false;
-  const type=schema.type;
-  if(Array.isArray(type))return type.some(candidate=>matchesJsonSchema({...schema,type:candidate},value));
-  if(type==="null")return value===null;
-  if(type==="string")return typeof value==="string";
-  if(type==="boolean")return typeof value==="boolean";
-  if(type==="number")return typeof value==="number"&&Number.isFinite(value);
-  if(type==="integer")return typeof value==="number"&&Number.isInteger(value);
-  if(type==="array")return Array.isArray(value)&&value.every(item=>matchesJsonSchema((schema.items??{}) as Readonly<Record<string,unknown>>,item));
-  if(type==="object"||schema.properties){
-    if(typeof value!=="object"||value===null||Array.isArray(value))return false;
-    const record=value as Record<string,unknown>,properties=(schema.properties??{}) as Record<string,Readonly<Record<string,unknown>>>;
-    if(Array.isArray(schema.required)&&schema.required.some(key=>typeof key==="string"&&!(key in record)))return false;
-    if(schema.additionalProperties===false&&Object.keys(record).some(key=>!(key in properties)))return false;
-    return Object.entries(properties).every(([key,child])=>!(key in record)||matchesJsonSchema(child,record[key]));
-  }
-  return true;
 }

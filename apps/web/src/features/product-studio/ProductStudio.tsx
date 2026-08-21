@@ -449,7 +449,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
       )}
       <header className="ps-top">
         <div>
-          <span>VISUAL PRODUCT STUDIO</span>
+          <span>FINAL PRODUCT STUDIO</span>
           <h2>{document.title}</h2>
           <p>
             {label(document.documentType)} · v{document.version.versionNumber} ·{" "}

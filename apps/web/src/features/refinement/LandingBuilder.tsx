@@ -74,7 +74,7 @@ export function LandingBuilder({
 
   return <section className="rf-landing-builder">
     <header className="rf-landing-toolbar">
-      <div><span className="rf-eyebrow">LANDING BUILDER</span><h2>{value.pageName || "Landing sin nombre"}</h2><p>Copy estructurado y vista previa segura, siempre sincronizados.</p></div>
+      <div><span className="rf-eyebrow">LANDING SECTION WORKSPACE</span><h2>{value.pageName || "Landing sin nombre"}</h2><p>Arquitectura de secciones, copy estructurado y vista previa segura sincronizada.</p></div>
       <div className="rf-actions">
         {editing ? <><button className="rf-button rf-button--quiet" type="button" disabled={saving} onClick={cancel}>Cancelar</button><button className="rf-button rf-button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? "Guardando…" : "Guardar"}</button></> : <button className="rf-button rf-button--quiet" type="button" disabled={readOnly} onClick={() => setEditing(true)}>Editar</button>}
         <button className="rf-button rf-button--primary" type="button" disabled={exporting} onClick={() => void onExportHtml(previewValue)}>{exporting ? "Exportando…" : "Exportar HTML"}</button>

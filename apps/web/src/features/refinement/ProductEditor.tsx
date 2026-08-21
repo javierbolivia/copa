@@ -31,7 +31,7 @@ export function ProductEditor({value, onSave, saving, readOnly, onOpenTraceabili
     return <StringListField label="Bonuses" value={draft.bonuses} editing={editing} placeholder="Ej. Plantillas extra" onChange={(bonuses) => setDraft({...draft, bonuses})}/>;
   }, [onOpenTraceability]);
 
-  return <EditorScaffold title="Producto" description="Define la transformación, estructura y activos que recibirá el cliente." value={value} sections={sections} cloneValue={cloneProduct} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Product Definition Workspace" description="Define la transformación, la arquitectura modular y los activos que recibirá el cliente." value={value} sections={sections} cloneValue={cloneProduct} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
 }
 
 function ModuleList({value, editing, onChange}: {value: ProductModule[]; editing: boolean; onChange: (value: ProductModule[]) => void}) {

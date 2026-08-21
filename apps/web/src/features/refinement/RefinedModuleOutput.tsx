@@ -1,4 +1,5 @@
 import type { GeneratedFile, ModuleKey, ModuleResult } from "@our-platform/shared";
+import { BookmarkCheck, CheckCircle2, GitBranch, Globe2, ShieldX } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { TraceabilityGraph } from "../../api/client";
 import { api } from "../../api/client";
@@ -24,13 +25,27 @@ export function RefinedModuleOutput(props:RefinedModuleOutputProps) {
   const save=async(outputData:unknown)=>{setSaving(true);setMessage(null);try{const draft=await api.saveModuleDraft(props.projectId,moduleKey,outputData);props.onVersionCreated(draft);setMessage("Borrador guardado. Revísalo y apruébalo cuando esté listo.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo guardar el borrador.");}finally{setSaving(false);}};
   const approve=async()=>{setSaving(true);setMessage(null);try{const approved=await api.approveModuleVersion(props.projectId,moduleKey,selected.versionId);props.onVersionCreated(approved);setMessage("Versión aprobada y disponible para módulos posteriores.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo aprobar la versión.");}finally{setSaving(false);}};
   const remember=async(decision:"APPROVED"|"REJECTED",visibility:"PROJECT"|"GLOBAL"="PROJECT")=>{setSaving(true);setMessage(null);try{await api.saveMemoryDecision(props.projectId,selected.versionId,{decision,reusable:decision==="APPROVED",preferred:decision==="APPROVED",visibility,editedOutput:selected.outputData});setMessage(decision==="APPROVED"?visibility==="GLOBAL"?"Guardado explícitamente como ejemplo futuro global.":"Guardado como ejemplo futuro preferido para este proyecto.":"Marcado como ejemplo rechazado; nunca se usará como referencia positiva.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo guardar la decisión de memoria.");}finally{setSaving(false);}};
+  const rememberGlobally=()=>{
+    if(window.confirm("Esta decisión se compartirá como referencia global para futuros proyectos. ¿Quieres continuar?"))void remember("APPROVED","GLOBAL");
+  };
   const openTrace=async()=>{try{setTrace(await api.traceability(props.projectId,selected.versionId));}catch(error){setMessage(error instanceof Error?error.message:"No se pudo cargar la trazabilidad.");}};
-  return <>
+  return <div className={`refined-module-shell refined-module-shell--${moduleKey}`}>
     {message&&<div className="refinement-feedback" role="status">{message}</div>}
-    <div className="refinement-approval-bar"><span>v{selected.versionNumber} · {selected.status} · {selected.freshness}</span><button className="button secondary" type="button" onClick={()=>void openTrace()}>Ver origen</button><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("REJECTED")}>Marcar rechazado</button>{selected.status==="approved"&&<><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("APPROVED")}>Usar como ejemplo futuro</button><button className="button secondary" disabled={saving} type="button" onClick={()=>void remember("APPROVED","GLOBAL")}>Usar globalmente</button></>}{selected.status==="draft"&&<button className="button primary" disabled={saving} type="button" onClick={()=>void approve()}>Aprobar versión</button>}</div>
+    <section className="refinement-decision-bar" aria-label="Decisiones de la versión">
+      <div className="refinement-version-state"><span>VERSIÓN ACTIVA</span><strong>v{selected.versionNumber}</strong><small>{selected.status} · {selected.freshness}</small></div>
+      <div className="refinement-decision-actions">
+        <button className="refinement-decision refinement-decision--origin" type="button" onClick={()=>void openTrace()}><GitBranch size={15}/><span><strong>Ver origen</strong><small>Cadena de evidencia</small></span></button>
+        <button className="refinement-decision refinement-decision--reject" disabled={saving} type="button" onClick={()=>void remember("REJECTED")}><ShieldX size={15}/><span><strong>Marcar rechazado</strong><small>Excluir como referencia</small></span></button>
+        {selected.status==="approved"&&<>
+          <button className="refinement-decision refinement-decision--future" disabled={saving} type="button" onClick={()=>void remember("APPROVED")}><BookmarkCheck size={15}/><span><strong>Ejemplo futuro</strong><small>Solo este proyecto</small></span></button>
+          <button className="refinement-decision refinement-decision--global" disabled={saving} type="button" onClick={rememberGlobally}><Globe2 size={15}/><span><strong>Usar globalmente</strong><small>Requiere confirmación</small></span></button>
+        </>}
+        {selected.status==="draft"&&<button className="refinement-decision refinement-decision--approve" disabled={saving} type="button" onClick={()=>void approve()}><CheckCircle2 size={15}/><span><strong>Aprobar versión</strong><small>Habilitar downstream</small></span></button>}
+      </div>
+    </section>
     <Specialized projectId={props.projectId} moduleKey={moduleKey} selected={selected} versions={props.versions} files={props.files} saving={saving} onSave={save} onSelectVersion={props.onSelectVersion} onTrace={()=>void openTrace()} onRegenerate={props.onRegenerate} />
     {trace&&<TraceDialog graph={trace} onClose={()=>setTrace(null)}/>} 
-  </>;
+  </div>;
 }
 
 function Specialized({projectId,moduleKey,selected,versions,files,saving,onSave,onSelectVersion,onTrace,onRegenerate}:{projectId:string;moduleKey:ModuleKey;selected:ModuleResult;versions:ModuleResult[];files:GeneratedFile[];saving:boolean;onSave:(value:unknown)=>Promise<void>;onSelectVersion:(id:string)=>void;onTrace:()=>void;onRegenerate:()=>Promise<void>}) {

@@ -73,7 +73,7 @@ export class ModuleService {
     private readonly options: ModuleServiceOptions,
   ) {}
 
-  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; defaultProvider: "mock" | "openai" | "gemini" } {
+  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" } {
     const projectSettings = projectId ? this.settings.get(projectId) : undefined;
     return {
       openai: {
@@ -83,7 +83,7 @@ export class ModuleService {
       },
       gemini:{configured:this.options.gemini.configured,economyModel:GEMINI_ANALYSIS_MODEL,powerfulModel:GEMINI_ANALYSIS_MODEL},
       deepseek:{configured:this.options.deepSeek?.configured??false,model:this.options.deepSeek?.effectiveModel??DEEPSEEK_DEFAULT_MODEL},
-      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
+      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider==="deepseek"?"deepseek":projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
     };
   }
 
@@ -143,9 +143,6 @@ export class ModuleService {
     if (requestedProvider !== "mock" && requestedProvider !== "openai"&&requestedProvider!=="gemini"&&requestedProvider!=="deepseek") {
       throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
     }
-    if (requestedProvider === "deepseek" && key !== "research") {
-      throw new Error("DeepSeek sólo está disponible para Research.");
-    }
     const selectedProvider = key === "sources" ? "mock" : requestedProvider;
     if (selectedProvider === "openai" && !this.options.openAI.configured) {
       throw new Error("OpenAI no esta configurado. Define OPENAI_API_KEY o ejecuta con el proveedor Mock.");
@@ -200,7 +197,7 @@ export class ModuleService {
     };
     let reportedModel: string | undefined;
     let providerInput: Record<string, unknown> | undefined;
-    let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToGemini:number;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
+    let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToProvider:number;batchesSentToGemini:number;semanticBatchProvider:string|null;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
       const prompt = getModulePrompt(key);
@@ -212,25 +209,31 @@ export class ModuleService {
       model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:resolveModel(prompt.modelTier, projectSettings, this.options);
       providerInput = {
         project: { name: project.name, niche: project.niche }, settings: projectSettings,
-        moduleKey: key, parentOutputs, evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
+        moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
         additionalInstructions: instructions?.trim() || null,
       };
-      let generated:LlmGenerateResult<Record<string,unknown>>;
-      const problemBatches=key==="problems"&&selectedProvider==="gemini"?createProblemBatches(evidence):undefined;
-      if(problemBatches){
-        const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
-        for(const [index,batch] of problemBatches.entries()){
-          const mapInput={...providerInput,stage:"map",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
-          const mappedResult=await this.options.gemini.generate<Record<string,unknown>>({provider:"gemini",model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
-          if(Array.isArray(mappedResult.output.items))mapped.push(...mappedResult.output.items.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
-          mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
+      let generated!:LlmGenerateResult<Record<string,unknown>>;
+      const providerClient:LlmProvider=selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:this.options.openAI;
+      try{
+        const problemBatches=key==="problems"&&(selectedProvider==="gemini"||selectedProvider==="deepseek")?createProblemBatches(evidence):undefined;
+        if(problemBatches){
+          const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
+          for(const [index,batch] of problemBatches.entries()){
+            const mapInput={...providerInput,stage:"map",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
+            const mappedResult=await providerClient.generate<Record<string,unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
+            if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
+            const mappedItems=(mappedResult.output as {items:unknown[]}).items;
+            mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
+            mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
+          }
+          problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
+          providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
+          usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
-        problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToGemini:problemBatches.length,commentsPerBatch:60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
-        providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
-        usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
+        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});
+        if(!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
-      try{generated=await (selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:this.options.openAI).generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});}
-      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`;this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,error instanceof Error?error.name:"generation_error",message,now,now);throw error;}
+      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
       output = generated.output;
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
@@ -269,6 +272,8 @@ export class ModuleService {
           this.options.discoveryProvider ??
           (selectedProvider === "gemini"
             ? this.options.gemini
+            : selectedProvider === "deepseek"
+              ? this.options.deepSeek
             : selectedProvider === "openai"
               ? this.options.openAI
               : undefined);
@@ -498,6 +503,15 @@ function buildKnowledgePromptContext(rows:ModuleKnowledgeItem[],maxCharacters:nu
     context.push({...base,content:row.content.slice(0,low)});
   }
   return context;
+}
+
+/** Keep semantic parent data while excluding the large deterministic Problems audit. */
+function providerParentOutputs(parents:Partial<Record<ModuleKey,unknown>>):Partial<Record<ModuleKey,unknown>>{
+  return Object.fromEntries(Object.entries(parents).map(([key,value])=>{
+    if(key!=="problems"||typeof value!=="object"||value===null||Array.isArray(value))return[key,value];
+    const problems=value as Record<string,unknown>;
+    return[key,{schemaVersion:problems.schemaVersion,researchFocus:problems.researchFocus,qualityAlgorithmVersion:problems.qualityAlgorithmVersion,items:problems.items}];
+  })) as Partial<Record<ModuleKey,unknown>>;
 }
 
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{

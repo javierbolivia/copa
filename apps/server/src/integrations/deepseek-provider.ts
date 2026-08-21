@@ -3,6 +3,7 @@ import {
   IntegrationError,
   readErrorType,
 } from "./integration-error.js";
+import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
 
 export const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
 
@@ -78,7 +79,7 @@ function deepSeekHttpError(status: number, remoteCode?: string): IntegrationErro
   return new IntegrationError("http_provider_error", `DeepSeek respondió con HTTP ${status}.`, { status, retryable: status >= 500 });
 }
 
-/** Server-only OpenAI-compatible client used exclusively by the Research route. */
+/** Server-only OpenAI-compatible client for structured module generation. */
 export class DeepSeekProvider implements LlmProvider {
   readonly name = "deepseek";
   private readonly apiKey: string | undefined;
@@ -111,6 +112,9 @@ export class DeepSeekProvider implements LlmProvider {
     if (!this.configured) throw new IntegrationError("missing_api_key", "DeepSeek no está configurado.");
     const model = request.model.trim() || this.model;
     assertAllowedModel(model);
+    const systemInstructions=request.structuredOutput
+      ? `${request.systemInstructions}\n\nCONTRATO DE SALIDA JSON: devuelve únicamente un objeto JSON válido, sin markdown ni prosa adicional, que cumpla este JSON Schema:\n${JSON.stringify(request.structuredOutput.jsonSchema)}`
+      : request.systemInstructions;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     let response: Response;
@@ -124,7 +128,7 @@ export class DeepSeekProvider implements LlmProvider {
         body: JSON.stringify({
           model,
           messages: [
-            { role: "system", content: request.systemInstructions },
+            { role: "system", content: systemInstructions },
             { role: "user", content: request.input },
           ],
           stream: false,
@@ -164,11 +168,9 @@ export class DeepSeekProvider implements LlmProvider {
     }
     let output: unknown = text;
     if (request.structuredOutput) {
-      try {
-        output = JSON.parse(text);
-      } catch (error) {
-        throw new IntegrationError("invalid_schema", "La salida estructurada de DeepSeek no contiene JSON válido.", { cause: error });
-      }
+      output = parseStructuredJson(text);
+      if(output===undefined)throw new IntegrationError("invalid_schema", "La salida estructurada de DeepSeek no contiene JSON válido.");
+      if(!matchesJsonSchema(request.structuredOutput.jsonSchema,output))throw new IntegrationError("invalid_schema", "La salida estructurada de DeepSeek no cumple el schema solicitado.");
     }
     const inputTokens = number(body.usage?.prompt_tokens);
     const outputTokens = number(body.usage?.completion_tokens);

@@ -22,6 +22,5 @@ export function AvatarEditor({value, onSave, saving, readOnly, onOpenTraceabilit
     const labels: Record<typeof key, string> = {pains: "Dolores", desires: "Deseos", objections: "Objeciones", language: "Lenguaje textual", evidence: "Evidencia"};
     return <StringListField label={labels[key]} value={draft[key]} editing={editing} onChange={(items) => setDraft({...draft, [key]: items})} traceability={onOpenTraceability ? () => onOpenTraceability(key) : undefined}/>;
   }, [onOpenTraceability]);
-  return <EditorScaffold title="Avatar" description="Organiza la voz, motivaciones y fricciones del cliente ideal por secciones." value={value} sections={sections} cloneValue={cloneAvatar} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Customer Profile Workspace" description="Organiza contexto, motivaciones, fricciones y lenguaje real del cliente." value={value} sections={sections} cloneValue={cloneAvatar} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
 }
-

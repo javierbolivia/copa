@@ -91,6 +91,7 @@ export async function createApp(
   const deepSeek = new DeepSeekProvider({
     ...(process.env.DEEPSEEK_API_KEY ? { apiKey: process.env.DEEPSEEK_API_KEY } : {}),
     ...(process.env.DEEPSEEK_MODEL?.trim() ? { model: process.env.DEEPSEEK_MODEL } : {}),
+    thinking: "disabled",
     ...options.deepSeek,
   });
   const knowledge = new KnowledgeRepository(database);

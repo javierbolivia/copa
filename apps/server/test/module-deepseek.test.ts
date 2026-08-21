@@ -20,7 +20,7 @@ describe("ruta Research con DeepSeek", () => {
     app = undefined;
   });
 
-  it("acepta DeepSeek sólo para Research y expone su estado y modelo", async () => {
+  it("acepta DeepSeek en Research, desactiva thinking y respeta la preferencia del proyecto", async () => {
     const fetchMock = vi.fn(async () => deepSeekResponse({
       schemaVersion: 1,
       summary: "Resultado Research",
@@ -36,19 +36,16 @@ describe("ruta Research con DeepSeek", () => {
       deepSeek: { apiKey: "deepseek-route-key", fetch: fetchMock as typeof fetch },
     });
     const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "DeepSeek", niche: "Prueba" } })).json<Project>();
+    expect((await app.inject({method:"PUT",url:`/api/projects/${project.id}/settings`,payload:{language:"es",targetMarket:null,currency:"USD",generalNotes:null,preferredLlmProvider:"deepseek",economyModel:null,powerfulModel:null,maxBudget:null,contentLanguage:"es",knowledgeEnabled:true}})).statusCode).toBe(200);
 
     const status = await app.inject({ method: "GET", url: `/api/projects/${project.id}/providers/status` });
-    expect(status.json()).toMatchObject({ deepseek: { configured: true, model: DEEPSEEK_DEFAULT_MODEL } });
+    expect(status.json()).toMatchObject({ deepseek: { configured: true, model: DEEPSEEK_DEFAULT_MODEL },defaultProvider:"deepseek" });
 
-    const research = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "deepseek" } });
+    const research = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: {} });
     expect(research.statusCode).toBe(200);
     expect(research.json()).toMatchObject({ moduleKey: "research", outputData: { summary: "Resultado Research" } });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.parse(String(init.body)).model).toBe(DEEPSEEK_DEFAULT_MODEL);
-
-    const blocked = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/product/run`, payload: { provider: "deepseek" } });
-    expect(blocked.statusCode).toBe(409);
-    expect(blocked.json<{ message: string }>().message).toContain("Research");
+    expect(JSON.parse(String(init.body))).toMatchObject({model:DEEPSEEK_DEFAULT_MODEL,thinking:{type:"disabled"},response_format:{type:"json_object"}});
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

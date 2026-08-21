@@ -1,5 +1,6 @@
 import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-platform/shared";
 import { IntegrationError, normalizeFetchError } from "./integration-error.js";
+import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
 
 export interface GeminiProviderOptions { readonly apiKey?: string; readonly fetch?: typeof fetch; readonly timeoutMs?: number; readonly endpoint?: string; }
 const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -79,7 +80,11 @@ export class GeminiProvider implements LlmProvider {
     const text = Array.isArray(parts) ? parts.map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";
     if (!text.trim()) throw new IntegrationError("invalid_response", "Gemini no devolvió texto.");
     let output: unknown = text;
-    if (request.structuredOutput) { try { output = JSON.parse(text); } catch (error) { throw new IntegrationError("schema_mismatch", "La salida estructurada de Gemini no contiene JSON válido.", { cause: error }); } }
+    if (request.structuredOutput) {
+      output=parseStructuredJson(text);
+      if(output===undefined)throw new IntegrationError("schema_mismatch", "La salida estructurada de Gemini no contiene JSON válido.");
+      if(!matchesJsonSchema(request.structuredOutput.jsonSchema,output))throw new IntegrationError("schema_mismatch", "La salida estructurada de Gemini no cumple el schema solicitado.");
+    }
     const usage = body.usageMetadata as { promptTokenCount?: unknown; candidatesTokenCount?: unknown } | undefined, inputTokens = number(usage?.promptTokenCount), outputTokens = number(usage?.candidatesTokenCount);
     return { provider: this.name, requestedModel: request.model, reportedModel: request.model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" } };
   }

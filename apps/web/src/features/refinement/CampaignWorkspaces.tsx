@@ -39,7 +39,7 @@ export function FunnelWorkspace({ nodes, onUpdate, onReorder, onToggleActive }: 
   };
 
   return <section className="refinement-workspace" aria-labelledby="funnel-heading">
-    <WorkspaceHeading eyebrow="FUNNEL VISUAL" title="Recorrido de campaña" description="Activa, edita y ordena cada paso del recorrido." id="funnel-heading" />
+    <WorkspaceHeading eyebrow="FUNNEL FLOW WORKSPACE" title="Recorrido de campaña" description="Conecta, activa y ordena cada decisión del recorrido." id="funnel-heading" />
     {nodes.length === 0 ? <Empty message="Todavía no hay nodos en el funnel." /> : <div className="refinement-funnel">
       {nodes.map((node, index) => <article
         className={`refinement-funnel-node${node.active ? " is-active" : ""}`}
@@ -100,7 +100,7 @@ export function EmailsWorkspace({ emails, onUpdate, onReorder, onExport }: Email
     onReorder(ids);
   };
   return <section className="refinement-workspace" aria-labelledby="emails-heading">
-    <WorkspaceHeading eyebrow="SECUENCIA" title="Emails de campaña" description="Edita la secuencia sin salir de las tarjetas." id="emails-heading" action={<button className="button secondary" disabled={emails.length === 0} onClick={() => onExport(emails.map((email) => email.id))} type="button">Exportar secuencia</button>} />
+    <WorkspaceHeading eyebrow="EMAIL SEQUENCE WORKSPACE" title="Emails de campaña" description="Revisa ritmo, estado y mensaje sin salir de la secuencia." id="emails-heading" action={<button className="button secondary" disabled={emails.length === 0} onClick={() => onExport(emails.map((email) => email.id))} type="button">Exportar secuencia</button>} />
     {emails.length === 0 ? <Empty message="Todavía no hay emails en la secuencia." /> : <div className="refinement-email-list">
       {emails.map((email, index) => {
         const expanded = expandedId === email.id;
@@ -156,7 +156,7 @@ export function ContentWorkspace({ items, onUpdate, onDuplicate, onDelete, onExp
   const channels = useMemo(() => unique(items.map((item) => item.channel)), [items]);
   const filtered = useMemo(() => items.filter((item) => (format === "ALL" || item.format === format) && (channel === "ALL" || item.channel === channel) && (status === "ALL" || item.status === status)), [channel, format, items, status]);
   return <section className="refinement-workspace" aria-labelledby="content-heading">
-    <WorkspaceHeading eyebrow="BIBLIOTECA" title="Contenido de campaña" description="Filtra y administra cada pieza desde una vista editorial." id="content-heading" action={<button className="button secondary" disabled={filtered.length === 0} onClick={() => onExport(filtered.map((item) => item.id))} type="button">Exportar visibles</button>} />
+    <WorkspaceHeading eyebrow="CONTENT OPERATIONS WORKSPACE" title="Contenido de campaña" description="Filtra y administra cada pieza desde una superficie editorial." id="content-heading" action={<button className="button secondary" disabled={filtered.length === 0} onClick={() => onExport(filtered.map((item) => item.id))} type="button">Exportar visibles</button>} />
     <div className="refinement-filters" aria-label="Filtros de contenido">
       <Filter label="Formato" value={format} values={formats} onChange={setFormat} />
       <Filter label="Canal" value={channel} values={channels} onChange={setChannel} />

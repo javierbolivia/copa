@@ -23,7 +23,7 @@ export function OfferEditor({value, onSave, saving, readOnly, onOpenTraceability
     const key = keyBySection[sectionId as keyof typeof keyBySection] ?? "orderBump";
     return <OfferComponentFields label={sections.find((item) => item.id === sectionId)?.label ?? "Oferta"} value={draft[key]} editing={editing} onChange={(component) => setDraft({...draft, [key]: component})}/>;
   }, [onOpenTraceability]);
-  return <EditorScaffold title="Oferta" description="Construye la oferta principal y sus extensiones sin mezclar decisiones." value={value} sections={sections} cloneValue={cloneOffer} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Offer Architecture Workspace" description="Conecta propuesta, precio, riesgo y extensiones sin mezclar decisiones." value={value} sections={sections} cloneValue={cloneOffer} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
 }
 
 function OfferComponentFields({label, value, editing, onChange}: {label: string; value: OfferComponent; editing: boolean; onChange: (value: OfferComponent) => void}) {
@@ -35,4 +35,3 @@ function OfferComponents({value, editing, onChange}: {value: OfferComponent[]; e
   if (!editing) return value.length ? <div className="rf-card-list">{value.map((item, index) => <article key={`${item.name}-${index}`}><span>+</span><div><strong>{item.name || "Bonus sin nombre"}</strong><p>{item.description || "Sin descripción"}</p></div></article>)}</div> : <p className="rf-field__value is-empty">Sin bonuses</p>;
   return <div className="rf-repeat-editor">{value.map((item, index) => <article key={index}><header><strong>Bonus {index + 1}</strong><button type="button" onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}>Eliminar</button></header><label>Nombre<input value={item.name} onChange={(event) => update(index, {name: event.target.value})}/></label><label>Descripción<textarea rows={3} value={item.description} onChange={(event) => update(index, {description: event.target.value})}/></label></article>)}<button className="rf-add-button" type="button" onClick={() => onChange([...value, {name: "", description: ""}])}>+ Añadir bonus</button></div>;
 }
-

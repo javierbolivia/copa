@@ -30,7 +30,10 @@ describe("DeepSeekProvider", () => {
     expect(body).toMatchObject({ model: DEEPSEEK_DEFAULT_MODEL, response_format: { type: "json_object" } });
     expect(body.messages[0].content).toContain("CONTRATO DE SALIDA JSON ESTRICTO");
     expect(body.messages[0].content).toContain("todas las propiedades declaradas en required");
-    expect(body.messages[0].content).toContain("no sustituyas el objeto raíz por un array");
+    expect(body.messages[0].content).toContain("No sustituyas el objeto raíz por un array");
+    expect(body.messages[0].content).toContain("uses null");
+    expect(body.messages[0].content).toContain("No uses placeholders");
+    expect(body.messages[0].content).toContain("No inventes afirmaciones");
     expect(body.messages[0].content).toContain('"type":"object"');
   });
 
@@ -73,14 +76,47 @@ describe("DeepSeekProvider", () => {
     const fenced=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:vi.fn(async()=>response("```json\n{\"ok\":true}\n```")) as typeof fetch});
     await expect(fenced.generate({provider:"deepseek",model:fenced.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).resolves.toMatchObject({output:{ok:true}});
 
-    const invalid=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:vi.fn(async()=>response({other:true})) as typeof fetch});
-    await expect(invalid.generate({provider:"deepseek",model:invalid.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).rejects.toMatchObject({code:"invalid_schema"});
+    const invalidFetch = vi.fn(async()=>response({}));
+    const invalid=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:invalidFetch as typeof fetch});
+    await expect(invalid.generate({provider:"deepseek",model:invalid.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).rejects.toMatchObject({
+      code:"invalid_schema",
+      attemptCount: 2,
+      validationIssues: [{ path: "$.ok", expected: "boolean", actual: "missing", missingRequiredProperties: ["ok"] }],
+      message: expect.stringContaining("$.ok"),
+    });
+    expect(invalidFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reintenta una sola vez tras invalid_schema y entrega los errores concretos al intento final", async () => {
+    const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({}))
+      .mockResolvedValueOnce(response({ ok: true }));
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    const result = await provider.generate({provider:"deepseek",model:provider.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}});
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      output: { ok: true },
+      structuredOutputDiagnostics: {
+        attemptCount: 2,
+        recoveredAfterInvalidSchema: true,
+        firstAttemptIssues: [{ path: "$.ok", expected: "boolean", actual: "missing", missingRequiredProperties: ["ok"] }],
+      },
+    });
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    const retryBody = JSON.parse(String(retryInit.body));
+    expect(retryBody.messages[0].content).toContain("INTENTO FINAL 2/2");
+    expect(retryBody.messages[0].content).toContain("$.ok (expected boolean; actual missing");
+    expect(retryBody.messages[0].content).toContain("JSON Schema completo");
   });
 
   it("no filtra la clave en errores", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { type: "invalid_api_key", message: "deepseek-secret-value" } }), { status: 401 }));
     const provider = new DeepSeekProvider({
       apiKey: "deepseek-secret-value",
-      fetch: async () => new Response(JSON.stringify({ error: { type: "invalid_api_key", message: "deepseek-secret-value" } }), { status: 401 }),
+      fetch: fetchMock as typeof fetch,
     });
 
     await expect(provider.generate({ provider: "deepseek", model: provider.effectiveModel, systemInstructions: "x", input: "x" })).rejects.toMatchObject({
@@ -88,5 +124,6 @@ describe("DeepSeekProvider", () => {
       status: 401,
       message: expect.not.stringContaining("deepseek-secret-value"),
     });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

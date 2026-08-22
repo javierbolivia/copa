@@ -30,6 +30,16 @@ export interface LlmGenerateResult<TOutput = string> {
   readonly output: TOutput;
   readonly usage: LlmUsage;
   readonly finishReason?: string;
+  readonly structuredOutputDiagnostics?: {
+    readonly attemptCount: number;
+    readonly recoveredAfterInvalidSchema: boolean;
+    readonly firstAttemptIssues?: readonly {
+      readonly path: string;
+      readonly expected: string;
+      readonly actual: string;
+      readonly missingRequiredProperties?: readonly string[];
+    }[];
+  };
 }
 
 export interface LlmProvider {

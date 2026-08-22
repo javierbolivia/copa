@@ -56,6 +56,7 @@ describe("strict Product contract, grounding and downstream safety", () => {
     delete (missingFormat.proposals as Array<Record<string, unknown>>)[0]!.format;
     const outputs = [
       missingFormat,
+      missingFormat,
       product({ promise: "Resultados garantizados en 30 días con método probado y apoyo personalizado" }),
       product(),
     ];
@@ -73,7 +74,7 @@ describe("strict Product contract, grounding and downstream safety", () => {
       payload: { provider: "deepseek" },
     });
     expect(incompleteResponse.statusCode).toBe(409);
-    expect(incompleteResponse.json<{ message: string }>().message).toContain("schema");
+    expect(incompleteResponse.json<{ message: string }>().message).toContain("$.proposals[0].format");
     const productVersionsAfterFailure = (await app.inject({
       method: "GET", url: `/api/projects/${demo.project.id}/modules/product`,
     })).json<{ results: ModuleResult[] }>().results;
@@ -109,7 +110,10 @@ describe("strict Product contract, grounding and downstream safety", () => {
     const request = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [unknown, RequestInit])[1].body)) as { messages: Array<{ content: string }> };
     expect(request.messages[0]!.content).toContain("`format` debe describir concretamente");
     expect(request.messages[0]!.content).toContain("evidencia del problema");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const retryRequest = JSON.parse(String((fetchMock.mock.calls[1] as unknown as [unknown, RequestInit])[1].body)) as { messages: Array<{ content: string }> };
+    expect(retryRequest.messages[0]!.content).toContain("INTENTO FINAL 2/2");
+    expect(retryRequest.messages[0]!.content).toContain("$.proposals[0].format");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("does not approve an incomplete user draft", async () => {

@@ -204,6 +204,7 @@ export class ModuleService {
       inputTokens: 0, outputTokens: 0, estimatedCost: 0, currency: "USD", usageKind: "estimated",
     };
     let reportedModel: string | undefined;
+    let structuredOutputDiagnostics: LlmGenerateResult<Record<string, unknown>>["structuredOutputDiagnostics"];
     let providerInput: Record<string, unknown> | undefined;
     let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToProvider:number;batchesSentToGemini:number;semanticBatchProvider:string|null;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
@@ -245,6 +246,7 @@ export class ModuleService {
       output = generated.output;
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
+      structuredOutputDiagnostics = generated.structuredOutputDiagnostics;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
     // PHASE 3/4C — resolve the semantic vocabulary ONCE per run using the same
     // project + research focus + exact Analysis Set that the Problem Quality
@@ -405,6 +407,7 @@ export class ModuleService {
     const inputSnapshot = {
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
+      ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
       ...(vocabularyVersionId ? { vocabularyVersionId, vocabularyContentHash: vocabularySnapshot?.contentHash ?? null } : { vocabularyVersionId: null }),

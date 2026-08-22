@@ -1,3 +1,5 @@
+import type { JsonSchemaValidationIssue } from "./structured-output.js";
+
 export type IntegrationErrorCode =
   | "missing_api_key"
   | "authentication_failed"
@@ -24,12 +26,16 @@ export interface IntegrationErrorOptions {
   readonly status?: number;
   readonly retryable?: boolean;
   readonly cause?: unknown;
+  readonly validationIssues?: readonly JsonSchemaValidationIssue[];
+  readonly attemptCount?: number;
 }
 
 export class IntegrationError extends Error {
   readonly code: IntegrationErrorCode;
   readonly status: number | undefined;
   readonly retryable: boolean;
+  readonly validationIssues: readonly JsonSchemaValidationIssue[] | undefined;
+  readonly attemptCount: number | undefined;
 
   constructor(code: IntegrationErrorCode, message: string, options: IntegrationErrorOptions = {}) {
     super(message, { cause: options.cause });
@@ -37,6 +43,8 @@ export class IntegrationError extends Error {
     this.code = code;
     this.status = options.status;
     this.retryable = options.retryable ?? false;
+    this.validationIssues = options.validationIssues;
+    this.attemptCount = options.attemptCount;
   }
 }
 

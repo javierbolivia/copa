@@ -43,11 +43,13 @@ describe("Product completeness and grounding validator", () => {
   });
 
   it("requires every DeepSeek/provider Product field in the shared output contract", () => {
-    const schema = MODULE_OUTPUT_SCHEMAS.product as { properties: { proposals: { items: { required: string[] } } } };
+    const schema = MODULE_OUTPUT_SCHEMAS.product as { properties: { proposals: { minItems: number; items: { required: string[]; properties: { format: { type: string; minLength: number } } } } } };
     expect(schema.properties.proposals.items.required).toEqual(expect.arrayContaining([
       "id", "name", "concept", "problem", "outcome", "promise", "format",
       "deliverables", "modules", "checklists", "templates", "resources", "bonuses", "evidenceIds",
     ]));
+    expect(schema.properties.proposals.minItems).toBe(1);
+    expect(schema.properties.proposals.items.properties.format).toMatchObject({ type: "string", minLength: 1 });
   });
 
   it("rejects unsupported time, efficacy and personalized-service claims", () => {

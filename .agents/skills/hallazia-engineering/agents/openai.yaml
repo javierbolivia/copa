@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hallazia Engineering"
+  short_description: "Diagnose and engineer Hallazia safely"
+  default_prompt: "Use $hallazia-engineering to make a scoped, evidence-driven change in Hallazia."

@@ -10,3 +10,5 @@ export * from "./knowledge.js";
 export * from "./product-studio.js";
 export * from "./market-signal.js";
 export * from "./market-research.js";
+export * from "./learning-memory.js";
+export * from "./internal-skill.js";

@@ -10,6 +10,16 @@ export { buildKnowledgeContext, estimateContextTokens } from "./context-builder.
 export { DisabledEmbeddingProvider } from "./embedding-provider.js";
 export type { EmbeddingBatchResult, EmbeddingProvider } from "./embedding-provider.js";
 export { KnowledgeRetriever } from "./knowledge-retriever.js";
+export { LearningMemoryService } from "./learning-memory-service.js";
+export type {
+  LearnedMemoryCandidate,
+  LearnedMemoryObservationAudit,
+  LearnedMemoryScopePolicy,
+  LearnedMemorySourceClass,
+  MemoryReinforcementResult,
+  RelevantKnowledgeRequest,
+  RelevantLearnedMemory,
+} from "./learning-memory-service.js";
 export { knowledgeContentFingerprint, normalizeLexicalScores, rankLexicalHits } from "./lexical-ranking.js";
 export { KNOWLEDGE_KINDS } from "./types.js";
 export type {

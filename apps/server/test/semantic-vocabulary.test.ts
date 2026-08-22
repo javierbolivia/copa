@@ -533,7 +533,7 @@ describe("Domain Semantic Vocabulary - real migration v9 -> latest (AUDIT 3)", (
     for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  it("aplica migration 10 conservando datos historicos (project + generation NULL)", () => {
+  it("aplica las migraciones posteriores conservando datos historicos (project + generation NULL)", () => {
     const directory = mkdtempSync(join(tmpdir(), "semantic-migration-"));
     directories.push(directory);
     const path = join(directory, "app.db");
@@ -559,7 +559,7 @@ describe("Domain Semantic Vocabulary - real migration v9 -> latest (AUDIT 3)", (
     legacy.close();
 
     const db = new AppDatabase(path);
-    expect(db.getSchemaVersion()).toBe(11);
+    expect(db.getSchemaVersion()).toBe(12);
     expect(db.connection.prepare("SELECT name FROM projects WHERE id='proj-legacy'").get()).toMatchObject({
       name: "Legado",
     });

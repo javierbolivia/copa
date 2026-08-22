@@ -5,6 +5,13 @@ any change. It constrains behavior but does not override an explicit user instru
 given session; when an explicit instruction conflicts with a rule here, follow the explicit
 instruction and report the deviation.
 
+## Codex Workflow Router
+
+For Hallazia engineering, diagnostics, testing, runtime, persistence, provider, or Git work,
+use the repo-local `hallazia-engineering` skill at
+`.agents/skills/hallazia-engineering/SKILL.md`. This file remains the source of stable repository
+constraints; the skill supplies progressive workflow and routes to lower-frequency references.
+
 ## Repository Architecture
 
 npm workspaces monorepo. Root: `package.json` (`name: our-platform`, `private: true`).

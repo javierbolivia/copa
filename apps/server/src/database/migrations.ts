@@ -984,6 +984,87 @@ export const migrations: readonly Migration[] = [
       BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
     `,
   },
+  {
+    version: 12,
+    name: "012_persistent_learning_memory",
+    sql: `
+      CREATE TABLE learned_memories (
+        id TEXT PRIMARY KEY CHECK (length(id)=64),
+        kind TEXT NOT NULL CHECK (kind IN ('DOMAIN_KNOWLEDGE','SEMANTIC_KNOWLEDGE','RESEARCH_INTELLIGENCE')),
+        scope TEXT NOT NULL CHECK (scope IN ('PROJECT','DOMAIN','GLOBAL')),
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        domain_key TEXT,
+        canonical_key TEXT NOT NULL UNIQUE CHECK (length(canonical_key) BETWEEN 1 AND 1000),
+        semantic_identity TEXT NOT NULL CHECK (length(semantic_identity) BETWEEN 1 AND 500),
+        statement_text TEXT NOT NULL CHECK (length(trim(statement_text)) BETWEEN 1 AND 4000),
+        value_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(value_json)),
+        status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','WEAKENED','CONTRADICTED','SUPERSEDED')),
+        support_count INTEGER CHECK (support_count IS NULL OR support_count >= 0),
+        source_count INTEGER CHECK (source_count IS NULL OR source_count >= 0),
+        author_count INTEGER CHECK (author_count IS NULL OR author_count >= 0),
+        project_count INTEGER CHECK (project_count IS NULL OR project_count >= 0),
+        confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        first_seen_at TEXT NOT NULL,
+        last_reinforced_at TEXT NOT NULL,
+        reinforcement_count INTEGER NOT NULL DEFAULT 1 CHECK (reinforcement_count >= 1),
+        contradiction_count INTEGER NOT NULL DEFAULT 0 CHECK (contradiction_count >= 0),
+        provenance_summary_json TEXT NOT NULL CHECK (
+          json_valid(provenance_summary_json) AND json_type(provenance_summary_json)='object'
+        ),
+        CHECK (
+          (scope='PROJECT' AND project_id IS NOT NULL AND domain_key IS NULL) OR
+          (scope='DOMAIN' AND project_id IS NULL AND domain_key IS NOT NULL) OR
+          (scope='GLOBAL' AND project_id IS NULL AND domain_key IS NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX learned_memories_retrieval_idx
+        ON learned_memories(kind,scope,domain_key,status,last_reinforced_at DESC);
+      CREATE INDEX learned_memories_project_idx
+        ON learned_memories(project_id,status,last_reinforced_at DESC) WHERE project_id IS NOT NULL;
+
+      CREATE TABLE learned_memory_observations (
+        id TEXT PRIMARY KEY CHECK (length(id)=64),
+        memory_id TEXT NOT NULL REFERENCES learned_memories(id) ON DELETE CASCADE,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        observation_key TEXT NOT NULL CHECK (length(observation_key) BETWEEN 1 AND 500),
+        statement_hash TEXT NOT NULL CHECK (length(statement_hash)=64),
+        statement_snapshot TEXT NOT NULL CHECK (length(trim(statement_snapshot)) BETWEEN 1 AND 4000),
+        provenance_summary_json TEXT NOT NULL CHECK (
+          json_valid(provenance_summary_json) AND json_type(provenance_summary_json)='object'
+        ),
+        is_contradiction INTEGER NOT NULL DEFAULT 0 CHECK (is_contradiction IN (0,1)),
+        created_at TEXT NOT NULL,
+        UNIQUE(memory_id,observation_key)
+      ) STRICT;
+
+      CREATE INDEX learned_memory_observations_memory_idx
+        ON learned_memory_observations(memory_id,created_at DESC);
+      CREATE INDEX learned_memory_observations_project_idx
+        ON learned_memory_observations(project_id) WHERE project_id IS NOT NULL;
+
+      CREATE VIRTUAL TABLE learned_memories_fts USING fts5(
+        kind,domain_key,semantic_identity,statement_text,
+        content='learned_memories',content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+      );
+      CREATE TRIGGER learned_memories_fts_insert AFTER INSERT ON learned_memories BEGIN
+        INSERT INTO learned_memories_fts(rowid,kind,domain_key,semantic_identity,statement_text)
+        VALUES(NEW.rowid,NEW.kind,NEW.domain_key,NEW.semantic_identity,NEW.statement_text);
+      END;
+      CREATE TRIGGER learned_memories_fts_delete AFTER DELETE ON learned_memories BEGIN
+        INSERT INTO learned_memories_fts(learned_memories_fts,rowid,kind,domain_key,semantic_identity,statement_text)
+        VALUES('delete',OLD.rowid,OLD.kind,OLD.domain_key,OLD.semantic_identity,OLD.statement_text);
+      END;
+      CREATE TRIGGER learned_memories_fts_update
+      AFTER UPDATE OF kind,domain_key,semantic_identity,statement_text ON learned_memories BEGIN
+        INSERT INTO learned_memories_fts(learned_memories_fts,rowid,kind,domain_key,semantic_identity,statement_text)
+        VALUES('delete',OLD.rowid,OLD.kind,OLD.domain_key,OLD.semantic_identity,OLD.statement_text);
+        INSERT INTO learned_memories_fts(rowid,kind,domain_key,semantic_identity,statement_text)
+        VALUES(NEW.rowid,NEW.kind,NEW.domain_key,NEW.semantic_identity,NEW.statement_text);
+      END;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

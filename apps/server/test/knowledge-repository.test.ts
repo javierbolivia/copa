@@ -30,10 +30,10 @@ describe("Knowledge schema 6 y repository", () => {
         "01912345-6789-7abc-8def-0123456789ab", "Legado", "Nicho", now, now,
       );
     legacy.close();
-    // AppDatabase applies all missing migrations 1-6. A truly marked v5 database would
-    // already contain tables 1-5; this minimal legacy fixture exercises the additive path.
+    // AppDatabase applies every missing migration through the latest schema. A truly marked
+    // v5 database already contains tables 1-5; this fixture exercises the additive path.
     const db = new AppDatabase(path);
-    expect(db.getSchemaVersion()).toBe(11);
+    expect(db.getSchemaVersion()).toBe(12);
     expect(db.connection.prepare("SELECT name FROM projects").get()).toMatchObject({ name: "Legado" });
     expect(db.connection.prepare("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name='knowledge_chunks_fts'").get()).toMatchObject({ ok: 1 });
     expect(db.connection.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });

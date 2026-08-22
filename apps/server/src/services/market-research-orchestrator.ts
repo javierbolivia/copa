@@ -11,6 +11,7 @@ import {
   type MarketResearchYouTubeMetadata,
   type MarketResearchYouTubeRelevanceProvenance,
   type NormalizedMarketSignal,
+  type YouTubeQueryPlan,
 } from "@our-platform/shared";
 import { Value } from "@sinclair/typebox/value";
 
@@ -43,6 +44,8 @@ export interface MarketResearchClients {
 
 export interface MarketResearchAcquisitionInput {
   readonly topic: string;
+  /** Local shadow telemetry only; never replaces the current executor queries. */
+  readonly youtubeShadowQueryPlan?: YouTubeQueryPlan;
   /** Caller-supplied retrieval time so signal adapters stay pure. */
   readonly retrievedAt: string;
   /** Optional bounded metadata review, composed by MarketResearchService. */
@@ -228,6 +231,7 @@ async function acquireProvider(
     try {
       const acquisition = await acquireYouTubeDeepResearchSignals(youtube, {
         topic: input.topic,
+        ...(input.youtubeShadowQueryPlan === undefined ? {} : { shadowQueryPlan: input.youtubeShadowQueryPlan }),
         ...(input.youtubeMinimumDurationSeconds === undefined
           ? {}
           : { youtubeMinimumDurationSeconds: input.youtubeMinimumDurationSeconds }),

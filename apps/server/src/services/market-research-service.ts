@@ -26,6 +26,9 @@ import {
 } from "./market-research-semantic-miner.js";
 import { createYouTubeRelevanceReviewer } from "./youtube-relevance-reviewer.js";
 import { resolveYouTubeMinimumDurationSeconds } from "./youtube-research-relevance.js";
+import { LearningMemoryService } from "./knowledge/learning-memory-service.js";
+import { InternalSkillResolver } from "./skills/skill-resolver.js";
+import { planMemoryAwareYouTubeQueries } from "./youtube-query-planner.js";
 
 export const MARKET_RESEARCH_AGENT_KEY = "market_research";
 
@@ -148,6 +151,9 @@ function restorePersistedMarketResearchRun(
         latencyMs: report.latencyMs, failure: report.failure, usage: report.usage, credits: report.credits,
         ...(report.youtube === undefined ? {} : { youtube: {
           queries: report.youtube.queries,
+          ...(report.youtube.queryPlanComparison === undefined ? {} : {
+            queryPlanComparison: report.youtube.queryPlanComparison,
+          }),
           videosDiscovered: report.youtube.videosDiscovered,
           videosSelected: report.youtube.videosSelected,
           videosWithComments: report.youtube.videosWithComments,
@@ -307,10 +313,25 @@ export class MarketResearchService {
     const startedAtDate = this.now();
     const startedAt = startedAtDate.toISOString();
     const startedMs = startedAtDate.getTime();
+    const project = this.database.connection.prepare("SELECT niche FROM projects WHERE id=?").get(projectId) as { niche: string } | undefined;
+    const projectContext = project === undefined ? undefined : { projectId, domain: project.niche };
+    const resolvedMemory = projectContext === undefined
+      ? []
+      : new InternalSkillResolver(new LearningMemoryService(this.database)).resolve({
+          skillId: "research-intelligence",
+          version: 1,
+          projectContext: { ...projectContext, query: topic },
+        }).retrievedMemory;
+    const youtubeShadowQueryPlan = planMemoryAwareYouTubeQueries({
+      researchFocus: topic,
+      ...(projectContext === undefined ? {} : { projectContext }),
+      relevantMemory: resolvedMemory,
+    });
 
     const acquisition = await acquireMarketResearchSignals(this.options.clients, {
       topic,
       retrievedAt: startedAt,
+      youtubeShadowQueryPlan,
       youtubeMinimumDurationSeconds,
       youtubeRelevanceReviewer: createYouTubeRelevanceReviewer(
         { analyzer: "deepseek", model: this.options.analyzers.deepSeek?.effectiveModel ?? DEEPSEEK_DEFAULT_MODEL, client: this.options.analyzers.deepSeek },

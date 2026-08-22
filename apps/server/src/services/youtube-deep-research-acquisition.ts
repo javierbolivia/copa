@@ -5,6 +5,8 @@ import {
   type MarketResearchYouTubeRelevanceReview,
   type MarketResearchYouTubeVideoDecisionAudit,
   type NormalizedMarketSignal,
+  type YouTubeQueryPlan,
+  type YouTubeQueryPlanComparison,
 } from "@our-platform/shared";
 
 import type {
@@ -92,6 +94,7 @@ export interface YouTubeResearchVideoCandidate {
 
 export interface YouTubeDeepAcquisitionMetrics {
   readonly queries: number;
+  readonly queryPlanComparison?: YouTubeQueryPlanComparison;
   readonly videosDiscovered: number;
   readonly videosSelected: number;
   readonly videosWithComments: number;
@@ -157,6 +160,8 @@ export interface YouTubeDeepAcquisition {
 
 export interface YouTubeDeepResearchInput {
   readonly topic: string;
+  /** Proposed plan is telemetry only; discovery continues to use the current plan. */
+  readonly shadowQueryPlan?: YouTubeQueryPlan;
   readonly youtubeMinimumDurationSeconds?: number;
   /** Optional bounded review of deterministic borderline video metadata only. */
   readonly relevanceReviewer?: YouTubeRelevanceReviewer;
@@ -463,6 +468,14 @@ export async function acquireYouTubeDeepResearchSignals(
   const requested = MARKET_RESEARCH_BUDGETS.youtubeTargetComments;
   const minimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(input.youtubeMinimumDurationSeconds);
   const queries = deriveYouTubeResearchQueries(input.topic);
+  const queryPlanComparison: YouTubeQueryPlanComparison | undefined = input.shadowQueryPlan === undefined
+    ? undefined
+    : {
+        mode: "SHADOW",
+        executor: "CURRENT_PLAN",
+        currentQueries: queries.map((query) => ({ ...query })),
+        proposed: input.shadowQueryPlan,
+      };
 
   // ---- Discovery: one bounded page per query lane, deduped by video ID. ----
   const discovered = new Map<string, YouTubeResearchVideoCandidate>();
@@ -493,6 +506,7 @@ export async function acquireYouTubeDeepResearchSignals(
 
   const emptyMetrics = (stopReason: YouTubeAcquisitionStopReason): YouTubeDeepAcquisitionMetrics => ({
     queries: queries.length,
+    ...(queryPlanComparison === undefined ? {} : { queryPlanComparison }),
     videosDiscovered: discovered.size,
     videosSelected: 0,
     videosWithComments: 0,
@@ -850,6 +864,7 @@ export async function acquireYouTubeDeepResearchSignals(
     credits: null,
     metrics: {
       queries: queries.length,
+      ...(queryPlanComparison === undefined ? {} : { queryPlanComparison }),
       videosDiscovered: discovered.size,
       videosSelected: preGateCandidates.length,
       videosWithComments,

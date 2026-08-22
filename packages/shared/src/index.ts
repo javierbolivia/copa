@@ -12,3 +12,4 @@ export * from "./market-signal.js";
 export * from "./market-research.js";
 export * from "./learning-memory.js";
 export * from "./internal-skill.js";
+export * from "./youtube-query-plan.js";

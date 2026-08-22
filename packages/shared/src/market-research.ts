@@ -1,6 +1,7 @@
 import { Type, type Static } from "@sinclair/typebox";
 
 import { MarketSignalSourceSchema, type MarketSignalSource } from "./market-signal.js";
+import { YouTubeQueryPlanComparisonSchema } from "./youtube-query-plan.js";
 
 /** Acquisition providers wired into the real Research flow. */
 export const MARKET_RESEARCH_PROVIDERS = ["youtube", "tavily", "exa", "brave", "firecrawl"] as const;
@@ -273,6 +274,8 @@ export type MarketResearchFinding = Static<typeof MarketResearchFindingSchema>;
 
 export const MarketResearchYouTubeAcquisitionSchema = Type.Object({
   queries: Type.Integer({ minimum: 0 }),
+  /** Optional shadow-only comparison; currentQueries remain the executor input. */
+  queryPlanComparison: Type.Optional(YouTubeQueryPlanComparisonSchema),
   videosDiscovered: Type.Integer({ minimum: 0 }),
   videosSelected: Type.Integer({ minimum: 0 }),
   videosWithComments: Type.Integer({ minimum: 0 }),

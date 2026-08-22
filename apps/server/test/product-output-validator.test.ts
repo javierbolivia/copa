@@ -97,8 +97,6 @@ describe("Product completeness and grounding validator", () => {
     expect(noCapabilities.authorizedCapabilities).toEqual([]);
     expect(validateProductOutput(complete(), { groundingSnapshot: noCapabilities }).audit.ok).toBe(true);
     expect(validateProductOutput(complete({ templates: ["Plantilla de seguimiento"] }), { groundingSnapshot: noCapabilities }).audit.ok).toBe(false);
-    expect(validateProductOutput(complete({ modules: ["Módulo 1"] }), { groundingSnapshot: noCapabilities }).audit.unsupportedClaims)
-      .toEqual(expect.arrayContaining([expect.objectContaining({ category: "QUANTIFIED_STRUCTURE", path: "$.proposals[0].modules" })]));
 
     for (const input of [
       { productConfiguration: { generalNotes: "El producto incluye comunidad privada" } },
@@ -151,10 +149,53 @@ describe("Product completeness and grounding validator", () => {
       .toContainEqual(expect.objectContaining({ path: "$.proposals[0].templates", expected: "array(maxItems 0)" }));
     expect(validateProductOutput(complete({ resources: ["Herramienta de seguimiento"] }), { groundingSnapshot: snapshot }).audit.issues)
       .toContainEqual(expect.objectContaining({ path: "$.proposals[0].resources", category: "TEMPLATES_OR_TOOLS" }));
-    expect(validateProductOutput(complete({ modules: ["Módulo 1", "Módulo 2"] }), { groundingSnapshot: snapshot }).audit.issues)
-      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].modules", category: "QUANTIFIED_STRUCTURE" }));
     expect(validateProductOutput(complete({ format: "Curso con plantillas y herramientas" }), { groundingSnapshot: snapshot }).audit.issues)
       .toContainEqual(expect.objectContaining({ path: "$.proposals[0].format", category: "TEMPLATES_OR_TOOLS" }));
+  });
+
+  it("does not classify support materials or resources as HUMAN_SUPPORT", () => {
+    for (const concept of [
+      "Curso digital con materiales de apoyo y documentación",
+      "Curso digital con recursos de apoyo y material complementario",
+    ]) {
+      const audit = validateProductOutput(complete({ concept })).audit;
+      expect(audit.unsupportedClaims).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: "HUMAN_SUPPORT" }),
+      ]));
+      expect(audit.ok).toBe(true);
+    }
+  });
+
+  it("continues to classify real human delivery as HUMAN_SUPPORT", () => {
+    for (const format of ["Curso con coaching", "Curso con tutoría", "Curso con soporte humano"]) {
+      expect(validateProductOutput(complete({ format })).audit.unsupportedClaims).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: "HUMAN_SUPPORT", path: "$.proposals[0].format" }),
+      ]));
+    }
+  });
+
+  it("separates internal module materialization from externally claimed quantities", () => {
+    const internal = validateProductOutput(complete({
+      modules: [
+        "Módulo 1: Comprensión",
+        "Módulo 2: Desencadenantes",
+        "Módulo 3: Manejo",
+        "Módulo 4: Aplicación",
+        "Módulo 5: Revisión",
+      ],
+    }));
+    expect(internal.audit.ok).toBe(true);
+    expect(internal.audit.unsupportedClaims).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "QUANTIFIED_STRUCTURE" }),
+    ]));
+
+    for (const format of ["Programa de 5 módulos", "Curso de 8 semanas"]) {
+      expect(validateProductOutput(complete({ format })).audit.unsupportedClaims).toEqual(expect.arrayContaining([
+        expect.objectContaining({ category: "QUANTIFIED_STRUCTURE", path: "$.proposals[0].format" }),
+      ]));
+    }
+    expect(validateProductOutput(complete({ promise: "Resultados en 30 días" })).audit.unsupportedClaims)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ category: "TIME_BOUND_RESULT" })]));
   });
 
   it("opens only explicitly authorized capabilities in both provider contract and validator", () => {
@@ -165,7 +206,7 @@ describe("Product completeness and grounding validator", () => {
     });
     const schema = buildProductStructuredOutputSchema(snapshot);
     const output = complete({
-      format: "Curso digital con plantillas",
+      format: "Curso digital de 4 módulos con plantillas",
       deliverables: ["Contenido principal", "Plantillas"],
       modules: ["Módulo 1", "Módulo 2", "Módulo 3", "Módulo 4"],
       templates: ["Plantilla de seguimiento"],
@@ -178,6 +219,48 @@ describe("Product completeness and grounding validator", () => {
       "x-hallazia-product-capability-contract": {
         optionalArrays: { templates: { requiredCapability: "TEMPLATES_OR_TOOLS", allowed: true } },
       },
+    });
+  });
+
+  it("passes the Product v5 output offline when its two false positives are removed", () => {
+    const evidenceIds = [
+      "01a028a4-5c1f-759c-8cc4-d8339c2554ec",
+      "01a028a4-5c1f-759c-8cc4-d5a5d14680f8",
+      "01a028a4-5c26-7172-9aec-5e18896656ee",
+      "01a028a5-166a-75da-8e13-b32a0fb0813f",
+      "01a028a4-5f7f-70fa-b80f-935d87065b68",
+      "01a028a4-5c1f-759c-8cc4-eb4a19f074c0",
+    ];
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: evidenceIds.map((id) => ({ id, quoteText: `Evidencia ${id}` })),
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso online para perros reactivos" }] },
+    });
+    const output = complete({
+      id: "curso-online-reactividad-canina",
+      name: "Curso online completo para perros reactivos",
+      concept: "Un curso online estructurado que guía a los dueños de perros reactivos paso a paso para comprender y manejar la reactividad de sus mascotas, a través de lecciones en video, materiales de apoyo y ejercicios prácticos.",
+      problem: "Muchos dueños de perros reactivos no saben cómo abordar el problema: carecen de conocimientos sobre las causas de la reactividad, las técnicas de manejo seguro y cómo educar a su perro sin recurrir a métodos inadecuados. Esto genera estrés, frustración y situaciones peligrosas en los paseos.",
+      outcome: "Los participantes obtendrán una comprensión clara de la reactividad canina, aprenderán a manejar situaciones cotidianas con técnicas seguras y efectivas, y podrán comenzar a trabajar en la modificación de conducta con su perro, mejorando la calidad de vida de ambos.",
+      promise: "Aprenderás las bases para entender a tu perro reactivo y empezar a aplicar pautas de manejo y educación en tu día a día, con un enfoque práctico y seguro.",
+      format: "Curso online con módulos en video, guías descargables, ejercicios prácticos y un plan de acción semanal.",
+      deliverables: ["Videos de las lecciones", "Guías descargables en PDF", "Ejercicios prácticos", "Plan de acción semanal"],
+      modules: [
+        "Modulo 1: Comprendiendo la reactividad canina",
+        "Modulo 2: Identificando los desencadenantes",
+        "Modulo 3: Técnicas de manejo y seguridad",
+        "Modulo 4: Ejercicios de modificación de conducta",
+        "Modulo 5: Avanzando en entornos reales",
+      ],
+      evidenceIds,
+    });
+    output.selectedId = "curso-online-reactividad-canina";
+
+    expect(snapshot.authorizedCapabilities).toEqual([]);
+    expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit).toMatchObject({
+      ok: true,
+      grounded: true,
+      unresolvedEvidenceIds: [],
+      unsupportedClaims: [],
     });
   });
 

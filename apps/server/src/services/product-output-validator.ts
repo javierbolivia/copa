@@ -132,11 +132,11 @@ const CLAIM_PATTERNS: ReadonlyArray<{ category: ProductClaimCategory; pattern: R
   { category: "COMMUNITY_ACCESS", pattern: /\b(?:comunidad|community|grupo privado|private group)\b/u },
   { category: "CERTIFICATION", pattern: /\b(?:certificacion|certificado|certification|certificate|acreditad[oa]|accredited)\b/u },
   { category: "LIFETIME_ACCESS", pattern: /\b(?:acceso de por vida|lifetime access|forever access)\b/u },
-  { category: "QUANTIFIED_STRUCTURE", pattern: /\b(?:\d+\s+(?:modulos?|modules?|bonuses|bonos?|sesiones?|sessions?|clases?|lessons?)|(?:modulos?|modules?|sesiones?|sessions?|clases?|lessons?)\s+\d+)\b/u },
+  { category: "QUANTIFIED_STRUCTURE", pattern: /\b(?:\d+\s+(?:modulos?|modules?|bonuses|bonos?|sesiones?|sessions?|clases?|lessons?)|(?:modulos?|modules?|sesiones?|sessions?|clases?|lessons?)\s+\d+|(?:cursos?|programas?|courses?|programs?)\s+(?:de|of)\s+\d+\s+(?:dias?|days?|semanas?|weeks?|meses?|months?))\b/u },
   { category: "BONUS_FEATURE", pattern: /\b(?:bonus|bonuses|bonos?|bonos adicionales)\b/u },
   { category: "TEMPLATES_OR_TOOLS", pattern: /\b(?:plantillas?|templates?|herramientas?|tools?|workbooks?|cuadernos? de trabajo|checklists?|listas? de verificacion)\b/u },
   { category: "LIVE_SESSIONS", pattern: /\b(?:en vivo|live sessions?|live workshops?|taller(?:es)? en vivo)\b/u },
-  { category: "HUMAN_SUPPORT", pattern: /\b(?:apoyo|soporte|acompanamiento|support|guidance)\b/u },
+  { category: "HUMAN_SUPPORT", pattern: /\b(?:coaching|tutorias?|tutoring|asesoramiento|atencion personalizada|(?:apoyo|soporte|acompanamiento|support|guidance)\s+(?:human[oa]|personalizad[oa]|individual|por una? persona|de una? persona)|(?:human|personalized|individual)\s+(?:support|guidance))\b/u },
   { category: "OPERATIONAL_FEATURE", pattern: /\b(?:incluye|incluyendo|recibe|recibiras|ofrece|includes?|including|you receive|comes with|featuring)\b/u },
 ] as const;
 
@@ -323,7 +323,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       }
       for (const field of FEATURE_ARRAY_FIELDS) {
         const values = Array.isArray(cleaned[field]) ? cleaned[field] as string[] : [];
-        const categories = new Set(values.flatMap((claim) => claimCategories(claim)));
+        const categories = new Set(values.flatMap((claim) => featureClaimCategories(field, claim)));
         const requiredCapability = OPTIONAL_ARRAY_CAPABILITY_POLICY[field as keyof typeof OPTIONAL_ARRAY_CAPABILITY_POLICY];
         if (requiredCapability !== undefined && values.length > 0) categories.add(requiredCapability);
         for (const category of categories) {
@@ -420,6 +420,15 @@ function claimCategories(value: string): ProductClaimCategory[] {
   const normalized = normalize(value);
   const categories = CLAIM_PATTERNS.filter((item) => item.pattern.test(normalized)).map((item) => item.category);
   return categories.length > 1 ? categories.filter((category) => category !== "OPERATIONAL_FEATURE") : categories;
+}
+
+function featureClaimCategories(field: (typeof FEATURE_ARRAY_FIELDS)[number], value: string): ProductClaimCategory[] {
+  // Numbered module titles materialize the required internal module array; they
+  // are not themselves an external claim that the product has a marketed count.
+  const claim = field === "modules"
+    ? normalize(value).replace(/^(?:modulos?|modules?)\s+\d+\b/u, "").trim()
+    : value;
+  return claimCategories(claim);
 }
 
 function claimCategoryAuthorized(

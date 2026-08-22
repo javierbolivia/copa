@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { validateJsonSchema } from "../src/integrations/structured-output.js";
 import { MODULE_OUTPUT_SCHEMAS } from "../src/services/module-output-schema.js";
 import {
   buildProductGroundingSnapshot,
+  buildProductStructuredOutputSchema,
   validateProductOutput,
 } from "../src/services/product-output-validator.js";
 
@@ -110,6 +112,73 @@ describe("Product completeness and grounding validator", () => {
       expect(snapshot.authorizedCapabilities).toContain("COMMUNITY_ACCESS");
       expect(validateProductOutput(complete({ concept: "Comunidad privada para participantes" }), { groundingSnapshot: snapshot }).audit.ok).toBe(true);
     }
+  });
+
+  it("derives a zero-capability provider contract that keeps base Product structure usable", () => {
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+    });
+    const schema = buildProductStructuredOutputSchema(snapshot);
+    const output = complete({
+      format: "Curso digital organizado progresivamente",
+      deliverables: ["Contenido principal"],
+      modules: ["Comprensión", "Aplicación", "Revisión"],
+    });
+
+    expect(snapshot.authorizedCapabilities).toEqual([]);
+    expect(validateJsonSchema(schema, output)).toEqual([]);
+    expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit.ok).toBe(true);
+    expect(schema).toMatchObject({
+      "x-hallazia-product-capability-contract": {
+        optionalAuthorizedCapabilities: [],
+        optionalArrays: {
+          templates: { requiredCapability: "TEMPLATES_OR_TOOLS", allowed: false },
+          bonuses: { requiredCapability: "BONUS_FEATURE", allowed: false },
+        },
+      },
+    });
+  });
+
+  it("closes optional arrays in the provider schema and keeps free-text capability checks fail-closed", () => {
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+    });
+    const schema = buildProductStructuredOutputSchema(snapshot);
+
+    expect(validateJsonSchema(schema, complete({ templates: ["Plantilla de seguimiento"] })))
+      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].templates", expected: "array(maxItems 0)" }));
+    expect(validateProductOutput(complete({ resources: ["Herramienta de seguimiento"] }), { groundingSnapshot: snapshot }).audit.issues)
+      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].resources", category: "TEMPLATES_OR_TOOLS" }));
+    expect(validateProductOutput(complete({ modules: ["Módulo 1", "Módulo 2"] }), { groundingSnapshot: snapshot }).audit.issues)
+      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].modules", category: "QUANTIFIED_STRUCTURE" }));
+    expect(validateProductOutput(complete({ format: "Curso con plantillas y herramientas" }), { groundingSnapshot: snapshot }).audit.issues)
+      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].format", category: "TEMPLATES_OR_TOOLS" }));
+  });
+
+  it("opens only explicitly authorized capabilities in both provider contract and validator", () => {
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+      productConfiguration: { generalNotes: "El producto incluye plantillas y una estructura de 4 módulos" },
+    });
+    const schema = buildProductStructuredOutputSchema(snapshot);
+    const output = complete({
+      format: "Curso digital con plantillas",
+      deliverables: ["Contenido principal", "Plantillas"],
+      modules: ["Módulo 1", "Módulo 2", "Módulo 3", "Módulo 4"],
+      templates: ["Plantilla de seguimiento"],
+    });
+
+    expect(snapshot.authorizedCapabilities).toEqual(expect.arrayContaining(["TEMPLATES_OR_TOOLS", "QUANTIFIED_STRUCTURE"]));
+    expect(validateJsonSchema(schema, output)).toEqual([]);
+    expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit.ok).toBe(true);
+    expect(schema).toMatchObject({
+      "x-hallazia-product-capability-contract": {
+        optionalArrays: { templates: { requiredCapability: "TEMPLATES_OR_TOOLS", allowed: true } },
+      },
+    });
   });
 
   it("rejects missing, blank and placeholder formats", () => {

@@ -3,6 +3,8 @@ export type LlmProviderName = string;
 export interface LlmStructuredOutput {
   readonly name: string;
   readonly jsonSchema: Readonly<Record<string, unknown>>;
+  /** Disable the provider's schema-correction retry for explicitly single-attempt flows. */
+  readonly retryOnInvalidSchema?: boolean;
 }
 
 export interface LlmGenerateRequest {

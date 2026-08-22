@@ -1,3 +1,5 @@
+import { ProductModuleOutputSchema } from "@our-platform/shared";
+
 /**
  * Product completeness and commercial-claim grounding gate.
  *
@@ -95,6 +97,30 @@ const REQUIRED_ARRAY_FIELDS = ["deliverables", "modules", "checklists", "templat
 const NON_EMPTY_ARRAY_FIELDS = new Set(["deliverables", "modules"]);
 const CLAIM_FIELDS = ["concept", "outcome", "promise", "format"] as const;
 const FEATURE_ARRAY_FIELDS = ["deliverables", "modules", "checklists", "templates", "resources", "bonuses"] as const;
+const ALL_PRODUCT_CAPABILITIES: readonly ProductClaimCategory[] = [
+  "TIME_BOUND_RESULT", "GUARANTEE_OR_ASSURED_RESULT", "EFFICACY_OR_PROOF", "PERSONALIZED_SERVICE",
+  "COACHING_OR_SESSIONS", "COMMUNITY_ACCESS", "CERTIFICATION", "LIFETIME_ACCESS",
+  "QUANTIFIED_STRUCTURE", "BONUS_FEATURE", "TEMPLATES_OR_TOOLS", "LIVE_SESSIONS",
+  "HUMAN_SUPPORT", "OPERATIONAL_FEATURE",
+];
+const PRODUCT_CAPABILITY_FIELD_POLICY = {
+  concept: ALL_PRODUCT_CAPABILITIES,
+  outcome: ALL_PRODUCT_CAPABILITIES,
+  promise: ALL_PRODUCT_CAPABILITIES,
+  format: ALL_PRODUCT_CAPABILITIES,
+  deliverables: ALL_PRODUCT_CAPABILITIES,
+  modules: ALL_PRODUCT_CAPABILITIES,
+  checklists: ["TEMPLATES_OR_TOOLS"],
+  templates: ["TEMPLATES_OR_TOOLS"],
+  resources: ["TEMPLATES_OR_TOOLS"],
+  bonuses: ["BONUS_FEATURE"],
+} as const satisfies Readonly<Record<UnsupportedProductClaim["field"], readonly ProductClaimCategory[]>>;
+const OPTIONAL_ARRAY_CAPABILITY_POLICY = {
+  checklists: "TEMPLATES_OR_TOOLS",
+  templates: "TEMPLATES_OR_TOOLS",
+  resources: "TEMPLATES_OR_TOOLS",
+  bonuses: "BONUS_FEATURE",
+} as const satisfies Readonly<Partial<Record<(typeof FEATURE_ARRAY_FIELDS)[number], ProductClaimCategory>>>;
 const PLACEHOLDER = /^(?:sin completar|incomplet[oa]|not completed|incomplete|pending|pendiente|por definir|to be defined|tbd|n a|none|null|undefined|-+)$/u;
 
 const CLAIM_PATTERNS: ReadonlyArray<{ category: ProductClaimCategory; pattern: RegExp }> = [
@@ -145,6 +171,49 @@ export function buildProductGroundingSnapshot(input: {
       explicitUserInput,
     ),
   };
+}
+
+/**
+ * Build the provider-facing Product contract from the same canonical capability
+ * policy enforced by the validator. Base Product fields always remain usable;
+ * optional feature arrays are structurally closed unless explicitly authorized.
+ */
+export function buildProductStructuredOutputSchema(
+  snapshot: Pick<ProductGroundingSnapshot, "authorizedCapabilities">,
+): Readonly<Record<string, unknown>> {
+  const authorized = new Set(snapshot.authorizedCapabilities);
+  const schema = structuredClone(ProductModuleOutputSchema) as Record<string, unknown>;
+  const schemaProperties = record(schema.properties);
+  const proposalsSchema = record(schemaProperties.proposals);
+  const proposalSchema = record(proposalsSchema.items);
+  const proposalProperties = record(proposalSchema.properties);
+
+  proposalsSchema.description = "BASE PRODUCT STRUCTURE: one or more complete proposals. OPTIONAL AUTHORIZED CAPABILITIES may appear only when allowed by the capability contract.";
+  for (const [field, applicableCapabilities] of Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY)) {
+    const fieldSchema = structuredClone(record(proposalProperties[field]));
+    proposalProperties[field] = fieldSchema;
+    const allowed = applicableCapabilities.filter((capability) => authorized.has(capability));
+    fieldSchema.description = `BASE PRODUCT STRUCTURE is allowed. OPTIONAL AUTHORIZED CAPABILITIES for this field: ${allowed.length > 0 ? allowed.join(", ") : "NONE"}. Do not add any other optional capability or arbitrary quantity.`;
+  }
+  for (const [field, requiredCapability] of Object.entries(OPTIONAL_ARRAY_CAPABILITY_POLICY)) {
+    if (!authorized.has(requiredCapability)) record(proposalProperties[field]).maxItems = 0;
+  }
+  schema["x-hallazia-product-capability-contract"] = {
+    baseProductStructure: {
+      fields: ["id", "name", "concept", "problem", "outcome", "promise", "format", "deliverables", "modules", "evidenceIds"],
+      guidance: "A complete useful Product may use generic progressive organization without inventing optional capabilities or arbitrary quantities.",
+    },
+    optionalAuthorizedCapabilities: [...authorized].sort(),
+    fields: Object.fromEntries(Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY).map(([field, applicableCapabilities]) => [
+      field,
+      { allowedCapabilities: applicableCapabilities.filter((capability) => authorized.has(capability)) },
+    ])),
+    optionalArrays: Object.fromEntries(Object.entries(OPTIONAL_ARRAY_CAPABILITY_POLICY).map(([field, requiredCapability]) => [
+      field,
+      { requiredCapability, allowed: authorized.has(requiredCapability) },
+    ])),
+  };
+  return schema;
 }
 
 export function deriveAuthorizedProductCapabilities(
@@ -255,8 +324,8 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       for (const field of FEATURE_ARRAY_FIELDS) {
         const values = Array.isArray(cleaned[field]) ? cleaned[field] as string[] : [];
         const categories = new Set(values.flatMap((claim) => claimCategories(claim)));
-        if (field === "bonuses" && values.length > 0) categories.add("BONUS_FEATURE");
-        if ((field === "checklists" || field === "templates" || field === "resources") && values.length > 0) categories.add("TEMPLATES_OR_TOOLS");
+        const requiredCapability = OPTIONAL_ARRAY_CAPABILITY_POLICY[field as keyof typeof OPTIONAL_ARRAY_CAPABILITY_POLICY];
+        if (requiredCapability !== undefined && values.length > 0) categories.add(requiredCapability);
         for (const category of categories) {
           const claim = values.join(" ");
           if (!claimCategoryAuthorized(category, authorizedCapabilities, authorizedClaims, claim)) {

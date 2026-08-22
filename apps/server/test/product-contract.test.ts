@@ -56,7 +56,6 @@ describe("strict Product contract, grounding and downstream safety", () => {
     delete (missingFormat.proposals as Array<Record<string, unknown>>)[0]!.format;
     const outputs = [
       missingFormat,
-      missingFormat,
       product({ promise: "Resultados garantizados en 30 días con método probado y apoyo personalizado" }),
       product(),
     ];
@@ -123,10 +122,8 @@ describe("strict Product contract, grounding and downstream safety", () => {
     expect(providerContext).toHaveProperty("productGrounding.authorizedCapabilities");
     expect(providerContext).not.toHaveProperty("parentOutputs");
     expect(providerContext).toMatchObject({ knowledge: { advisoryOnly: true, capabilityAuthorization: false } });
-    const retryRequest = JSON.parse(String((fetchMock.mock.calls[1] as unknown as [unknown, RequestInit])[1].body)) as { messages: Array<{ content: string }> };
-    expect(retryRequest.messages[0]!.content).toContain("INTENTO FINAL 2/2");
-    expect(retryRequest.messages[0]!.content).toContain("$.proposals[0].format");
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(request.messages[0]!.content).toContain("x-hallazia-product-capability-contract");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("uses the exact provider allowedEvidence snapshot for backend grounding", async () => {

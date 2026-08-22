@@ -168,6 +168,7 @@ export class DeepSeekProvider implements LlmProvider {
       if (!(error instanceof IntegrationError)
         || error.code !== "invalid_schema"
         || !request.structuredOutput
+        || request.structuredOutput.retryOnInvalidSchema === false
         || !error.validationIssues?.length) throw error;
       const firstAttemptIssues = error.validationIssues;
       const result = await this.generateOnce<TOutput>(request, model, 2, firstAttemptIssues);

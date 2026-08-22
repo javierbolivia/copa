@@ -112,6 +112,21 @@ describe("DeepSeekProvider", () => {
     expect(retryBody.messages[0].content).toContain("JSON Schema completo");
   });
 
+  it("respeta un contrato de intento único sin hacer retry de schema", async () => {
+    const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
+    const fetchMock = vi.fn(async () => response({}));
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    await expect(provider.generate({
+      provider:"deepseek",
+      model:provider.effectiveModel,
+      systemInstructions:"JSON",
+      input:"{}",
+      structuredOutput:{name:"check",jsonSchema:schema,retryOnInvalidSchema:false},
+    })).rejects.toMatchObject({ code:"invalid_schema", attemptCount:1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("no filtra la clave en errores", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { type: "invalid_api_key", message: "deepseek-secret-value" } }), { status: 401 }));
     const provider = new DeepSeekProvider({

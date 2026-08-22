@@ -39,6 +39,7 @@ import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./
 import { validateResearchOutput } from "./research-output-validator.js";
 import {
   buildProductGroundingSnapshot,
+  buildProductStructuredOutputSchema,
   validateProductOutput,
   type ProductGroundingSnapshot,
   type ProductValidationContext,
@@ -206,6 +207,9 @@ export class ModuleService {
       productConfiguration: { generalNotes: projectSettings?.generalNotes ?? null },
       explicitUserInput: instructions?.trim() || null,
     }) : undefined;
+    const structuredOutputSchema = productGroundingSnapshot
+      ? buildProductStructuredOutputSchema(productGroundingSnapshot)
+      : MODULE_OUTPUT_SCHEMAS[key];
     const evidenceIds = productGroundingSnapshot
       ? productGroundingSnapshot.allowedEvidence.map((item) => item.id)
       : evidence.map((row) => row.id);
@@ -268,7 +272,7 @@ export class ModuleService {
           providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
-        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});
+        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})},maxOutputTokens:8_000});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
       catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}

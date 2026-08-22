@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { MODULE_OUTPUT_SCHEMAS } from "../src/services/module-output-schema.js";
-import { validateProductOutput } from "../src/services/product-output-validator.js";
+import {
+  buildProductGroundingSnapshot,
+  validateProductOutput,
+} from "../src/services/product-output-validator.js";
 
 function complete(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -13,11 +16,11 @@ function complete(overrides: Record<string, unknown> = {}): Record<string, unkno
       problem: "La tarea resulta difícil de gestionar",
       outcome: "Comprender y manejar mejor la tarea",
       promise: "Una guía estructurada para comprender y manejar mejor la tarea",
-      format: "Guía digital con workbook",
-      deliverables: ["Guía", "Workbook"],
+      format: "Guía digital",
+      deliverables: ["Guía"],
       modules: ["Diagnóstico", "Plan"],
-      checklists: ["Checklist de avance"],
-      templates: ["Plantilla de plan"],
+      checklists: [],
+      templates: [],
       resources: [],
       bonuses: [],
       evidenceIds: [],
@@ -28,6 +31,87 @@ function complete(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 describe("Product completeness and grounding validator", () => {
+  it("builds one bounded snapshot from the selected Opportunity and removes lateral evidence IDs", () => {
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: [{ id: "allowed", quoteText: "Evidencia permitida" }],
+      opportunities: {
+        selectedId: "selected",
+        items: [
+          { id: "selected", name: "Guía práctica", evidenceIds: ["allowed", "outside"] },
+          { id: "unselected", name: "Comunidad privada", evidenceIds: ["outside"] },
+        ],
+      },
+    });
+
+    expect(snapshot.allowedEvidence).toEqual([{ id: "allowed", quote: "Evidencia permitida" }]);
+    expect(snapshot.selectedOpportunity).toMatchObject({ id: "selected", evidenceIds: ["allowed"] });
+    expect(JSON.stringify(snapshot.selectedOpportunity)).not.toContain("unselected");
+    expect(JSON.stringify(snapshot)).not.toContain("outside");
+    expect(snapshot.authorizedCapabilities).not.toContain("COMMUNITY_ACCESS");
+  });
+
+  it("uses the snapshot allowlist for both valid and fabricated/cross-snapshot evidence", () => {
+    const snapshot = buildProductGroundingSnapshot({
+      evidence: [{ id: "allowed", quoteText: "Evidencia permitida" }],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
+    });
+    expect(validateProductOutput(complete({ evidenceIds: ["allowed"] }), { groundingSnapshot: snapshot }).audit.ok).toBe(true);
+
+    const invalid = validateProductOutput(complete({ evidenceIds: ["fabricated", "stale", "other-project"] }), { groundingSnapshot: snapshot });
+    expect(invalid.audit.ok).toBe(false);
+    expect(invalid.audit.unresolvedEvidenceIds).toEqual(["fabricated", "other-project", "stale"]);
+    expect(invalid.audit.issues.filter((issue) => issue.code === "EVIDENCE_OUTSIDE_SNAPSHOT")).toHaveLength(3);
+  });
+
+  it("treats authorizedCapabilities as an allowlist and never promotes market-need evidence", () => {
+    const neutral = buildProductGroundingSnapshot({
+      evidence: [{ id: "market", quoteText: "Necesito una comunidad y apoyo de otras personas" }],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
+    });
+    const unauthorized = validateProductOutput(complete({ concept: "Comunidad privada para participantes" }), {
+      groundingSnapshot: neutral,
+      problemEvidence: [{ quoteText: "Necesito una comunidad" }],
+    });
+    expect(neutral.authorizedCapabilities).not.toContain("COMMUNITY_ACCESS");
+    expect(unauthorized.audit.issues).toContainEqual({
+      code: "UNAUTHORIZED_CAPABILITY",
+      path: "$.proposals[0].concept",
+      category: "COMMUNITY_ACCESS",
+    });
+
+    const authorized = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Comunidad privada para participantes" }] },
+    });
+    expect(authorized.authorizedCapabilities).toContain("COMMUNITY_ACCESS");
+    expect(validateProductOutput(complete({ concept: "Comunidad privada para participantes" }), { groundingSnapshot: authorized }).audit.ok).toBe(true);
+  });
+
+  it("accepts explicit Product configuration/input authorization and supports zero optional capabilities", () => {
+    const noCapabilities = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
+    });
+    expect(noCapabilities.authorizedCapabilities).toEqual([]);
+    expect(validateProductOutput(complete(), { groundingSnapshot: noCapabilities }).audit.ok).toBe(true);
+    expect(validateProductOutput(complete({ templates: ["Plantilla de seguimiento"] }), { groundingSnapshot: noCapabilities }).audit.ok).toBe(false);
+    expect(validateProductOutput(complete({ modules: ["Módulo 1"] }), { groundingSnapshot: noCapabilities }).audit.unsupportedClaims)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ category: "QUANTIFIED_STRUCTURE", path: "$.proposals[0].modules" })]));
+
+    for (const input of [
+      { productConfiguration: { generalNotes: "El producto incluye comunidad privada" } },
+      { explicitUserInput: "El producto debe incluir comunidad privada" },
+    ]) {
+      const snapshot = buildProductGroundingSnapshot({
+        evidence: [],
+        opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
+        ...input,
+      });
+      expect(snapshot.authorizedCapabilities).toContain("COMMUNITY_ACCESS");
+      expect(validateProductOutput(complete({ concept: "Comunidad privada para participantes" }), { groundingSnapshot: snapshot }).audit.ok).toBe(true);
+    }
+  });
+
   it("rejects missing, blank and placeholder formats", () => {
     const missing = complete();
     delete (missing.proposals as Array<Record<string, unknown>>)[0]!.format;
@@ -59,6 +143,9 @@ describe("Product completeness and grounding validator", () => {
     expect(result.audit.ok).toBe(false);
     expect(result.audit.unsupportedClaims.map((item) => item.category)).toEqual(expect.arrayContaining([
       "TIME_BOUND_RESULT", "EFFICACY_OR_PROOF", "PERSONALIZED_SERVICE",
+    ]));
+    expect(result.audit.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "UNSUPPORTED_PROMISE", path: "$.proposals[0].promise" }),
     ]));
   });
 

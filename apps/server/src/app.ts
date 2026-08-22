@@ -176,7 +176,7 @@ export async function createApp(
   registerDemoRoutes(app, projects, sources, modules);
   registerFileRoutes(app, projects, exporter);
   registerTraceabilityRoutes(app, traceability);
-  registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings);
+  registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings, modules);
   registerProductStudioRoutes(app, projects, productStudio);
   registerProductExportRoutes(app, productExports);
   youtubeImports.resumePending();

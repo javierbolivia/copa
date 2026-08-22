@@ -21,11 +21,11 @@ function product(overrides: Record<string, unknown> = {}): Record<string, unknow
       problem: "El problema seleccionado",
       outcome: "Comprender y manejar mejor el problema",
       promise: "Una guía estructurada para comprender y manejar mejor el problema",
-      format: "Guía digital con workbook",
-      deliverables: ["Guía", "Workbook"],
+      format: "Guía digital",
+      deliverables: ["Guía"],
       modules: ["Comprensión", "Plan", "Aplicación"],
-      checklists: ["Checklist de aplicación"],
-      templates: ["Plantilla de plan"],
+      checklists: [],
+      templates: [],
       resources: [],
       bonuses: [],
       evidenceIds: [],
@@ -92,6 +92,10 @@ describe("strict Product contract, grounding and downstream safety", () => {
     expect(unsupported.outputData).toMatchObject({
       productValidationAudit: { ok: false, grounded: false, unsupportedClaims: expect.any(Array) },
     });
+    const workflowAfterInvalid = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/workflow`,
+    })).json<{ steps: Array<{ stepKey: string; state: string }> }>().steps;
+    expect(workflowAfterInvalid.find((step) => step.stepKey === "product")?.state).toBe("IN_PROGRESS");
 
     const validResponse = await app.inject({
       method: "POST",
@@ -106,14 +110,61 @@ describe("strict Product contract, grounding and downstream safety", () => {
     expect(trace.statusCode).toBe(200);
     expect(trace.json<{ nodes: unknown[]; edges: unknown[] }>()).toMatchObject({ nodes: expect.any(Array), edges: expect.any(Array) });
     expect(trace.json<{ edges: unknown[] }>().edges.length).toBeGreaterThan(0);
+    const workflowAfterValid = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/workflow`,
+    })).json<{ steps: Array<{ stepKey: string; state: string }> }>().steps;
+    expect(workflowAfterValid.find((step) => step.stepKey === "product")?.state).toBe("COMPLETED");
 
     const request = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [unknown, RequestInit])[1].body)) as { messages: Array<{ content: string }> };
-    expect(request.messages[0]!.content).toContain("`format` debe describir concretamente");
-    expect(request.messages[0]!.content).toContain("evidencia del problema");
+    expect(request.messages[0]!.content).toContain("`format` debe ser concreto");
+    expect(request.messages[0]!.content).toContain("allowedEvidence");
+    const providerContext = JSON.parse(request.messages[1]!.content) as Record<string, unknown>;
+    expect(providerContext).toHaveProperty("productGrounding.allowedEvidence");
+    expect(providerContext).toHaveProperty("productGrounding.authorizedCapabilities");
+    expect(providerContext).not.toHaveProperty("parentOutputs");
+    expect(providerContext).toMatchObject({ knowledge: { advisoryOnly: true, capabilityAuthorization: false } });
     const retryRequest = JSON.parse(String((fetchMock.mock.calls[1] as unknown as [unknown, RequestInit])[1].body)) as { messages: Array<{ content: string }> };
     expect(retryRequest.messages[0]!.content).toContain("INTENTO FINAL 2/2");
     expect(retryRequest.messages[0]!.content).toContain("$.proposals[0].format");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("uses the exact provider allowedEvidence snapshot for backend grounding", async () => {
+    const providerContexts: Array<{ productGrounding: { allowedEvidence: Array<{ id: string }> } }> = [];
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const context = JSON.parse(body.messages[1]!.content) as { productGrounding: { allowedEvidence: Array<{ id: string }> } };
+      providerContexts.push(context);
+      const evidenceIds = providerContexts.length === 1
+        ? context.productGrounding.allowedEvidence.slice(0, 1).map((item) => item.id)
+        : ["fabricated-evidence-id"];
+      return deepSeekResponse(product({ evidenceIds }));
+    });
+    app = await createApp({
+      databasePath: ":memory:",
+      serveFrontend: false,
+      deepSeek: { apiKey: "product-contract-key", fetch: fetchMock as typeof fetch },
+    });
+    const demo = (await app.inject({ method: "POST", url: "/api/demo/projects" })).json<{ project: Project }>();
+
+    const valid = await app.inject({ method: "POST", url: `/api/projects/${demo.project.id}/modules/product/run`, payload: { provider: "deepseek" } });
+    expect(valid.statusCode).toBe(200);
+    expect(valid.json<ModuleResult>()).toMatchObject({
+      status: "approved",
+      outputData: { productValidationAudit: { ok: true, unresolvedEvidenceIds: [] } },
+    });
+
+    const invalid = await app.inject({ method: "POST", url: `/api/projects/${demo.project.id}/modules/product/run`, payload: { provider: "deepseek" } });
+    expect(invalid.statusCode).toBe(200);
+    expect(invalid.json<ModuleResult>()).toMatchObject({
+      status: "draft",
+      outputData: { productValidationAudit: {
+        ok: false,
+        unresolvedEvidenceIds: ["fabricated-evidence-id"],
+        issues: [expect.objectContaining({ code: "EVIDENCE_OUTSIDE_SNAPSHOT", path: "$.proposals[0].evidenceIds[0]" })],
+      } },
+    });
+    expect(providerContexts[0]!.productGrounding.allowedEvidence).toEqual(providerContexts[1]!.productGrounding.allowedEvidence);
   });
 
   it("does not approve an incomplete user draft", async () => {
@@ -136,6 +187,24 @@ describe("strict Product contract, grounding and downstream safety", () => {
     });
     expect(approval.statusCode).toBe(409);
     expect(approval.json<{ message: string }>().message).toContain("Producto incompleto");
+
+    const outside = structuredClone(active.outputData as Record<string, unknown>);
+    (outside.proposals as Array<Record<string, unknown>>)[0]!.evidenceIds = ["outside-snapshot"];
+    const outsideDraft = (await app.inject({
+      method: "POST", url: `/api/projects/${demo.project.id}/modules/product/drafts`, payload: { outputData: outside },
+    })).json<ModuleResult>();
+    const outsideApproval = await app.inject({
+      method: "POST", url: `/api/projects/${demo.project.id}/modules/product/versions/${outsideDraft.versionId}/approve`,
+    });
+    expect(outsideApproval.statusCode).toBe(409);
+    expect(outsideApproval.json<{ message: string }>().message).toContain("grounding");
+    const memoryPromotion = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${demo.project.id}/knowledge/memory/${outsideDraft.versionId}`,
+      payload: { decision: "APPROVED", visibility: "GLOBAL", reusable: true, preferred: true },
+    });
+    expect(memoryPromotion.statusCode).toBe(409);
+    expect(memoryPromotion.json<{ message: string }>().message).toContain("no puede promoverse");
   });
 
   it("presents a legacy invalid approved Product as draft/stale and blocks downstream consumption", async () => {

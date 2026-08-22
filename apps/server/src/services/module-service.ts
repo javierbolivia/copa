@@ -37,7 +37,12 @@ import {
 } from "./domain-vocabulary-discovery-service.js";
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 import { validateResearchOutput } from "./research-output-validator.js";
-import { validateProductOutput, type ProductValidationContext } from "./product-output-validator.js";
+import {
+  buildProductGroundingSnapshot,
+  validateProductOutput,
+  type ProductGroundingSnapshot,
+  type ProductValidationContext,
+} from "./product-output-validator.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -143,6 +148,13 @@ export class ModuleService {
     return this.toResult(approved);
   }
 
+  canPromoteToMemory(projectId:string,versionId:string):boolean {
+    const version=this.artifacts.getVersion(versionId);
+    if(!version||version.projectId!==projectId)return false;
+    if(version.artifactType!=="product")return true;
+    return version.status==="approved"&&this.validatePersistedProduct(version).audit.ok;
+  }
+
   async run(projectId: string, key: ModuleKey, provider?: string, instructions?:string): Promise<ModuleResult> {
     const definition = getModule(key);
     if (!definition) throw new Error("Módulo desconocido.");
@@ -187,8 +199,16 @@ export class ModuleService {
         ? "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
         : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
     ).all(projectId) as unknown as Array<{ id: string; quoteText: string }>;
-    const evidenceIds = evidence.map((row) => row.id);
     const project = this.db.connection.prepare("SELECT name,niche FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string };
+    const productGroundingSnapshot = key === "product" ? buildProductGroundingSnapshot({
+      evidence,
+      opportunities: parentOutputs.opportunities,
+      productConfiguration: { generalNotes: projectSettings?.generalNotes ?? null },
+      explicitUserInput: instructions?.trim() || null,
+    }) : undefined;
+    const evidenceIds = productGroundingSnapshot
+      ? productGroundingSnapshot.allowedEvidence.map((item) => item.id)
+      : evidence.map((row) => row.id);
     const knowledgeQuery=[definition.label,project.niche,instructions?.trim()].filter(Boolean).join(" ");
     const knowledgePolicy=getAgentKnowledgePolicy(key);
     const knowledgeRows=projectSettings?.knowledgeEnabled===false?[]:retrieveKnowledge(this.knowledge,projectId,knowledgeQuery,knowledgePolicy);
@@ -216,7 +236,16 @@ export class ModuleService {
       promptHash = prompt.hash;
       promptPath = prompt.relativePath;
       model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:resolveModel(prompt.modelTier, projectSettings, this.options);
-      providerInput = {
+      providerInput = productGroundingSnapshot ? {
+        project: { name: project.name, niche: project.niche },
+        moduleKey: key,
+        productGrounding: productGroundingSnapshot,
+        knowledge: {
+          advisoryOnly: true,
+          capabilityAuthorization: false,
+          chunks: sanitizeProductKnowledge(knowledgeContext, new Set(evidenceIds)),
+        },
+      } : {
         project: { name: project.name, niche: project.niche }, settings: projectSettings,
         moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
         additionalInstructions: instructions?.trim() || null,
@@ -395,11 +424,8 @@ export class ModuleService {
     }
     if (key === "product") {
       const validation = validateProductOutput(output, {
-        selectedUpstream: parentOutputs.opportunities,
-        productConfiguration: { generalNotes: projectSettings?.generalNotes ?? null },
-        explicitUserInput: instructions?.trim() || null,
+        groundingSnapshot: productGroundingSnapshot!,
         problemEvidence: evidence,
-        allowedEvidenceIds: evidenceIds,
       });
       output = validation.output;
       artifactStatus = validation.audit.ok ? "approved" : "draft";
@@ -487,6 +513,8 @@ export class ModuleService {
 
   private persistedProductContext(version:ArtifactVersion):ProductValidationContext {
     const snapshot=asRecord(version.inputSnapshot),context=asRecord(snapshot.context),parentOutputs=asRecord(context.parentOutputs);
+    const groundingSnapshot=productGroundingSnapshotFrom(context.productGrounding);
+    if(groundingSnapshot)return {groundingSnapshot,userAuthored:snapshot.source==="user"};
     let selectedUpstream=parentOutputs.opportunities;
     if(selectedUpstream===undefined){
       const parent=this.db.connection.prepare(`SELECT parent.output_data FROM lineage_edges edge
@@ -576,6 +604,27 @@ function asRecord(value:unknown):Record<string,unknown>{
   return typeof value==="object"&&value!==null&&!Array.isArray(value)?value as Record<string,unknown>:{};
 }
 
+function productGroundingSnapshotFrom(value:unknown):ProductGroundingSnapshot|undefined{
+  const snapshot=asRecord(value);
+  if(!Array.isArray(snapshot.allowedEvidence)||!Array.isArray(snapshot.authorizedCapabilities))return undefined;
+  return snapshot as unknown as ProductGroundingSnapshot;
+}
+
+function sanitizeProductKnowledge(
+  context: readonly ModuleKnowledgeContextItem[],
+  allowedEvidenceIds: ReadonlySet<string>,
+): Array<Record<string,unknown>> {
+  const uuid = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu;
+  return context.map((item) => ({
+    citationId:item.citationId,
+    kind:item.kind,
+    title:item.title,
+    heading:item.heading,
+    pageNumber:item.pageNumber,
+    content: item.content.replace(uuid, (id) => allowedEvidenceIds.has(id) ? id : "[id omitted]"),
+  }));
+}
+
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{
   const replacements:[[string,string],[string,string],[string,string]]=[
     ["Fototeca en Orden",`Plan práctico: ${niche}`],
@@ -609,7 +658,7 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
   sources:{schemaVersion:1,summary:`Corpus local para ${niche}`,sourceCount:0,commentCount:0,isDemo:false},
   problems:{schemaVersion:1,items:[]},
   opportunities:{schemaVersion:1,items:[{id:"opportunity-1",name:`Solución práctica para ${niche}`,problemId:"problem-1",scores:{frequency:60,urgency:55,emotionalIntensity:50,willingnessToPay:40,solutionFeasibility:70,competition:50,differentiation:55,commercialPotential:55,evidenceConfidence:evidence.length?65:20},evidenceIds:ids}],selectedId:"opportunity-1"},
-  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía + workbook + checklist",deliverables:["Guía paso a paso","Workbook","Checklist"],modules:["Diagnóstico","Plan","Implementación","Revisión"],checklists:["Checklist de implementación"],templates:["Plantilla de plan"],resources:["Plantilla de plan"],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
+  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía digital",deliverables:["Guía paso a paso"],modules:["Diagnóstico","Plan","Implementación","Revisión"],checklists:[],templates:[],resources:[],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
   avatar:{schemaVersion:1,name:`Usuario objetivo de ${selectedProduct?.name??niche}`,productContext:selectedProduct?.concept,currentSituation:[{text:problem?.summary??quote,provenance:evidence.length?"EVIDENCE_BACKED":"AI_INFERENCE",evidenceIds:problem?.evidenceIds??(evidence[0]?[evidence[0].id]:[])}],desiredOutcome:[{text:selectedProduct?.outcome??`Lograr un resultado claro en ${niche}`,provenance:"AI_INFERENCE",evidenceIds:[]}],pains:problem?[problem.summary]:[],frustrations:[],desires:[],objections:["Necesita validar que el proceso sea realizable"],motivations:[selectedProduct?.promise].filter(Boolean),language:evidence.slice(0,3).map(item=>({text:item.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[item.id]})),purchaseConcerns:[]},
   mechanism:{schemaVersion:1,perceivedProblem:problem?.summary??quote,apparentCause:"Falta de un proceso claro",rootCauseHypothesis:"Las decisiones no están organizadas en una secuencia repetible",mechanism:"Método de diagnóstico, plan, acción y revisión",solutionMechanism:selectedProduct?.concept??"Pasos pequeños con criterios verificables",differentiation:"Trazabilidad entre evidencia y decisión",simpleExplanation:"Convertir un problema amplio en pasos comprobables",detailedExplanation:`El método ordena el trabajo de ${niche} y conserva el origen de cada decisión.`,provenance:"AI_INFERENCE",evidenceIds:problem?.evidenceIds??ids},
   beliefs:{schemaVersion:1,product:selectedProduct?.name,avatar:avatar?.name,mechanism:mechanism?.mechanism,currentBeliefs:(avatar?.currentSituation??[]).map((item:any)=>item.text??item),limitingBeliefs:avatar?.objections??[],requiredBeliefs:[`El mecanismo ${mechanism?.mechanism??"propuesto"} puede aplicarse paso a paso`],objections:avatar?.purchaseConcerns??avatar?.objections??[],arguments:[mechanism?.simpleExplanation??"El sistema empieza con una acción acotada"],centralThesis:`${selectedProduct?.promise??`Un proceso claro mejora ${niche}`} mediante ${mechanism?.solutionMechanism??"pasos verificables"}.`},

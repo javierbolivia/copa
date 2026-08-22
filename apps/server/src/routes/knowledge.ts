@@ -9,6 +9,7 @@ import type { KnowledgeRepository, KnowledgeSearchResult } from "../repositories
 import type { KnowledgeIngestionService } from "../services/knowledge-ingestion-service.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
+import type { ModuleService } from "../services/module-service.js";
 
 const ProjectParams = Type.Object({ id: Type.String({ format: "uuid" }) });
 const LibraryParams = Type.Object({ id: Type.String({ format: "uuid" }), libraryId: Type.String({ format: "uuid" }) });
@@ -23,7 +24,7 @@ const MemoryDecisionSchema = Type.Object({
   notes: Type.Optional(Type.String({ maxLength: 2000 })), editedOutput: Type.Optional(Type.Unknown()),
 }, { additionalProperties: false });
 
-export function registerKnowledgeRoutes(app: FastifyInstance, repository: KnowledgeRepository, ingestion: KnowledgeIngestionService, openAI: OpenAIProvider, settings: ProjectSettingsRepository): void {
+export function registerKnowledgeRoutes(app: FastifyInstance, repository: KnowledgeRepository, ingestion: KnowledgeIngestionService, openAI: OpenAIProvider, settings: ProjectSettingsRepository, modules: ModuleService): void {
   app.get<{Params:{id:string}}>("/api/projects/:id/knowledge/libraries",{schema:{params:ProjectParams}},async request=>({libraries:repository.listLibraries(request.params.id).map(item=>libraryDto(repository,request.params.id,item))}));
   app.post<{Params:{id:string};Body:CreateKnowledgeLibraryInput}>("/api/projects/:id/knowledge/libraries",{schema:{params:ProjectParams,body:CreateKnowledgeLibrarySchema}},async(request,reply)=>{
     try { const library=repository.createLibrary({scope:request.body.scope,projectId:request.body.scope==="PROJECT"?request.params.id:null,name:request.body.name,description:request.body.description??null,domain:request.body.domain??"GENERAL",category:request.body.category??null,tags:request.body.tags??[],priority:request.body.priority??50});return reply.code(201).send(libraryDto(repository,request.params.id,library)); }
@@ -62,7 +63,7 @@ export function registerKnowledgeRoutes(app: FastifyInstance, repository: Knowle
     return{answer,citations,grounded:true,mode:"extractive" as const};
   });
   app.put<{Params:{id:string;versionId:string};Body:{decision:"APPROVED"|"REJECTED";reusable?:boolean;preferred?:boolean;visibility?:"PROJECT"|"GLOBAL";notes?:string;editedOutput?:unknown}}>("/api/projects/:id/knowledge/memory/:versionId",{schema:{params:MemoryParams,body:MemoryDecisionSchema}},async(request,reply)=>{
-    try{const memoryId=repository.saveMemoryDecision({originProjectId:request.params.id,artifactVersionId:request.params.versionId,disposition:request.body.decision,reusable:request.body.reusable??false,preferred:request.body.preferred??false,visibility:request.body.visibility??"PROJECT",...(request.body.notes?{notes:request.body.notes}:{}),...(request.body.editedOutput!==undefined?{editedOutput:request.body.editedOutput}:{})});return{memoryId};}
+    try{if(request.body.decision==="APPROVED"&&!modules.canPromoteToMemory(request.params.id,request.params.versionId))throw new Error("Un Product inválido o no aprobado no puede promoverse a memoria.");const memoryId=repository.saveMemoryDecision({originProjectId:request.params.id,artifactVersionId:request.params.versionId,disposition:request.body.decision,reusable:request.body.reusable??false,preferred:request.body.preferred??false,visibility:request.body.visibility??"PROJECT",...(request.body.notes?{notes:request.body.notes}:{}),...(request.body.editedOutput!==undefined?{editedOutput:request.body.editedOutput}:{})});return{memoryId};}
     catch(error){return reply.code(409).send({error:"memory_decision_failed",message:messageOf(error)});}
   });
   app.get<{Params:{id:string;generationId:string}}>("/api/projects/:id/generations/:generationId/knowledge",{schema:{params:GenerationParams}},async(request,reply)=>repository.getRetrievalForGeneration(request.params.id,request.params.generationId)

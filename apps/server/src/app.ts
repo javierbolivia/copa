@@ -167,7 +167,7 @@ export async function createApp(
 
   registerHealthRoute(app, database);
   registerProjectRoutes(app, projects);
-  registerProjectSystemRoutes(app, settings, workflow, artifacts, backups);
+  registerProjectSystemRoutes(app, settings, workflow, backups, modules);
   registerResearchFocusRoutes(app, settings, database);
   const youtubeImports = new YouTubeImportService(sources, jobs);
   registerSourceRoutes(app, sources, jobs, youtubeImports);

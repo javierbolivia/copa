@@ -1,4 +1,4 @@
-import type { LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
+import type { ArtifactVersion, LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -37,6 +37,7 @@ import {
 } from "./domain-vocabulary-discovery-service.js";
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 import { validateResearchOutput } from "./research-output-validator.js";
+import { validateProductOutput, type ProductValidationContext } from "./product-output-validator.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
@@ -88,22 +89,15 @@ export class ModuleService {
   }
 
   get(projectId: string, key: ModuleKey): ModuleResult | undefined {
-    const row = this.db.connection.prepare(`
-      SELECT a.active_version_id
-      FROM artifacts a JOIN artifact_versions v ON v.id=a.active_version_id AND v.project_id=a.project_id
-      WHERE a.project_id = ? AND a.artifact_type = ?
-      ORDER BY a.created_at
-      LIMIT 1
-    `).get(projectId, key) as { active_version_id: string | null } | undefined;
-    if (!row?.active_version_id) return undefined;
-    const version = this.artifacts.getVersion(row.active_version_id);
-    return version ? this.toResult(version) : undefined;
+    const version = this.activeVersion(projectId, key);
+    if (!version || (key === "product" && !this.validatePersistedProduct(version).audit.ok)) return undefined;
+    return this.toResult(version);
   }
 
   history(projectId: string, key: ModuleKey): ModuleResult[] {
     return this.artifacts.list(projectId)
       .filter((version) => version.artifactType === key)
-      .map((version) => this.toResult(version));
+      .map((version) => this.toResult(version, this.isInvalidApprovedProduct(version)));
   }
 
   list(projectId: string): ModuleResult[] {
@@ -114,20 +108,34 @@ export class ModuleService {
         ).get(version.artifactId, projectId) as { active_version_id: string | null } | undefined;
         return row?.active_version_id === version.id;
       })
-      .map((version) => this.toResult(version));
+      .map((version) => this.toResult(version, this.isInvalidApprovedProduct(version)));
+  }
+
+  artifactVersions(projectId:string):ArtifactVersion[] {
+    return this.artifacts.list(projectId).map((version)=>this.isInvalidApprovedProduct(version)?{
+      ...version,
+      status:"draft",
+      freshness:"stale",
+      staleReason:"Producto incompleto o con claims sin grounding; no es aprobable.",
+    }:version);
   }
 
   saveDraft(projectId:string,key:ModuleKey,outputData:unknown):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
     if(!isCanonicalModuleOutput(key,outputData))throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
-    const current=this.get(projectId,key);if(!current)throw new Error("Genera una versión antes de editarla.");
+    const active=this.activeVersion(projectId,key);if(!active)throw new Error("Genera una versión antes de editarla.");
+    const current=this.toResult(active);
     const parentIds=this.db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE project_id=? AND child_version_id=? ORDER BY created_at").all(projectId,current.versionId) as unknown as Array<{parent_version_id:string}>;
-    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{editedFromVersionId:current.versionId,source:"user"},outputData,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:current.versionId,source:"user"},outputData,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
     return this.toResult(version);
   }
 
   approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
     const version=this.artifacts.getVersion(versionId);if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
+    if(key==="product"){
+      const validation=this.validatePersistedProduct(version);
+      if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
+    }
     const approved=this.artifacts.approveVersion(projectId,versionId);if(!approved)return undefined;
     if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
     if(key==="final_product")this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData);
@@ -231,7 +239,7 @@ export class ModuleService {
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
         generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:MODULE_OUTPUT_SCHEMAS[key]},maxOutputTokens:8_000});
-        if(!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
+        if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
       catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
       output = generated.output;
@@ -377,11 +385,22 @@ export class ModuleService {
     // EXACT source snapshot (evidenceIds) used for this run. Incomplete or
     // evidence-invalid output must never be APPROVED: it is persisted as a
     // DRAFT with a compact validation audit, never silently approved.
-    let researchStatus: "approved" | "draft" | undefined;
+    let artifactStatus: "approved" | "draft" | undefined;
     if (key === "research") {
       const validation = validateResearchOutput(output, evidenceIds);
       output = validation.output;
-      researchStatus = validation.audit.ok ? "approved" : "draft";
+      artifactStatus = validation.audit.ok ? "approved" : "draft";
+    }
+    if (key === "product") {
+      const validation = validateProductOutput(output, {
+        selectedUpstream: parentOutputs.opportunities,
+        productConfiguration: { generalNotes: projectSettings?.generalNotes ?? null },
+        explicitUserInput: instructions?.trim() || null,
+        problemEvidence: evidence,
+        allowedEvidenceIds: evidenceIds,
+      });
+      output = validation.output;
+      artifactStatus = validation.audit.ok ? "approved" : "draft";
     }
     const inputSnapshot = {
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
@@ -410,7 +429,7 @@ export class ModuleService {
       inputSnapshot,
       outputData: output,
       parentVersionIds: parentIds,
-      ...(researchStatus ? { status: researchStatus } : {}),
+       ...(artifactStatus ? { status: artifactStatus } : {}),
     });
     createdVersionId=version.id;
 
@@ -441,7 +460,7 @@ export class ModuleService {
       this.db.connection.prepare(`INSERT OR IGNORE INTO evidence_links(id,project_id,target_type,target_id,source_type,source_id,relation,created_at) VALUES(?,?,'artifact_version',?,'evidence_snippet',?,'supports',?)`).run(uuidv7(),projectId,version.id,evidenceId,now);
     }
 
-    this.workflow.update(projectId, key, "COMPLETED");
+    this.workflow.update(projectId, key, artifactStatus === "draft" ? "IN_PROGRESS" : "COMPLETED");
     if (key === "landing") this.exporter.exportLanding(projectId, version.id, output);
     if (key === "final_product") this.exporter.exportFinalProduct(projectId, version.id, output);
     db.exec("COMMIT");
@@ -449,14 +468,50 @@ export class ModuleService {
     } catch(error){if(db.isTransaction)db.exec("ROLLBACK");if(createdVersionId)this.exporter.cleanupVersion(projectId,createdVersionId);throw error;}
   }
 
-  private toResult(version: NonNullable<ReturnType<ArtifactRepository["getVersion"]>>): ModuleResult {
+  private activeVersion(projectId:string,key:ModuleKey):ArtifactVersion|undefined {
+    const row=this.db.connection.prepare(`SELECT active_version_id FROM artifacts
+      WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1`).get(projectId,key) as {active_version_id:string|null}|undefined;
+    return row?.active_version_id?this.artifacts.getVersion(row.active_version_id):undefined;
+  }
+
+  private isInvalidApprovedProduct(version:ArtifactVersion):boolean {
+    return version.artifactType==="product"&&version.status==="approved"&&!this.validatePersistedProduct(version).audit.ok;
+  }
+
+  private validatePersistedProduct(version:ArtifactVersion) {
+    return validateProductOutput(version.outputData,this.persistedProductContext(version));
+  }
+
+  private persistedProductContext(version:ArtifactVersion):ProductValidationContext {
+    const snapshot=asRecord(version.inputSnapshot),context=asRecord(snapshot.context),parentOutputs=asRecord(context.parentOutputs);
+    let selectedUpstream=parentOutputs.opportunities;
+    if(selectedUpstream===undefined){
+      const parent=this.db.connection.prepare(`SELECT parent.output_data FROM lineage_edges edge
+        JOIN artifact_versions parent ON parent.id=edge.parent_version_id
+        JOIN artifacts artifact ON artifact.id=parent.artifact_id
+        WHERE edge.project_id=? AND edge.child_version_id=? AND artifact.artifact_type='opportunities'
+        ORDER BY parent.created_at DESC LIMIT 1`).get(version.projectId,version.id) as {output_data:string}|undefined;
+      if(parent)selectedUpstream=JSON.parse(parent.output_data) as unknown;
+    }
+    const settings=asRecord(context.settings);
+    return {
+      selectedUpstream,
+      productConfiguration:{generalNotes:settings.generalNotes??this.settings.get(version.projectId)?.generalNotes??null},
+      explicitUserInput:context.additionalInstructions??snapshot.instructions??null,
+      problemEvidence:context.evidence,
+      allowedEvidenceIds:Array.isArray(snapshot.evidenceIds)?snapshot.evidenceIds.filter((value):value is string=>typeof value==="string"):[],
+      userAuthored:snapshot.source==="user",
+    };
+  }
+
+  private toResult(version: NonNullable<ReturnType<ArtifactRepository["getVersion"]>>, invalidProduct=false): ModuleResult {
     return {
       moduleKey: version.artifactType as ModuleKey,
       artifactId: version.artifactId,
       versionId: version.id,
       versionNumber: version.versionNumber,
-      freshness: version.freshness,
-      status: version.status,
+      freshness: invalidProduct?"stale":version.freshness,
+      status: invalidProduct?"draft":version.status,
       outputData: version.outputData,
       createdAt: version.createdAt,
     };
@@ -514,6 +569,10 @@ function providerParentOutputs(parents:Partial<Record<ModuleKey,unknown>>):Parti
   })) as Partial<Record<ModuleKey,unknown>>;
 }
 
+function asRecord(value:unknown):Record<string,unknown>{
+  return typeof value==="object"&&value!==null&&!Array.isArray(value)?value as Record<string,unknown>:{};
+}
+
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{
   const replacements:[[string,string],[string,string],[string,string]]=[
     ["Fototeca en Orden",`Plan práctico: ${niche}`],
@@ -547,7 +606,7 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
   sources:{schemaVersion:1,summary:`Corpus local para ${niche}`,sourceCount:0,commentCount:0,isDemo:false},
   problems:{schemaVersion:1,items:[]},
   opportunities:{schemaVersion:1,items:[{id:"opportunity-1",name:`Solución práctica para ${niche}`,problemId:"problem-1",scores:{frequency:60,urgency:55,emotionalIntensity:50,willingnessToPay:40,solutionFeasibility:70,competition:50,differentiation:55,commercialPotential:55,evidenceConfidence:evidence.length?65:20},evidenceIds:ids}],selectedId:"opportunity-1"},
-  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía + workbook + checklist",deliverables:["Guía paso a paso","Workbook","Checklist"],modules:["Diagnóstico","Plan","Implementación","Revisión"],resources:["Plantilla de plan"],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
+  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía + workbook + checklist",deliverables:["Guía paso a paso","Workbook","Checklist"],modules:["Diagnóstico","Plan","Implementación","Revisión"],checklists:["Checklist de implementación"],templates:["Plantilla de plan"],resources:["Plantilla de plan"],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
   avatar:{schemaVersion:1,name:`Usuario objetivo de ${selectedProduct?.name??niche}`,productContext:selectedProduct?.concept,currentSituation:[{text:problem?.summary??quote,provenance:evidence.length?"EVIDENCE_BACKED":"AI_INFERENCE",evidenceIds:problem?.evidenceIds??(evidence[0]?[evidence[0].id]:[])}],desiredOutcome:[{text:selectedProduct?.outcome??`Lograr un resultado claro en ${niche}`,provenance:"AI_INFERENCE",evidenceIds:[]}],pains:problem?[problem.summary]:[],frustrations:[],desires:[],objections:["Necesita validar que el proceso sea realizable"],motivations:[selectedProduct?.promise].filter(Boolean),language:evidence.slice(0,3).map(item=>({text:item.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[item.id]})),purchaseConcerns:[]},
   mechanism:{schemaVersion:1,perceivedProblem:problem?.summary??quote,apparentCause:"Falta de un proceso claro",rootCauseHypothesis:"Las decisiones no están organizadas en una secuencia repetible",mechanism:"Método de diagnóstico, plan, acción y revisión",solutionMechanism:selectedProduct?.concept??"Pasos pequeños con criterios verificables",differentiation:"Trazabilidad entre evidencia y decisión",simpleExplanation:"Convertir un problema amplio en pasos comprobables",detailedExplanation:`El método ordena el trabajo de ${niche} y conserva el origen de cada decisión.`,provenance:"AI_INFERENCE",evidenceIds:problem?.evidenceIds??ids},
   beliefs:{schemaVersion:1,product:selectedProduct?.name,avatar:avatar?.name,mechanism:mechanism?.mechanism,currentBeliefs:(avatar?.currentSituation??[]).map((item:any)=>item.text??item),limitingBeliefs:avatar?.objections??[],requiredBeliefs:[`El mecanismo ${mechanism?.mechanism??"propuesto"} puede aplicarse paso a paso`],objections:avatar?.purchaseConcerns??avatar?.objections??[],arguments:[mechanism?.simpleExplanation??"El sistema empieza con una acción acotada"],centralThesis:`${selectedProduct?.promise??`Un proceso claro mejora ${niche}`} mediante ${mechanism?.solutionMechanism??"pasos verificables"}.`},

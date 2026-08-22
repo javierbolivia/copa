@@ -45,4 +45,21 @@ describe("ProjectRepository", () => {
     expect(repository.list(true)).toHaveLength(1);
     expect(repository.get(project.id)?.status).toBe("archived");
   });
+
+  it("sólo elimina proyectos archivados y permite el cascade de vocabulario activo", () => {
+    const project = repository.create({ name: "Eliminar", niche: "Nicho" });
+    expect(repository.deletePermanently(project.id)).toBe(false);
+    expect(repository.get(project.id)).toBeDefined();
+
+    database.connection.prepare(`
+      INSERT INTO semantic_vocabulary_versions(
+        id,project_id,research_focus,research_focus_hash,analysis_snapshot_hash,
+        version,content_hash,status,created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?)
+    `).run(crypto.randomUUID(),project.id,"foco","focus-hash","snapshot-hash",1,"content-hash","active",new Date().toISOString());
+
+    expect(repository.archive(project.id)?.status).toBe("archived");
+    expect(repository.deletePermanently(project.id)).toBe(true);
+    expect(repository.get(project.id)).toBeUndefined();
+  });
 });

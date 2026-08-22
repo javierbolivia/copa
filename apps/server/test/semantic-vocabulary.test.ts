@@ -527,7 +527,7 @@ describe("Domain Semantic Vocabulary (PHASE 1)", () => {
   });
 });
 
-describe("Domain Semantic Vocabulary - real migration v9 -> v10 (AUDIT 3)", () => {
+describe("Domain Semantic Vocabulary - real migration v9 -> latest (AUDIT 3)", () => {
   const directories: string[] = [];
   afterEach(() => {
     for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -559,7 +559,7 @@ describe("Domain Semantic Vocabulary - real migration v9 -> v10 (AUDIT 3)", () =
     legacy.close();
 
     const db = new AppDatabase(path);
-    expect(db.getSchemaVersion()).toBe(10);
+    expect(db.getSchemaVersion()).toBe(11);
     expect(db.connection.prepare("SELECT name FROM projects WHERE id='proj-legacy'").get()).toMatchObject({
       name: "Legado",
     });

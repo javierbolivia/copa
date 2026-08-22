@@ -164,11 +164,8 @@ export const api = {
     request<Project>(`/api/projects/${id}`, json("DELETE")),
   restoreProject: (id: string) =>
     request<Project>(`/api/projects/${id}/restore`, json("POST")),
-  deleteProject: (id: string, confirmProjectName: string) =>
-    request<{ deleted: true }>(
-      `/api/projects/${id}/permanent`,
-      json("DELETE", { confirmProjectName }),
-    ),
+  deleteProject: (id: string) =>
+    request<{ deleted: true }>(`/api/projects/${id}/permanent`, { method: "DELETE" }),
   workflow: (id: string) => request<Workflow>(`/api/projects/${id}/workflow`),
   settings: (id: string) =>
     request<ProjectSettings>(`/api/projects/${id}/settings`),

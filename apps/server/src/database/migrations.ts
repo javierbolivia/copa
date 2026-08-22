@@ -971,6 +971,19 @@ export const migrations: readonly Migration[] = [
       ) BEGIN SELECT RAISE(ABORT,'generation_vocabulary_project_mismatch'); END;
     `,
   },
+  {
+    version: 11,
+    name: "011_project_delete_semantic_vocabulary",
+    sql: `
+      DROP TRIGGER semantic_vocabulary_version_immutable_delete;
+      CREATE TRIGGER semantic_vocabulary_version_immutable_delete
+      BEFORE DELETE ON semantic_vocabulary_versions
+      WHEN OLD.status='active' AND EXISTS (
+        SELECT 1 FROM projects WHERE id=OLD.project_id
+      )
+      BEGIN SELECT RAISE(ABORT,'semantic_vocabulary_version_active_immutable'); END;
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

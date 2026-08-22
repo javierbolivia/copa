@@ -76,7 +76,8 @@ export const UpdateProjectSettingsSchema = Type.Intersect([
 ]);
 
 export const PermanentDeleteSchema = Type.Object({
-  confirmProjectName: Type.String(),
+  /** @deprecated Kept optional so older clients may continue sending it. */
+  confirmProjectName: Type.Optional(Type.String()),
 });
 
 export type ProjectStatus = Static<typeof ProjectStatusSchema>;

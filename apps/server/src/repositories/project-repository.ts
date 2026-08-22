@@ -204,9 +204,9 @@ export class ProjectRepository {
     return this.get(id);
   }
 
-  deletePermanently(id: string, confirmedName: string): boolean {
+  deletePermanently(id: string): boolean {
     const project = this.get(id);
-    if (project === undefined || project.name !== confirmedName) return false;
+    if (project === undefined || project.status !== "archived") return false;
     const rawFiles = this.database.connection
       .prepare(
         `

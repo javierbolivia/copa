@@ -25,7 +25,7 @@ export function App() {
   const createDemo=async()=>{setBusy(true);setError(null);try{const {project}=await api.createDemoProject();await loadProjects();setSelected(project);setActive("overview");}catch(reason){setError(messageOf(reason));}finally{setBusy(false);}};
   const archive=async(project:Project)=>{await api.archiveProject(project.id);if(selected?.id===project.id)setSelected(null);await loadProjects();};
   const restore=async(project:Project)=>{await api.restoreProject(project.id);await loadProjects();};
-  const remove=async(project:Project)=>{await api.deleteProject(project.id,project.name);await loadProjects();};
+  const remove=async(project:Project)=>{await api.deleteProject(project.id);if(selected?.id===project.id)setSelected(null);await loadProjects();};
   const saveSettings=async(event:FormEvent)=>{event.preventDefault();if(!selected||!settings)return;setBusy(true);try{const {projectId:_,updatedAt:__,...input}=settings;setSettings(await api.saveSettings(selected.id,input));}catch(reason){setError(messageOf(reason));}finally{setBusy(false);}};
   const createBackup=async()=>{try{await api.createBackup();setBackups((await api.backups()).backups);}catch(reason){setError(messageOf(reason));}};
   const restoreBackup=async(filename:string)=>{if(!window.confirm(`Se creará un backup de seguridad. ¿Restaurar ${filename}?`))return;try{await api.restoreBackup(filename);window.location.reload();}catch(reason){setError(messageOf(reason));}};

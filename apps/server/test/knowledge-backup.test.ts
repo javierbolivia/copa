@@ -32,6 +32,6 @@ describe("Knowledge backup and restore",()=>{
     const project=projects.create({name:"Eliminar KB",niche:"Prueba"}),library=repository.createLibrary({scope:"PROJECT",projectId:project.id,name:"Privada"});
     const content=Buffer.from("privado"),hash=createHash("sha256").update(content).digest("hex"),relative=`knowledge/${library.id}/${hash}.txt`,absolute=join(root,relative);mkdirSync(join(root,"knowledge",library.id),{recursive:true});writeFileSync(absolute,content);
     repository.createDocument({libraryId:library.id,title:"Privado",documentType:"txt",storedRelativePath:relative,fileSha256:hash,bytes:content.length});
-    expect(projects.deletePermanently(project.id,project.name)).toBe(true);expect(existsSync(absolute)).toBe(false);db.close();
+    projects.archive(project.id);expect(projects.deletePermanently(project.id)).toBe(true);expect(existsSync(absolute)).toBe(false);db.close();
   });
 });

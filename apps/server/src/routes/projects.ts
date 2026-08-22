@@ -3,12 +3,10 @@ import {
   CreateProjectSchema,
   ProjectListSchema,
   ProjectSchema,
-  PermanentDeleteSchema,
   UpdateProjectSchema,
   type ApiError,
   type CreateProjectInput,
   type Project,
-  type PermanentDeleteInput,
   type ProjectList,
   type UpdateProjectInput,
 } from "@our-platform/shared";
@@ -135,11 +133,17 @@ export function registerProjectRoutes(
     async(request,reply)=>repository.restore(request.params.id) ?? reply.code(404).send({error:"not_found",message:"El proyecto no existe."}),
   );
 
-  app.delete<{Params:ProjectParams;Body:PermanentDeleteInput;Reply:{deleted:true}|ApiError}>(
+  app.delete<{Params:ProjectParams;Reply:{deleted:true}|ApiError}>(
     "/api/projects/:id/permanent",
-    {schema:{params:ProjectParamsSchema,body:PermanentDeleteSchema}},
-    async(request,reply)=> repository.deletePermanently(request.params.id,request.body.confirmProjectName)
-      ? {deleted:true as const}
-      : reply.code(409).send({error:"confirmation_mismatch",message:"El nombre de confirmación no coincide."}),
+    {schema:{params:ProjectParamsSchema}},
+    async(request,reply)=>{
+      const project=repository.get(request.params.id);
+      if(!project)return reply.code(404).send({error:"not_found",message:"El proyecto no existe."});
+      if(project.status!=="archived")return reply.code(409).send({error:"project_not_archived",message:"Sólo se pueden eliminar definitivamente proyectos archivados."});
+      try{return repository.deletePermanently(request.params.id)
+        ? {deleted:true as const}
+        : reply.code(404).send({error:"not_found",message:"El proyecto ya no existe."});
+      }catch(error){request.log.error({err:error,projectId:request.params.id},"permanent project deletion failed");return reply.code(500).send({error:"delete_failed",message:"No se pudo eliminar definitivamente el proyecto y sus datos asociados."});}
+    },
   );
 }

@@ -138,7 +138,7 @@ const PROPOSED_DESIGN_FIELDS: readonly UnsupportedProductClaim["field"][] = [
   "concept", "format", "deliverables", "modules", "checklists", "templates", "resources", "bonuses",
 ];
 const PROPOSED_DESIGN_CATEGORIES: readonly ProductClaimCategory[] = [
-  "OPERATIONAL_FEATURE", "TEMPLATES_OR_TOOLS", "BONUS_FEATURE",
+  "TEMPLATES_OR_TOOLS", "BONUS_FEATURE",
 ];
 export const PRODUCT_CLAIM_POLICY = {
   GROUNDED: { fields: ["problem", "outcome"], evidenceField: "evidenceIds" },
@@ -150,21 +150,26 @@ export const PRODUCT_CLAIM_POLICY = {
 } as const;
 const PLACEHOLDER = /^(?:sin completar|incomplet[oa]|not completed|incomplete|pending|pendiente|por definir|to be defined|tbd|n a|none|null|undefined|-+)$/u;
 
+/**
+ * Canonical capability detectors. Every protected category identifies concrete
+ * content or an operating commitment; introductory verbs such as "incluye" or
+ * "offers" have no capability meaning on their own.
+ */
 const CLAIM_PATTERNS: ReadonlyArray<{ category: ProductClaimCategory; pattern: RegExp }> = [
   { category: "TIME_BOUND_RESULT", pattern: /\b(?:en|dentro de|in|within)\s+(?:\d+|un|una|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:dias?|days?|semanas?|weeks?|meses?|months?|horas?|hours?)\b/u },
   { category: "GUARANTEE_OR_ASSURED_RESULT", pattern: /\b(?:garanti[az]|garantizad[oa]s?|guarantee(?:d)?|assured results?|resultados? asegurados?|risk free|sin riesgo)\b/u },
   { category: "EFFICACY_OR_PROOF", pattern: /\b(?:metodo|method|tecnicas?|techniques?|sistema|system)\s+(?:clinicamente |clinically |cientificamente |scientifically )?(?:probad[oa]s?|proven)|\b(?:basad[oa]s? en (?:la )?evidencia|evidence based|scientifically proven|cientificamente probad[oa]s?)\b/u },
   { category: "PERSONALIZED_SERVICE", pattern: /\b(?:(?:apoyo|soporte|acompanamiento|support|guidance)\s+(?:personalizad[oa]|individual|one to one|1 1)|(?:personalized|individual)\s+(?:support|guidance))\b/u },
-  { category: "COACHING_OR_SESSIONS", pattern: /\b(?:coaching|mentoria|mentoring|sesiones?|sessions?|consultas?|consultations?)\b/u },
+  { category: "COACHING_OR_SESSIONS", pattern: /\b(?:coaching|mentoria|mentoring|consultas?|consultations?|(?:sesiones?|sessions?)\s+(?:individuales?|personalizadas?|one to one|1 1))\b/u },
   { category: "COMMUNITY_ACCESS", pattern: /\b(?:comunidad|community|grupo privado|private group)\b/u },
   { category: "CERTIFICATION", pattern: /\b(?:certificacion|certificado|certification|certificate|acreditad[oa]|accredited)\b/u },
-  { category: "LIFETIME_ACCESS", pattern: /\b(?:acceso de por vida|lifetime access|forever access)\b/u },
+  { category: "LIFETIME_ACCESS", pattern: /\b(?:acceso(?:\s+\w+){0,5}\s+(?:de por vida|de forma permanente|permanente|vitalicio)|(?:lifetime|permanent|forever)\s+access)\b/u },
   { category: "QUANTIFIED_STRUCTURE", pattern: /\b(?:\d+\s+(?:modulos?|modules?|bonuses|bonos?|sesiones?|sessions?|clases?|lessons?)|(?:modulos?|modules?|sesiones?|sessions?|clases?|lessons?)\s+\d+|(?:cursos?|programas?|courses?|programs?)\s+(?:de|of)\s+\d+\s+(?:dias?|days?|semanas?|weeks?|meses?|months?))\b/u },
   { category: "BONUS_FEATURE", pattern: /\b(?:bonus|bonuses|bonos?|bonos adicionales)\b/u },
   { category: "TEMPLATES_OR_TOOLS", pattern: /\b(?:plantillas?|templates?|herramientas?|tools?|workbooks?|cuadernos? de trabajo|checklists?|listas? de verificacion)\b/u },
   { category: "LIVE_SESSIONS", pattern: /\b(?:en vivo|live sessions?|live workshops?|taller(?:es)? en vivo)\b/u },
   { category: "HUMAN_SUPPORT", pattern: /\b(?:coaching|tutorias?|tutoring|asesoramiento|atencion personalizada|(?:apoyo|soporte|acompanamiento|support|guidance)\s+(?:human[oa]|personalizad[oa]|individual|por una? persona|de una? persona)|(?:human|personalized|individual)\s+(?:support|guidance))\b/u },
-  { category: "OPERATIONAL_FEATURE", pattern: /\b(?:incluye|incluyendo|recibe|recibiras|ofrece|includes?|including|you receive|comes with|featuring)\b/u },
+  { category: "OPERATIONAL_FEATURE", pattern: /\b(?:(?:seguimiento|monitoring|follow up|feedback|retroalimentacion|revisiones?|reviews?)\s+(?:semanal|weekly|mensual|monthly|continu[oa]|ongoing|periodic[oa]|periodic|personalizad[oa]|individual)|(?:semanal|weekly|mensual|monthly|continu[oa]|ongoing|periodic[oa]|periodic|personalizad[oa]|personalized|individual)\s+(?:seguimiento|monitoring|follow up|feedback|retroalimentacion|revisiones?|reviews?)|(?:actualizaciones?|updates?)\s+(?:continuas?|ongoing|periodic[oa]|periodic))\b/u },
 ] as const;
 
 const AUTHORIZED_OPPORTUNITY_FIELDS = ["name", "solution", "proposedSolution", "format", "capabilities", "features", "deliverables"] as const;
@@ -280,7 +285,7 @@ export function deriveAuthorizedProductCapabilities(
     AUTHORIZED_OPPORTUNITY_FIELDS.filter((key) => key in opportunity).map((key) => [key, opportunity[key]]),
   );
   const authorizedText = positiveAuthorizationText([opportunityAuthorization, productConfiguration, explicitUserInput]);
-  return claimCategories(authorizedText);
+  return detectCapabilityCategories(authorizedText);
 }
 
 export function validateProductOutput(input: unknown, context: ProductValidationContext = {}): ProductValidationResult {
@@ -322,11 +327,6 @@ export function validateProductOutput(input: unknown, context: ProductValidation
     : context.allowedEvidenceIds === undefined ? null : new Set(context.allowedEvidenceIds);
   const authorizedCapabilities = new Set(snapshot?.authorizedCapabilities
     ?? deriveAuthorizedProductCapabilities(selectedOpportunity, productConfiguration, explicitUserInput));
-  const authorizedClaims = positiveAuthorizationText([
-    Object.fromEntries(AUTHORIZED_OPPORTUNITY_FIELDS.map((key) => [key, record(selectedOpportunity)[key]])),
-    productConfiguration,
-    explicitUserInput,
-  ]);
 
   const proposals = rawProposals.map((rawProposal, index) => {
     const path = `proposals[${index}]`;
@@ -370,12 +370,12 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       const proposalId = typeof cleaned.id === "string" ? cleaned.id : `proposal-${index + 1}`;
       for (const field of CLAIM_FIELDS) {
         const claim = typeof cleaned[field] === "string" ? cleaned[field] : "";
-        for (const category of claimCategories(claim)) {
+        for (const category of classifyProductClaim(field, claim)) {
           if (productClaimPolicyClass(field, category) === "PROPOSED") {
             proposedDesignDecisions.push({ proposalId, field, path: `${jsonPath}.${field}`, category, claim, classification: "PROPOSED" });
             continue;
           }
-          if (!claimCategoryAuthorized(category, authorizedCapabilities, authorizedClaims, claim)) {
+          if (!claimCategoryAuthorized(category, authorizedCapabilities)) {
             const claimPath = `${jsonPath}.${field}`;
             unsupportedClaims.push({ proposalId, field, path: claimPath, category, claim });
             issues.push({ code: field === "promise" ? "UNSUPPORTED_PROMISE" : "UNAUTHORIZED_CAPABILITY", path: claimPath, category });
@@ -384,7 +384,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       }
       for (const field of FEATURE_ARRAY_FIELDS) {
         const values = Array.isArray(cleaned[field]) ? cleaned[field] as string[] : [];
-        const categories = new Set(values.flatMap((claim) => featureClaimCategories(field, claim)));
+        const categories = new Set(values.flatMap((claim) => classifyProductClaim(field, claim)));
         const proposedCategory = PROPOSED_ARRAY_CATEGORY_POLICY[field as keyof typeof PROPOSED_ARRAY_CATEGORY_POLICY];
         if (proposedCategory !== undefined && values.length > 0) categories.add(proposedCategory);
         for (const category of categories) {
@@ -393,7 +393,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
             proposedDesignDecisions.push({ proposalId, field, path: `${jsonPath}.${field}`, category, claim, classification: "PROPOSED" });
             continue;
           }
-          if (!claimCategoryAuthorized(category, authorizedCapabilities, authorizedClaims, claim)) {
+          if (!claimCategoryAuthorized(category, authorizedCapabilities)) {
             const claimPath = `${jsonPath}.${field}`;
             unsupportedClaims.push({ proposalId, field, path: claimPath, category, claim });
             issues.push({ code: "UNAUTHORIZED_CAPABILITY", path: claimPath, category });
@@ -481,19 +481,27 @@ function isPlaceholder(value: string): boolean {
   return PLACEHOLDER.test(normalize(value));
 }
 
-function claimCategories(value: string): ProductClaimCategory[] {
+function detectCapabilityCategories(value: string): ProductClaimCategory[] {
   const normalized = normalize(value);
-  const categories = CLAIM_PATTERNS.filter((item) => item.pattern.test(normalized)).map((item) => item.category);
-  return categories.length > 1 ? categories.filter((category) => category !== "OPERATIONAL_FEATURE") : categories;
+  return CLAIM_PATTERNS
+    .filter((item) => item.pattern.test(normalized))
+    .map((item) => item.category);
 }
 
-function featureClaimCategories(field: (typeof FEATURE_ARRAY_FIELDS)[number], value: string): ProductClaimCategory[] {
-  // Numbered module titles materialize the required internal module array; they
-  // are not themselves an external claim that the product has a marketed count.
+/**
+ * Classify a claim with the field semantics that can be determined safely.
+ * Internal ordinal module labels are representation details, not marketed
+ * quantities. All other protected capabilities are content-based and retain
+ * the same fail-closed meaning in every field.
+ */
+function classifyProductClaim(
+  field: UnsupportedProductClaim["field"],
+  value: string,
+): ProductClaimCategory[] {
   const claim = field === "modules"
     ? normalize(value).replace(/^(?:modulos?|modules?)\s+\d+\b/u, "").trim()
     : value;
-  return claimCategories(claim);
+  return detectCapabilityCategories(claim);
 }
 
 function productClaimPolicyClass(
@@ -508,15 +516,6 @@ function productClaimPolicyClass(
 function claimCategoryAuthorized(
   category: ProductClaimCategory,
   authorizedCapabilities: ReadonlySet<ProductClaimCategory>,
-  authorizedText: string,
-  claim: string,
 ): boolean {
-  if (!authorizedCapabilities.has(category)) return false;
-  if (category === "OPERATIONAL_FEATURE") {
-    const generic = new Set(["incluye", "incluyendo", "recibe", "recibiras", "ofrece", "include", "includes", "including", "receive", "comes", "with", "featuring"]);
-    const claimTerms = new Set(normalize(claim).split(" ").filter((term) => term.length > 2 && !generic.has(term)));
-    const authorizedTerms = new Set(authorizedText.split(" ").filter((term) => term.length > 2));
-    return [...claimTerms].filter((term) => authorizedTerms.has(term)).length >= 2;
-  }
-  return true;
+  return authorizedCapabilities.has(category);
 }

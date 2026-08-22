@@ -233,6 +233,65 @@ describe("Product completeness and grounding validator", () => {
     }
   });
 
+  describe("golden Product capability matrix", () => {
+    it.each([
+      { name: "support materials", overrides: { concept: "Curso digital con materiales de apoyo" } },
+      { name: "support resources", overrides: { resources: ["Recursos de apoyo"] } },
+      { name: "internal ordinal modules", overrides: { modules: ["Módulo 1: Comprensión", "Módulo 2: Aplicación"] } },
+      { name: "roadmap offered in a promise", overrides: { promise: "El curso te ofrece una hoja de ruta completa" } },
+      { name: "guide offered in a promise", overrides: { promise: "El curso ofrece una guía clara" } },
+      { name: "explanation included in a promise", overrides: { promise: "Incluye una explicación paso a paso" } },
+      { name: "proposed template", overrides: { templates: ["Plantilla de seguimiento"] } },
+      { name: "proposed workbook", overrides: { resources: ["Workbook de práctica"] } },
+      { name: "proposed checklist", overrides: { checklists: ["Checklist de preparación"] } },
+      { name: "complementary resource", overrides: { resources: ["Recurso complementario"] } },
+      { name: "generic modular structure", overrides: { format: "Estructura modular progresiva" } },
+      { name: "demonstrations and action plans", overrides: { deliverables: ["Demostraciones grabadas", "Planes de acción"] } },
+      { name: "English guide offer", overrides: { promise: "The course offers a clear roadmap" } },
+      { name: "English explanation inclusion", overrides: { promise: "Includes a step-by-step explanation" } },
+      { name: "English support materials", overrides: { resources: ["Supporting materials and complementary resources"] } },
+      { name: "English ordinal modules", overrides: { modules: ["Module 1: Understand", "Module 2: Apply"] } },
+    ])("allows $name without inventing a protected capability", ({ overrides }) => {
+      const audit = validateProductOutput(complete(overrides)).audit;
+      expect(audit.unsupportedClaims).toEqual([]);
+      expect(audit.ok).toBe(true);
+    });
+
+    it.each([
+      { name: "lifetime access", field: "format", claim: "Videolecciones grabadas con acceso de por vida", category: "LIFETIME_ACCESS" },
+      { name: "permanent access equivalent", field: "format", claim: "Acceso a los materiales de forma permanente", category: "LIFETIME_ACCESS" },
+      { name: "personalized support", field: "promise", claim: "Incluye soporte personalizado", category: "HUMAN_SUPPORT" },
+      { name: "human coaching", field: "format", claim: "Curso con coaching humano", category: "COACHING_OR_SESSIONS" },
+      { name: "private community", field: "format", claim: "Incluye una comunidad privada", category: "COMMUNITY_ACCESS" },
+      { name: "certification", field: "format", claim: "Incluye certificación", category: "CERTIFICATION" },
+      { name: "live sessions", field: "format", claim: "Incluye sesiones en vivo", category: "LIVE_SESSIONS" },
+      { name: "guarantee", field: "promise", claim: "Garantía sin riesgo", category: "GUARANTEE_OR_ASSURED_RESULT" },
+      { name: "assured result", field: "promise", claim: "Resultado garantizado", category: "GUARANTEE_OR_ASSURED_RESULT" },
+      { name: "proven method", field: "promise", claim: "Método probado", category: "EFFICACY_OR_PROOF" },
+      { name: "scientifically proven method", field: "promise", claim: "Método científicamente probado", category: "EFFICACY_OR_PROOF" },
+      { name: "committed result duration", field: "promise", claim: "Resultados en 30 días", category: "TIME_BOUND_RESULT" },
+      { name: "committed program duration", field: "format", claim: "Curso de 8 semanas", category: "QUANTIFIED_STRUCTURE" },
+      { name: "marketed module quantity", field: "format", claim: "Programa de 5 módulos", category: "QUANTIFIED_STRUCTURE" },
+      { name: "ongoing operation", field: "promise", claim: "Incluye seguimiento semanal", category: "OPERATIONAL_FEATURE" },
+      { name: "English lifetime access", field: "format", claim: "Includes lifetime access", category: "LIFETIME_ACCESS" },
+      { name: "English personalized support", field: "promise", claim: "Includes personalized support", category: "HUMAN_SUPPORT" },
+      { name: "English private community", field: "format", claim: "Comes with a private community", category: "COMMUNITY_ACCESS" },
+      { name: "English certification", field: "format", claim: "Includes certification", category: "CERTIFICATION" },
+      { name: "English live sessions", field: "format", claim: "Includes live sessions", category: "LIVE_SESSIONS" },
+      { name: "English guaranteed result", field: "promise", claim: "Guaranteed results", category: "GUARANTEE_OR_ASSURED_RESULT" },
+      { name: "English proven efficacy", field: "promise", claim: "Scientifically proven method", category: "EFFICACY_OR_PROOF" },
+      { name: "English committed duration", field: "promise", claim: "Results within 30 days", category: "TIME_BOUND_RESULT" },
+      { name: "English program duration", field: "format", claim: "Program of 8 weeks", category: "QUANTIFIED_STRUCTURE" },
+      { name: "English ongoing operation", field: "promise", claim: "Includes ongoing feedback", category: "OPERATIONAL_FEATURE" },
+    ] as const)("blocks $name without explicit authorization", ({ field, claim, category }) => {
+      const audit = validateProductOutput(complete({ [field]: claim })).audit;
+      expect(audit.unsupportedClaims).toEqual(expect.arrayContaining([
+        expect.objectContaining({ field, category, path: `$.proposals[0].${field}` }),
+      ]));
+      expect(audit.ok).toBe(false);
+    });
+  });
+
   it("does not classify support materials or resources as HUMAN_SUPPORT", () => {
     for (const concept of [
       "Curso digital con materiales de apoyo y documentación",
@@ -302,6 +361,27 @@ describe("Product completeness and grounding validator", () => {
     });
   });
 
+  it("reclassifies the exact Product v4 design while retaining its marketed module quantity", () => {
+    const result = validateProductOutput(complete({
+      format: "Curso online en video con materiales descargables en PDF, incluyendo guías paso a paso, plantillas de seguimiento y listas de verificación.",
+      deliverables: [
+        "Acceso a 10 módulos en video",
+        "Guías en PDF descargables para cada módulo",
+        "Plantilla de diario de observación de conducta",
+        "Lista de verificación de seguridad para paseos",
+        "Biblioteca de recursos adicionales en línea",
+      ],
+    }));
+
+    expect(result.audit.unsupportedClaims).toEqual([
+      expect.objectContaining({ path: "$.proposals[0].deliverables", category: "QUANTIFIED_STRUCTURE" }),
+    ]);
+    expect(result.audit.proposedDesignDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.proposals[0].format", category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED" }),
+      expect.objectContaining({ path: "$.proposals[0].deliverables", category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED" }),
+    ]));
+  });
+
   it("reclassifies the exact Product v6 design while retaining its real lifetime-access violation", () => {
     const format = "Curso 100% online con videolecciones, guías en PDF y ejercicios prácticos. Incluye módulos progresivos, demostraciones en video y planes de acción descargables.";
     const deliverables = [
@@ -318,8 +398,10 @@ describe("Product completeness and grounding validator", () => {
       expect.objectContaining({ path: "$.proposals[0].deliverables", category: "LIFETIME_ACCESS" }),
     ]);
     expect(result.audit.proposedDesignDecisions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: "$.proposals[0].format", category: "OPERATIONAL_FEATURE", classification: "PROPOSED" }),
       expect.objectContaining({ path: "$.proposals[0].deliverables", category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED" }),
+    ]));
+    expect(result.audit.proposedDesignDecisions).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "OPERATIONAL_FEATURE" }),
     ]));
     expect(result.audit).toMatchObject({ ok: false, grounded: false, unresolvedEvidenceIds: [] });
 
@@ -370,6 +452,27 @@ describe("Product completeness and grounding validator", () => {
       unresolvedEvidenceIds: [],
       unsupportedClaims: [],
     });
+  });
+
+  it("reclassifies the exact Product v7 promise without hiding its separate permanent-access violation", () => {
+    const promise = "Obtendrás una guía clara, paso a paso, que te permitirá identificar las señales de tu perro y aplicar estrategias de manejo efectivas. El curso te ofrece una hoja de ruta completa para trabajar la reactividad desde casa, sin necesidad de depender únicamente de un profesional.";
+    const result = validateProductOutput(complete({
+      promise,
+      format: "Curso online con videolecciones y acceso a los materiales de forma permanente.",
+    }));
+
+    expect(result.audit.unsupportedClaims).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.proposals[0].promise", category: "OPERATIONAL_FEATURE" }),
+    ]));
+    expect(result.audit.unsupportedClaims).toEqual([
+      expect.objectContaining({ path: "$.proposals[0].format", category: "LIFETIME_ACCESS" }),
+    ]);
+
+    const withoutPermanentAccess = validateProductOutput(complete({
+      promise,
+      format: "Curso online con videolecciones y materiales descargables.",
+    }));
+    expect(withoutPermanentAccess.audit).toMatchObject({ ok: true, grounded: true, unsupportedClaims: [] });
   });
 
   it("rejects missing, blank and placeholder formats", () => {

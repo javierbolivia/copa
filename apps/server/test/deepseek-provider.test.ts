@@ -28,7 +28,9 @@ describe("DeepSeekProvider", () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const body=JSON.parse(String(init.body));
     expect(body).toMatchObject({ model: DEEPSEEK_DEFAULT_MODEL, response_format: { type: "json_object" } });
-    expect(body.messages[0].content).toContain("CONTRATO DE SALIDA JSON");
+    expect(body.messages[0].content).toContain("CONTRATO DE SALIDA JSON ESTRICTO");
+    expect(body.messages[0].content).toContain("todas las propiedades declaradas en required");
+    expect(body.messages[0].content).toContain("no sustituyas el objeto raíz por un array");
     expect(body.messages[0].content).toContain('"type":"object"');
   });
 

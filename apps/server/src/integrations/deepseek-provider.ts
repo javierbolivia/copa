@@ -113,7 +113,7 @@ export class DeepSeekProvider implements LlmProvider {
     const model = request.model.trim() || this.model;
     assertAllowedModel(model);
     const systemInstructions=request.structuredOutput
-      ? `${request.systemInstructions}\n\nCONTRATO DE SALIDA JSON: devuelve únicamente un objeto JSON válido, sin markdown ni prosa adicional, que cumpla este JSON Schema:\n${JSON.stringify(request.structuredOutput.jsonSchema)}`
+      ? `${request.systemInstructions}\n\nCONTRATO DE SALIDA JSON ESTRICTO:\n- Devuelve únicamente un objeto JSON raíz válido, sin markdown ni prosa adicional.\n- Incluye todas las propiedades declaradas en required, en cada nivel del schema.\n- Respeta exactamente los tipos JSON indicados; no sustituyas el objeto raíz por un array.\n- No omitas campos requeridos aunque la información sea breve.\nJSON Schema:\n${JSON.stringify(request.structuredOutput.jsonSchema)}`
       : request.systemInstructions;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

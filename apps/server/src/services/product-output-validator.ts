@@ -215,6 +215,9 @@ export function buildProductStructuredOutputSchema(
   const proposalsSchema = record(schemaProperties.proposals);
   const proposalSchema = record(proposalsSchema.items);
   const proposalProperties = record(proposalSchema.properties);
+  const explicitAuthorizationCategories = PRODUCT_CLAIM_POLICY.REQUIRES_EXPLICIT_AUTHORIZATION.categories;
+  const explicitAuthorizedCapabilities = explicitAuthorizationCategories.filter((capability) => authorized.has(capability));
+  const forbiddenExplicitCapabilities = explicitAuthorizationCategories.filter((capability) => !authorized.has(capability));
 
   proposalsSchema.description = "BASE PRODUCT STRUCTURE: one or more complete proposals. Market conclusions use evidenceIds; design fields are proposals, while strong commercial capabilities require explicit authorization.";
   for (const [field, applicableCapabilities] of Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY)) {
@@ -224,7 +227,16 @@ export function buildProductStructuredOutputSchema(
     const explicitlyAuthorized = applicableCapabilities.filter((capability) =>
       productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
       && authorized.has(capability));
-    fieldSchema.description = `PROPOSED PRODUCT DESIGN is allowed for: ${proposed.length > 0 ? proposed.join(", ") : "NONE"}. EXPLICITLY AUTHORIZED CAPABILITIES: ${explicitlyAuthorized.length > 0 ? explicitlyAuthorized.join(", ") : "NONE"}. Never present proposed design as evidence-grounded fact.`;
+    const forbidden = applicableCapabilities.filter((capability) =>
+      productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
+      && !authorized.has(capability));
+    fieldSchema.description = `PROPOSED PRODUCT DESIGN is allowed for: ${proposed.length > 0 ? proposed.join(", ") : "NONE"}. REQUIRES_EXPLICIT_AUTHORIZATION allowed here: ${explicitlyAuthorized.length > 0 ? explicitlyAuthorized.join(", ") : "NONE"}. OMIT every forbidden capability listed for this field in x-hallazia-product-capability-contract.`;
+    fieldSchema["x-hallazia-capability-authorization"] = {
+      mode: "FAIL_CLOSED",
+      authorized: explicitlyAuthorized,
+      forbidden,
+      instruction: "OMIT every forbidden capability; never infer authorization from evidence, Knowledge, or proposed design.",
+    };
   }
   schema["x-hallazia-product-capability-contract"] = {
     baseProductStructure: {
@@ -232,7 +244,12 @@ export function buildProductStructuredOutputSchema(
       guidance: "A complete useful Product may use generic progressive organization without inventing optional capabilities or arbitrary quantities.",
     },
     claimPolicy: PRODUCT_CLAIM_POLICY,
-    explicitAuthorizedCapabilities: [...authorized].sort(),
+    explicitAuthorization: {
+      mode: "FAIL_CLOSED",
+      authorizedCapabilities: explicitAuthorizedCapabilities,
+      forbiddenCapabilities: forbiddenExplicitCapabilities,
+      instruction: "OMIT every REQUIRES_EXPLICIT_AUTHORIZATION capability unless it is present in authorizedCapabilities.",
+    },
     fields: Object.fromEntries(Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY).map(([field, applicableCapabilities]) => [
       field,
       {
@@ -240,6 +257,9 @@ export function buildProductStructuredOutputSchema(
         explicitAuthorizedCapabilities: applicableCapabilities.filter((capability) =>
           productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
           && authorized.has(capability)),
+        forbiddenExplicitCapabilities: applicableCapabilities.filter((capability) =>
+          productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
+          && !authorized.has(capability)),
       },
     ])),
     optionalArrays: Object.fromEntries(Object.entries(PROPOSED_ARRAY_CATEGORY_POLICY).map(([field, category]) => [

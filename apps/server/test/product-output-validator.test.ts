@@ -139,13 +139,75 @@ describe("Product completeness and grounding validator", () => {
     expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit.ok).toBe(true);
     expect(schema).toMatchObject({
       "x-hallazia-product-capability-contract": {
-        explicitAuthorizedCapabilities: [],
+        explicitAuthorization: {
+          mode: "FAIL_CLOSED",
+          authorizedCapabilities: [],
+          instruction: expect.stringContaining("OMIT"),
+          forbiddenCapabilities: expect.arrayContaining([
+            "LIFETIME_ACCESS",
+            "GUARANTEE_OR_ASSURED_RESULT",
+            "TIME_BOUND_RESULT",
+            "EFFICACY_OR_PROOF",
+            "COACHING_OR_SESSIONS",
+            "HUMAN_SUPPORT",
+            "COMMUNITY_ACCESS",
+            "CERTIFICATION",
+            "LIVE_SESSIONS",
+          ]),
+        },
         optionalArrays: {
           templates: { category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED", allowed: true },
           bonuses: { category: "BONUS_FEATURE", classification: "PROPOSED", allowed: true },
         },
       },
     });
+  });
+
+  it("allows lifetime access in the provider contract only after explicit authorization", () => {
+    const unauthorizedSnapshot = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+    });
+    const authorizedSnapshot = buildProductGroundingSnapshot({
+      evidence: [],
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+      productConfiguration: { generalNotes: "El producto incluye acceso de por vida" },
+    });
+    const unauthorizedSchema = buildProductStructuredOutputSchema(unauthorizedSnapshot);
+    const authorizedSchema = buildProductStructuredOutputSchema(authorizedSnapshot);
+
+    expect(unauthorizedSchema).toMatchObject({
+      "x-hallazia-product-capability-contract": {
+        explicitAuthorization: {
+          authorizedCapabilities: [],
+          instruction: expect.stringContaining("OMIT"),
+          forbiddenCapabilities: expect.arrayContaining(["LIFETIME_ACCESS"]),
+        },
+        fields: {
+          deliverables: { forbiddenExplicitCapabilities: expect.arrayContaining(["LIFETIME_ACCESS"]) },
+        },
+      },
+    });
+    expect(authorizedSchema).toMatchObject({
+      "x-hallazia-product-capability-contract": {
+        explicitAuthorization: {
+          authorizedCapabilities: expect.arrayContaining(["LIFETIME_ACCESS"]),
+          forbiddenCapabilities: expect.not.arrayContaining(["LIFETIME_ACCESS"]),
+        },
+        fields: {
+          deliverables: {
+            explicitAuthorizedCapabilities: expect.arrayContaining(["LIFETIME_ACCESS"]),
+            forbiddenExplicitCapabilities: expect.not.arrayContaining(["LIFETIME_ACCESS"]),
+          },
+        },
+      },
+    });
+    expect(validateProductOutput(complete({ deliverables: ["Acceso de por vida al curso"] }), {
+      groundingSnapshot: unauthorizedSnapshot,
+    }).audit.ok).toBe(false);
+    expect(validateProductOutput(complete({ deliverables: ["Acceso de por vida al curso"] }), {
+      groundingSnapshot: authorizedSnapshot,
+    }).audit.ok).toBe(true);
   });
 
   it("allows proposed design arrays in the provider schema without treating them as grounded facts", () => {

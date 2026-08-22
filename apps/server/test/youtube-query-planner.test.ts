@@ -158,11 +158,24 @@ describe("QP-1 memory-aware YouTube query planner", () => {
   it.each([
     "dificultades reales: causas, síntomas y consejos",
     "problemas dificultades reales por qué cómo síntomas consejos",
-    "problemas constantes, causas, errores y consejos que tienen",
   ])("replenishes after dedup to preserve the six-query minimum: %s", (researchFocus) => {
     const plan = planMemoryAwareYouTubeQueries({ researchFocus });
     expect(plan.queries.length).toBeGreaterThanOrEqual(6);
     expect(plan.queries.length).toBeLessThanOrEqual(8);
+  });
+
+  it("does not force filler queries when a focus has no specific subject", () => {
+    const plan = planMemoryAwareYouTubeQueries({
+      researchFocus: "problemas constantes, causas, errores y consejos que tienen",
+    });
+    expect(plan.queries).toEqual([
+      expect.objectContaining({ strategy: "core", query: "problemas constantes, causas, errores y consejos que tienen" }),
+    ]);
+  });
+
+  it("does not let a possessive displace the focus subject", () => {
+    const plan = planMemoryAwareYouTubeQueries({ researchFocus: "autónomos que cobran tarde sus facturas" });
+    expect(plan.queries[0]?.query).toBe("autónomos cobran tarde facturas");
   });
 
   it("is deterministic for the same focus and memory", () => {

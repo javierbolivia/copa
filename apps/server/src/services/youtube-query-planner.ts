@@ -29,7 +29,7 @@ interface Candidate {
 
 const STOP_WORDS = new Set([
   "a", "al", "and", "como", "con", "cuando", "de", "del", "el", "en", "es", "esta", "este", "for", "la", "las",
-  "los", "of", "para", "personas", "por", "que", "se", "the", "to", "un", "una", "y",
+  "los", "mi", "mis", "of", "para", "personas", "por", "que", "se", "su", "sus", "the", "to", "tu", "tus", "un", "una", "y",
 ]);
 
 const FOCUS_FRAMING_WORDS = new Set([
@@ -54,7 +54,7 @@ function boundedQuery(value: string): string {
   return (boundary > 0 ? prefix.slice(0, boundary) : clean.slice(0, 120)).trim();
 }
 
-function plannerCore(focus: string): string {
+function plannerCore(focus: string): { readonly query: string; readonly expandable: boolean } {
   const currentCore = youtubeResearchTopic(focus);
   const selected: string[] = [];
   const seen = new Set<string>();
@@ -65,7 +65,9 @@ function plannerCore(focus: string): string {
     selected.push(word);
     if (selected.length === 4) break;
   }
-  return selected.length === 0 ? currentCore : selected.join(" ");
+  return selected.length === 0
+    ? { query: currentCore, expandable: false }
+    : { query: selected.join(" "), expandable: true };
 }
 
 function tokenSet(value: string): Set<string> {
@@ -141,9 +143,20 @@ function memoryCandidate(core: string, memory: LearnedMemory): Candidate | null 
 
 export function planMemoryAwareYouTubeQueries(input: Readonly<MemoryAwareYouTubeQueryPlannerInput>): YouTubeQueryPlan {
   const originalFocus = input.researchFocus.normalize("NFC").replace(/\s+/gu, " ").trim();
-  const core = plannerCore(originalFocus);
+  const coreIntent = plannerCore(originalFocus);
+  const core = coreIntent.query;
   const budget = { targetMin: YOUTUBE_QUERY_PLAN_TARGET_MIN, targetMax: YOUTUBE_QUERY_PLAN_TARGET_MAX, hardMax: YOUTUBE_QUERY_PLAN_HARD_MAX } as const;
   if (core === "") return { originalFocus, queries: [], memoryUsed: [], deduplications: [], budget, externalCalls: 0 };
+  if (!coreIntent.expandable) {
+    return {
+      originalFocus,
+      queries: [{ query: boundedQuery(core), strategy: "core", memoryIds: [] }],
+      memoryUsed: [],
+      deduplications: [],
+      budget,
+      externalCalls: 0,
+    };
+  }
 
   const coreTerms = tokenSet(core);
   const contextTerms = distinctTerms(originalFocus, coreTerms, 3);

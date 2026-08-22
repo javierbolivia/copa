@@ -57,7 +57,9 @@ describe("Product completeness and grounding validator", () => {
       evidence: [{ id: "allowed", quoteText: "Evidencia permitida" }],
       opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
     });
-    expect(validateProductOutput(complete({ evidenceIds: ["allowed"] }), { groundingSnapshot: snapshot }).audit.ok).toBe(true);
+    const grounded = validateProductOutput(complete({ evidenceIds: ["allowed"] }), { groundingSnapshot: snapshot });
+    expect(grounded.audit.ok).toBe(true);
+    expect(grounded.audit.claimPolicy.GROUNDED).toMatchObject({ fields: ["problem", "outcome"], evidenceField: "evidenceIds" });
 
     const invalid = validateProductOutput(complete({ evidenceIds: ["fabricated", "stale", "other-project"] }), { groundingSnapshot: snapshot });
     expect(invalid.audit.ok).toBe(false);
@@ -96,7 +98,15 @@ describe("Product completeness and grounding validator", () => {
     });
     expect(noCapabilities.authorizedCapabilities).toEqual([]);
     expect(validateProductOutput(complete(), { groundingSnapshot: noCapabilities }).audit.ok).toBe(true);
-    expect(validateProductOutput(complete({ templates: ["Plantilla de seguimiento"] }), { groundingSnapshot: noCapabilities }).audit.ok).toBe(false);
+    expect(validateProductOutput(complete({ templates: ["Plantilla de seguimiento"] }), { groundingSnapshot: noCapabilities }).audit)
+      .toMatchObject({
+        ok: true,
+        proposedDesignDecisions: [expect.objectContaining({
+          path: "$.proposals[0].templates",
+          category: "TEMPLATES_OR_TOOLS",
+          classification: "PROPOSED",
+        })],
+      });
 
     for (const input of [
       { productConfiguration: { generalNotes: "El producto incluye comunidad privada" } },
@@ -129,28 +139,36 @@ describe("Product completeness and grounding validator", () => {
     expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit.ok).toBe(true);
     expect(schema).toMatchObject({
       "x-hallazia-product-capability-contract": {
-        optionalAuthorizedCapabilities: [],
+        explicitAuthorizedCapabilities: [],
         optionalArrays: {
-          templates: { requiredCapability: "TEMPLATES_OR_TOOLS", allowed: false },
-          bonuses: { requiredCapability: "BONUS_FEATURE", allowed: false },
+          templates: { category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED", allowed: true },
+          bonuses: { category: "BONUS_FEATURE", classification: "PROPOSED", allowed: true },
         },
       },
     });
   });
 
-  it("closes optional arrays in the provider schema and keeps free-text capability checks fail-closed", () => {
+  it("allows proposed design arrays in the provider schema without treating them as grounded facts", () => {
     const snapshot = buildProductGroundingSnapshot({
       evidence: [],
       opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
     });
     const schema = buildProductStructuredOutputSchema(snapshot);
 
-    expect(validateJsonSchema(schema, complete({ templates: ["Plantilla de seguimiento"] })))
-      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].templates", expected: "array(maxItems 0)" }));
-    expect(validateProductOutput(complete({ resources: ["Herramienta de seguimiento"] }), { groundingSnapshot: snapshot }).audit.issues)
-      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].resources", category: "TEMPLATES_OR_TOOLS" }));
-    expect(validateProductOutput(complete({ format: "Curso con plantillas y herramientas" }), { groundingSnapshot: snapshot }).audit.issues)
-      .toContainEqual(expect.objectContaining({ path: "$.proposals[0].format", category: "TEMPLATES_OR_TOOLS" }));
+    expect(validateJsonSchema(schema, complete({ templates: ["Plantilla de seguimiento"] }))).toEqual([]);
+    for (const [field, output] of [
+      ["resources", complete({ resources: ["Workbook de seguimiento"] })],
+      ["format", complete({ format: "Curso con plantillas y herramientas" })],
+    ] as const) {
+      expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit).toMatchObject({
+        ok: true,
+        proposedDesignDecisions: [expect.objectContaining({
+          path: `$.proposals[0].${field}`,
+          category: "TEMPLATES_OR_TOOLS",
+          classification: "PROPOSED",
+        })],
+      });
+    }
   });
 
   it("does not classify support materials or resources as HUMAN_SUPPORT", () => {
@@ -217,9 +235,37 @@ describe("Product completeness and grounding validator", () => {
     expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit.ok).toBe(true);
     expect(schema).toMatchObject({
       "x-hallazia-product-capability-contract": {
-        optionalArrays: { templates: { requiredCapability: "TEMPLATES_OR_TOOLS", allowed: true } },
+        optionalArrays: { templates: { category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED", allowed: true } },
       },
     });
+  });
+
+  it("reclassifies the exact Product v6 design while retaining its real lifetime-access violation", () => {
+    const format = "Curso 100% online con videolecciones, guías en PDF y ejercicios prácticos. Incluye módulos progresivos, demostraciones en video y planes de acción descargables.";
+    const deliverables = [
+      "Videolecciones grabadas (acceso de por vida)",
+      "Guías en PDF descargables por módulo",
+      "Ejercicios prácticos con instrucciones paso a paso",
+      "Plan de paseo estructurado para evitar situaciones estresantes",
+      "Lista de verificación para identificar el tipo de reactividad de tu perro",
+      "Plantilla de registro de progreso",
+    ];
+    const result = validateProductOutput(complete({ format, deliverables }));
+
+    expect(result.audit.unsupportedClaims).toEqual([
+      expect.objectContaining({ path: "$.proposals[0].deliverables", category: "LIFETIME_ACCESS" }),
+    ]);
+    expect(result.audit.proposedDesignDecisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "$.proposals[0].format", category: "OPERATIONAL_FEATURE", classification: "PROPOSED" }),
+      expect.objectContaining({ path: "$.proposals[0].deliverables", category: "TEMPLATES_OR_TOOLS", classification: "PROPOSED" }),
+    ]));
+    expect(result.audit).toMatchObject({ ok: false, grounded: false, unresolvedEvidenceIds: [] });
+
+    const withoutLifetimeAccess = validateProductOutput(complete({
+      format,
+      deliverables: ["Videolecciones grabadas", ...deliverables.slice(1)],
+    }));
+    expect(withoutLifetimeAccess.audit).toMatchObject({ ok: true, grounded: true, unsupportedClaims: [] });
   });
 
   it("passes the Product v5 output offline when its two false positives are removed", () => {

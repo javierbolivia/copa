@@ -5,9 +5,9 @@ import { ProductModuleOutputSchema } from "@our-platform/shared";
  *
  * Problem evidence may ground the market need and desired transformation, but
  * never authorizes claims about the efficacy, speed, guarantees, credentials,
- * or operating features of Hallazia's proposed solution. Those higher-risk
- * claims require explicit support in the selected upstream opportunity,
- * product configuration, or user instructions.
+ * or strong commercial obligations of Hallazia's proposed solution. Legitimate
+ * design suggestions remain proposals; higher-risk claims require explicit
+ * support in upstream opportunity, product configuration, or user instructions.
  */
 
 export const PRODUCT_SCHEMA_VERSION = 2;
@@ -27,6 +27,8 @@ export type ProductClaimCategory =
   | "LIVE_SESSIONS"
   | "HUMAN_SUPPORT"
   | "OPERATIONAL_FEATURE";
+
+export type ProductClaimPolicyClass = "GROUNDED" | "PROPOSED" | "REQUIRES_EXPLICIT_AUTHORIZATION";
 
 export type ProductGroundingIssueCode =
   | "EVIDENCE_OUTSIDE_SNAPSHOT"
@@ -71,6 +73,15 @@ export interface UnsupportedProductClaim {
   readonly claim: string;
 }
 
+export interface ProposedProductDesignDecision {
+  readonly proposalId: string;
+  readonly field: UnsupportedProductClaim["field"];
+  readonly path: string;
+  readonly category: ProductClaimCategory;
+  readonly claim: string;
+  readonly classification: "PROPOSED";
+}
+
 export interface ProductValidationAudit {
   readonly schemaVersion: number;
   readonly missingFields: string[];
@@ -78,6 +89,8 @@ export interface ProductValidationAudit {
   readonly placeholderFields: string[];
   unresolvedEvidenceIds: string[];
   readonly unsupportedClaims: UnsupportedProductClaim[];
+  readonly proposedDesignDecisions: ProposedProductDesignDecision[];
+  readonly claimPolicy: typeof PRODUCT_CLAIM_POLICY;
   readonly issues: ProductGroundingIssue[];
   invalidSelection: boolean;
   readonly problemEvidenceAuthorizesCommercialClaims: false;
@@ -110,17 +123,31 @@ const PRODUCT_CAPABILITY_FIELD_POLICY = {
   format: ALL_PRODUCT_CAPABILITIES,
   deliverables: ALL_PRODUCT_CAPABILITIES,
   modules: ALL_PRODUCT_CAPABILITIES,
-  checklists: ["TEMPLATES_OR_TOOLS"],
-  templates: ["TEMPLATES_OR_TOOLS"],
-  resources: ["TEMPLATES_OR_TOOLS"],
-  bonuses: ["BONUS_FEATURE"],
+  checklists: ALL_PRODUCT_CAPABILITIES,
+  templates: ALL_PRODUCT_CAPABILITIES,
+  resources: ALL_PRODUCT_CAPABILITIES,
+  bonuses: ALL_PRODUCT_CAPABILITIES,
 } as const satisfies Readonly<Record<UnsupportedProductClaim["field"], readonly ProductClaimCategory[]>>;
-const OPTIONAL_ARRAY_CAPABILITY_POLICY = {
+const PROPOSED_ARRAY_CATEGORY_POLICY = {
   checklists: "TEMPLATES_OR_TOOLS",
   templates: "TEMPLATES_OR_TOOLS",
   resources: "TEMPLATES_OR_TOOLS",
   bonuses: "BONUS_FEATURE",
 } as const satisfies Readonly<Partial<Record<(typeof FEATURE_ARRAY_FIELDS)[number], ProductClaimCategory>>>;
+const PROPOSED_DESIGN_FIELDS: readonly UnsupportedProductClaim["field"][] = [
+  "concept", "format", "deliverables", "modules", "checklists", "templates", "resources", "bonuses",
+];
+const PROPOSED_DESIGN_CATEGORIES: readonly ProductClaimCategory[] = [
+  "OPERATIONAL_FEATURE", "TEMPLATES_OR_TOOLS", "BONUS_FEATURE",
+];
+export const PRODUCT_CLAIM_POLICY = {
+  GROUNDED: { fields: ["problem", "outcome"], evidenceField: "evidenceIds" },
+  PROPOSED: { fields: PROPOSED_DESIGN_FIELDS, categories: PROPOSED_DESIGN_CATEGORIES },
+  REQUIRES_EXPLICIT_AUTHORIZATION: {
+    categories: ALL_PRODUCT_CAPABILITIES.filter((category) => !PROPOSED_DESIGN_CATEGORIES.includes(category)),
+    proposedCategoriesOutsideDesignFields: PROPOSED_DESIGN_CATEGORIES,
+  },
+} as const;
 const PLACEHOLDER = /^(?:sin completar|incomplet[oa]|not completed|incomplete|pending|pendiente|por definir|to be defined|tbd|n a|none|null|undefined|-+)$/u;
 
 const CLAIM_PATTERNS: ReadonlyArray<{ category: ProductClaimCategory; pattern: RegExp }> = [
@@ -176,7 +203,8 @@ export function buildProductGroundingSnapshot(input: {
 /**
  * Build the provider-facing Product contract from the same canonical capability
  * policy enforced by the validator. Base Product fields always remain usable;
- * optional feature arrays are structurally closed unless explicitly authorized.
+ * proposed design fields remain available, while strong capabilities are
+ * described from the explicit authorization allowlist.
  */
 export function buildProductStructuredOutputSchema(
   snapshot: Pick<ProductGroundingSnapshot, "authorizedCapabilities">,
@@ -188,29 +216,35 @@ export function buildProductStructuredOutputSchema(
   const proposalSchema = record(proposalsSchema.items);
   const proposalProperties = record(proposalSchema.properties);
 
-  proposalsSchema.description = "BASE PRODUCT STRUCTURE: one or more complete proposals. OPTIONAL AUTHORIZED CAPABILITIES may appear only when allowed by the capability contract.";
+  proposalsSchema.description = "BASE PRODUCT STRUCTURE: one or more complete proposals. Market conclusions use evidenceIds; design fields are proposals, while strong commercial capabilities require explicit authorization.";
   for (const [field, applicableCapabilities] of Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY)) {
     const fieldSchema = structuredClone(record(proposalProperties[field]));
     proposalProperties[field] = fieldSchema;
-    const allowed = applicableCapabilities.filter((capability) => authorized.has(capability));
-    fieldSchema.description = `BASE PRODUCT STRUCTURE is allowed. OPTIONAL AUTHORIZED CAPABILITIES for this field: ${allowed.length > 0 ? allowed.join(", ") : "NONE"}. Do not add any other optional capability or arbitrary quantity.`;
-  }
-  for (const [field, requiredCapability] of Object.entries(OPTIONAL_ARRAY_CAPABILITY_POLICY)) {
-    if (!authorized.has(requiredCapability)) record(proposalProperties[field]).maxItems = 0;
+    const proposed = applicableCapabilities.filter((capability) => productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "PROPOSED");
+    const explicitlyAuthorized = applicableCapabilities.filter((capability) =>
+      productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
+      && authorized.has(capability));
+    fieldSchema.description = `PROPOSED PRODUCT DESIGN is allowed for: ${proposed.length > 0 ? proposed.join(", ") : "NONE"}. EXPLICITLY AUTHORIZED CAPABILITIES: ${explicitlyAuthorized.length > 0 ? explicitlyAuthorized.join(", ") : "NONE"}. Never present proposed design as evidence-grounded fact.`;
   }
   schema["x-hallazia-product-capability-contract"] = {
     baseProductStructure: {
       fields: ["id", "name", "concept", "problem", "outcome", "promise", "format", "deliverables", "modules", "evidenceIds"],
       guidance: "A complete useful Product may use generic progressive organization without inventing optional capabilities or arbitrary quantities.",
     },
-    optionalAuthorizedCapabilities: [...authorized].sort(),
+    claimPolicy: PRODUCT_CLAIM_POLICY,
+    explicitAuthorizedCapabilities: [...authorized].sort(),
     fields: Object.fromEntries(Object.entries(PRODUCT_CAPABILITY_FIELD_POLICY).map(([field, applicableCapabilities]) => [
       field,
-      { allowedCapabilities: applicableCapabilities.filter((capability) => authorized.has(capability)) },
+      {
+        proposedCapabilities: applicableCapabilities.filter((capability) => productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "PROPOSED"),
+        explicitAuthorizedCapabilities: applicableCapabilities.filter((capability) =>
+          productClaimPolicyClass(field as UnsupportedProductClaim["field"], capability) === "REQUIRES_EXPLICIT_AUTHORIZATION"
+          && authorized.has(capability)),
+      },
     ])),
-    optionalArrays: Object.fromEntries(Object.entries(OPTIONAL_ARRAY_CAPABILITY_POLICY).map(([field, requiredCapability]) => [
+    optionalArrays: Object.fromEntries(Object.entries(PROPOSED_ARRAY_CATEGORY_POLICY).map(([field, category]) => [
       field,
-      { requiredCapability, allowed: authorized.has(requiredCapability) },
+      { category, classification: "PROPOSED", allowed: true },
     ])),
   };
   return schema;
@@ -235,6 +269,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
   const placeholderFields: string[] = [];
   const unresolvedEvidenceIds = new Set<string>();
   const unsupportedClaims: UnsupportedProductClaim[] = [];
+  const proposedDesignDecisions: ProposedProductDesignDecision[] = [];
   const issues: ProductGroundingIssue[] = [];
   const errors: string[] = [];
   const audit: ProductValidationAudit = {
@@ -244,6 +279,8 @@ export function validateProductOutput(input: unknown, context: ProductValidation
     placeholderFields,
     unresolvedEvidenceIds: [],
     unsupportedClaims,
+    proposedDesignDecisions,
+    claimPolicy: PRODUCT_CLAIM_POLICY,
     issues,
     invalidSelection: false,
     problemEvidenceAuthorizesCommercialClaims: false,
@@ -314,6 +351,10 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       for (const field of CLAIM_FIELDS) {
         const claim = typeof cleaned[field] === "string" ? cleaned[field] : "";
         for (const category of claimCategories(claim)) {
+          if (productClaimPolicyClass(field, category) === "PROPOSED") {
+            proposedDesignDecisions.push({ proposalId, field, path: `${jsonPath}.${field}`, category, claim, classification: "PROPOSED" });
+            continue;
+          }
           if (!claimCategoryAuthorized(category, authorizedCapabilities, authorizedClaims, claim)) {
             const claimPath = `${jsonPath}.${field}`;
             unsupportedClaims.push({ proposalId, field, path: claimPath, category, claim });
@@ -324,10 +365,14 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       for (const field of FEATURE_ARRAY_FIELDS) {
         const values = Array.isArray(cleaned[field]) ? cleaned[field] as string[] : [];
         const categories = new Set(values.flatMap((claim) => featureClaimCategories(field, claim)));
-        const requiredCapability = OPTIONAL_ARRAY_CAPABILITY_POLICY[field as keyof typeof OPTIONAL_ARRAY_CAPABILITY_POLICY];
-        if (requiredCapability !== undefined && values.length > 0) categories.add(requiredCapability);
+        const proposedCategory = PROPOSED_ARRAY_CATEGORY_POLICY[field as keyof typeof PROPOSED_ARRAY_CATEGORY_POLICY];
+        if (proposedCategory !== undefined && values.length > 0) categories.add(proposedCategory);
         for (const category of categories) {
           const claim = values.join(" ");
+          if (productClaimPolicyClass(field, category) === "PROPOSED") {
+            proposedDesignDecisions.push({ proposalId, field, path: `${jsonPath}.${field}`, category, claim, classification: "PROPOSED" });
+            continue;
+          }
           if (!claimCategoryAuthorized(category, authorizedCapabilities, authorizedClaims, claim)) {
             const claimPath = `${jsonPath}.${field}`;
             unsupportedClaims.push({ proposalId, field, path: claimPath, category, claim });
@@ -429,6 +474,15 @@ function featureClaimCategories(field: (typeof FEATURE_ARRAY_FIELDS)[number], va
     ? normalize(value).replace(/^(?:modulos?|modules?)\s+\d+\b/u, "").trim()
     : value;
   return claimCategories(claim);
+}
+
+function productClaimPolicyClass(
+  field: UnsupportedProductClaim["field"],
+  category: ProductClaimCategory,
+): ProductClaimPolicyClass {
+  return PROPOSED_DESIGN_FIELDS.includes(field) && PROPOSED_DESIGN_CATEGORIES.includes(category)
+    ? "PROPOSED"
+    : "REQUIRES_EXPLICIT_AUTHORIZATION";
 }
 
 function claimCategoryAuthorized(

@@ -64,7 +64,8 @@ export const ProjectSettingsSchema = Type.Object({
   preferredLlmProvider: Type.Union([Type.String({ maxLength: 80 }), Type.Null()]),
   economyModel: Type.Union([Type.String({ maxLength: 120 }), Type.Null()]),
   powerfulModel: Type.Union([Type.String({ maxLength: 120 }), Type.Null()]),
-  maxBudget: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
+  // A single type union prevents coercion of null to 0 in an anyOf number branch.
+  maxBudget: Type.Unsafe<number | null>({ type: ["number", "null"], minimum: 0 }),
   contentLanguage: Type.String({ minLength: 2, maxLength: 16 }),
   knowledgeEnabled: Type.Boolean(),
   updatedAt: Type.String({ format: "date-time" }),

@@ -188,7 +188,7 @@ export class ProductExportService {
       metadata.height > 10_000
     )
       throw new Error("Dimensiones de imagen inválidas.");
-    const bytes = await image
+    const { data: bytes, info } = await image
       .rotate()
       .resize({
         width: 2400,
@@ -197,7 +197,7 @@ export class ProductExportService {
         withoutEnlargement: true,
       })
       .webp({ quality: 86 })
-      .toBuffer();
+      .toBuffer({ resolveWithObject: true });
     return this.storeAsset(
       projectId,
       "IMAGE",
@@ -205,8 +205,8 @@ export class ProductExportService {
       "image/webp",
       "webp",
       bytes,
-      metadata.width,
-      metadata.height,
+      info.width,
+      info.height,
       { sourceMime: declared },
     );
   }

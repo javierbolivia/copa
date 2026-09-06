@@ -58,6 +58,30 @@ describe("Product Studio physical assets and exports", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it.each([
+    { width: 3200, height: 1600, orientation: 1, expectedWidth: 2400, expectedHeight: 1200 },
+    { width: 800, height: 400, orientation: 6, expectedWidth: 400, expectedHeight: 800 },
+  ])("stores the dimensions of the processed image ($width x $height, orientation $orientation)", async ({ width, height, orientation, expectedWidth, expectedHeight }) => {
+    const created = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Image dimensions", niche: "Photography" } });
+    expect(created.statusCode, created.body).toBe(201);
+    const project = created.json<Project>();
+    const source = await sharp({ create: { width, height, channels: 3, background: "#315efb" } })
+      .jpeg().withMetadata({ orientation }).toBuffer();
+    const uploaded = await app.inject({
+      method: "POST", url: `/api/projects/${project.id}/product-assets`,
+      payload: { title: "Processed image", filename: "image.jpg", mimeType: "image/jpeg", contentBase64: source.toString("base64") },
+    });
+    expect(uploaded.statusCode, uploaded.body).toBe(201);
+    const asset = uploaded.json<{ id: string; url: string; width: number; height: number }>();
+    const downloaded = await app.inject({ method: "GET", url: asset.url });
+    expect(downloaded.statusCode).toBe(200);
+    const actual = await sharp(downloaded.rawPayload).metadata();
+    expect(actual).toMatchObject({ width: expectedWidth, height: expectedHeight });
+    expect(asset).toMatchObject({ width: actual.width, height: actual.height });
+    const listed = await app.inject({ method: "GET", url: `/api/projects/${project.id}/product-assets` });
+    expect(listed.json<{ assets: unknown[] }>().assets).toContainEqual(expect.objectContaining({ id: asset.id, width: actual.width, height: actual.height }));
+  });
+
   async function createReadyDocument(): Promise<{
     project: Project;
     document: ProductDocument;
@@ -333,6 +357,18 @@ describe("Product Studio physical assets and exports", () => {
     expect(ebookPdfDocument.text).toContain("Bloque del primer capítulo.");
     expect(ebookPdfDocument.text).toContain("Bloque del segundo capítulo.");
 
+    const after = await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/product-documents/${ebook.id}`,
+    });
+    expect(after.statusCode, after.body).toBe(200);
+    expect(after.json<ProductDocument>().version).toEqual(ebookBefore);
+  });
+
+  it("preserva el perfil checklist en HTML, DOCX y PDF", async () => {
+    const project = (
+      await app.inject({ method: "POST", url: "/api/demo/projects" })
+    ).json<{ project: Project }>().project;
     const checklist = await createExportableDocument(project, "checklist");
     const checklistHtml = (
       await exportDocument(project, checklist, "html")
@@ -363,6 +399,12 @@ describe("Product Studio physical assets and exports", () => {
     expect(checklistPdf.text).not.toContain("Contenido");
     expect(checklistPdf.text).not.toContain("chapter-");
 
+  });
+
+  it("preserva la presentación de guía sin aplicar el perfil ebook", async () => {
+    const project = (
+      await app.inject({ method: "POST", url: "/api/demo/projects" })
+    ).json<{ project: Project }>().project;
     const guide = await createExportableDocument(project, "guide");
     const guideHtml = (
       await exportDocument(project, guide, "html")
@@ -390,12 +432,6 @@ describe("Product Studio physical assets and exports", () => {
     expect(guidePdf.text).not.toContain("Contenido adicional");
     expect(guidePdf.text).not.toContain("chapter-");
 
-    const after = await app.inject({
-      method: "GET",
-      url: `/api/projects/${project.id}/product-documents/${ebook.id}`,
-    });
-    expect(after.statusCode, after.body).toBe(200);
-    expect(after.json<ProductDocument>().version).toEqual(ebookBefore);
   });
 
   it("genera assets seguros y archivos HTML, DOCX y PDF físicos, sin sobrescribir historial", async () => {

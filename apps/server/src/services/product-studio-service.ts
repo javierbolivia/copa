@@ -286,6 +286,11 @@ export class ProductStudioService {
         "product-outline-mock-v1",
       );
     }
+    const latest = this.requireFresh(projectId, documentId);
+    if (latest.activeVersionId !== current.activeVersionId)
+      throw new ProductStudioConflictError(
+        "El documento cambió durante la generación del outline; se conservaron tus ediciones.",
+      );
     return this.saveDocumentRevision(
       current,
       [],
@@ -358,9 +363,14 @@ export class ProductStudioService {
       if (operation.operation === "delete") outline.splice(index, 1);
     }
     outline = outline.map((item, index) => ({ ...item, order: index }));
+    const blocks = operation.operation === "delete"
+      ? current.version.blocks
+          .filter((block) => block.metadata.chapterId !== operation.itemId)
+          .map((block, order) => ({ ...block, order }))
+      : current.version.blocks;
     return this.saveDocumentRevision(
       current,
-      current.version.blocks,
+      blocks,
       outline,
       "OUTLINE",
       current.version.metadata,
@@ -417,7 +427,7 @@ export class ProductStudioService {
           ...input.metadata,
           autosaveKey: input.idempotencyKey,
         },
-        current.status,
+        current.status === "APPROVED" ? "IN_PROGRESS" : current.status,
         input.idempotencyKey,
         input.theme,
       );
@@ -439,6 +449,8 @@ export class ProductStudioService {
       throw new Error("Aprueba el outline antes de generar capítulos.");
     const chapter = this.documents.getChapter(projectId, documentId, chapterId);
     if (!chapter) throw new Error("El capítulo no existe.");
+    if (chapter.status === "GENERATING")
+      throw new ProductStudioConflictError("El capítulo ya se está generando.");
     this.documents.markChapter(projectId, chapterId, "GENERATING");
     try {
       const now = new Date().toISOString(),
@@ -552,6 +564,20 @@ export class ProductStudioService {
           },
         );
       }
+      const latest = this.requireFresh(projectId, documentId);
+      const latestChapter = this.documents.getChapter(projectId, documentId, chapterId);
+      const chapterContent = (document: ProductDocument) => JSON.stringify(
+        document.version.blocks
+          .filter((block) => block.metadata.chapterId === chapterId)
+          .map((block) => ({ ...block, order: 0 })),
+      );
+      if (!latestChapter || latestChapter.title !== chapter.title ||
+          latestChapter.objective !== chapter.objective ||
+          latestChapter.targetWords !== chapter.targetWords ||
+          chapterContent(latest) !== chapterContent(current))
+        throw new ProductStudioConflictError(
+          "El capítulo cambió durante la generación; se conservaron tus ediciones.",
+        );
       const chapterVersionId = this.documents.appendChapterVersion({
         projectId,
         documentId,
@@ -563,7 +589,6 @@ export class ProductStudioService {
         provider: generation.provider,
         model: generation.model,
       });
-      const latest = this.documents.get(projectId, documentId)!;
       const merged = mergeChapterBlocks(
         latest.version.blocks,
         blocks,
@@ -632,10 +657,11 @@ export class ProductStudioService {
           `Capítulo ${index + 1} de ${pending.length}`,
         );
       }
-      this.jobs.complete(projectId, jobId, {
-        documentId,
-        completed: pending.length,
-      });
+      if (!this.jobs.isCancelled(projectId, jobId))
+        this.jobs.complete(projectId, jobId, {
+          documentId,
+          completed: pending.length,
+        });
     } catch (error) {
       this.jobs.fail(
         projectId,
@@ -660,17 +686,32 @@ export class ProductStudioService {
     const job = this.jobs.getRecord(projectId, jobId);
     if (!job || job.jobType !== "product_chapters")
       throw new Error("El job no existe.");
+    const documentId = String(job.payload.documentId);
+    if (job.status === "COMPLETED") {
+      const document = this.documents.get(projectId, documentId);
+      if (!document) throw new Error("El documento no existe.");
+      return { jobId, document };
+    }
+    if (job.status === "RUNNING")
+      throw new ProductStudioConflictError("El lote ya se está ejecutando.");
+    this.requireFresh(projectId, documentId);
     if (job.status === "FAILED" || job.status === "CANCELLED")
       this.jobs.retry(projectId, jobId);
-    this.jobs.start(projectId, jobId, "Reanudando capítulos pendientes");
-    const documentId = String(job.payload.documentId),
-      ids = Array.isArray(job.payload.pendingChapterIds)
+    const started = this.jobs.start(projectId, jobId, "Reanudando capítulos pendientes");
+    if (started?.status !== "RUNNING")
+      throw new ProductStudioConflictError("El lote agotó sus reintentos.");
+    const ids = Array.isArray(job.payload.pendingChapterIds)
         ? job.payload.pendingChapterIds.map(String)
         : [],
       start = Number(job.payload.nextIndex ?? 0);
     try {
       for (let index = start; index < ids.length; index++) {
-        await this.generateChapter(projectId, documentId, ids[index]!);
+        if (this.jobs.isCancelled(projectId, jobId)) break;
+        const chapter = this.documents.getChapter(projectId, documentId, ids[index]!);
+        if (!chapter) throw new Error("El capítulo del lote ya no existe.");
+        // Cancellation can arrive after the chapter was saved but before its checkpoint.
+        if (!["DRAFT", "APPROVED"].includes(chapter.status))
+          await this.generateChapter(projectId, documentId, chapter.id);
         this.jobs.checkpoint(
           projectId,
           jobId,
@@ -679,10 +720,11 @@ export class ProductStudioService {
           `Capítulo ${index + 1} de ${ids.length}`,
         );
       }
-      this.jobs.complete(projectId, jobId, {
-        documentId,
-        completed: ids.length,
-      });
+      if (!this.jobs.isCancelled(projectId, jobId))
+        this.jobs.complete(projectId, jobId, {
+          documentId,
+          completed: ids.length,
+        });
     } catch (error) {
       this.jobs.fail(
         projectId,
@@ -1402,6 +1444,7 @@ function mergeChapterBlocks(
   let insertAt = oldIndex < 0 ? kept.length : Math.min(oldIndex, kept.length);
   if (oldIndex < 0) {
     const position = outline.findIndex((item) => item.id === chapterId);
+    let foundPrevious = false;
     for (let index = position - 1; index >= 0; index--) {
       const previousId = outline[index]!.id,
         last = kept
@@ -1409,11 +1452,12 @@ function mergeChapterBlocks(
           .lastIndexOf(previousId);
       if (last >= 0) {
         insertAt = last + 1;
+        foundPrevious = true;
         break;
       }
     }
-    if (position === 0) {
-      const nextIds = new Set(outline.slice(1).map((item) => item.id)),
+    if (!foundPrevious) {
+      const nextIds = new Set(outline.slice(position + 1).map((item) => item.id)),
         next = kept.findIndex(
           (block) =>
             typeof block.metadata.chapterId === "string" &&

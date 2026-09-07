@@ -23,11 +23,13 @@ import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
@@ -854,6 +856,7 @@ export class ProductExportService {
     mkdirSync(tempDir, { recursive: true });
     const htmlPath = resolve(tempDir, `${uuidv7()}.html`),
       pdfPath = resolve(tempDir, `${uuidv7()}.pdf`);
+    const profile = mkdtempSync(resolve(tmpdir(), "hallazia-pdf-profile-"));
     try {
       writeFileSync(htmlPath, html, "utf8");
       const edge = edgePath();
@@ -861,6 +864,10 @@ export class ProductExportService {
         edge,
         [
           "--headless=new",
+          // Keep CLI output attached to this process instead of Edge's compat relaunch.
+          "--edge-skip-compat-layer-relaunch",
+          `--user-data-dir=${profile}`,
+          "--no-first-run",
           "--disable-gpu",
           `--print-to-pdf=${pdfPath}`,
           "--no-pdf-header-footer",
@@ -877,6 +884,7 @@ export class ProductExportService {
     } finally {
       rmSync(htmlPath, { force: true });
       rmSync(pdfPath, { force: true });
+      rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     }
   }
 }
@@ -1030,12 +1038,16 @@ async function renderMermaid(source: string): Promise<string> {
     `<!doctype html><meta charset="utf-8"><div id="out"></div><script type="module">import mermaid from ${JSON.stringify(mermaidModule)};mermaid.initialize({startOnLoad:false,securityLevel:'strict',htmlLabels:false});try{await mermaid.parse(${JSON.stringify(source)});const {svg}=await mermaid.render('graph',${JSON.stringify(source)});document.getElementById('out').innerHTML=svg;document.body.dataset.render='ready'}catch(e){document.body.dataset.render='error';document.body.textContent=String(e)}</script>`,
     "utf8",
   );
+  const profile = mkdtempSync(resolve(tmpdir(), "hallazia-mermaid-profile-"));
   try {
     for (let attempt = 1; attempt <= MAX_MERMAID_RENDER_ATTEMPTS; attempt++) {
       const result = spawnSync(
         edge,
         [
           "--headless=new",
+          "--edge-skip-compat-layer-relaunch",
+          `--user-data-dir=${profile}`,
+          "--no-first-run",
           "--disable-gpu",
           "--allow-file-access-from-files",
           "--virtual-time-budget=10000",
@@ -1069,6 +1081,7 @@ async function renderMermaid(source: string): Promise<string> {
     );
   } finally {
     rmSync(htmlPath, { force: true });
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 function sanitizeSvg(svg: string) {

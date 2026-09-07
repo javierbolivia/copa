@@ -1,6 +1,6 @@
 # Skill and memory architecture
 
-Do not confuse a Codex repository Skill with Hallazia's internal Skill contract.
+Do not confuse an agent's repository skill with Hallazia's internal Skill contract.
 
 - Internal Skill: versioned declarative policy describing how Hallazia performs a bounded task.
 - Memory: persisted, auditable learned knowledge describing what Hallazia has learned.

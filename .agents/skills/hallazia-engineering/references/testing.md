@@ -1,27 +1,16 @@
-# Validation routing
+# Verification commands and isolation
 
-Start focused and expand only when the changed boundary requires it.
+Use the validation level selected by SKILL.md's task routes.
 
-## Canonical commands
+Run the full suite at most once at the end; if it passed and code is unchanged, do not repeat it. Rerun only checks invalidated by a later change or failure; report unresolved failures honestly.
+Server tests use Vitest. Build shared first if its dist is absent/stale or contracts changed.
+From repo root (PowerShell may use npm.cmd):
+- Focused: npm run test --workspace @our-platform/server -- <test-file>
+- Shared build: npm run build:shared
+- Affected typecheck: npm run typecheck --workspace @our-platform/<server|web|shared>
+- Full tests: npm test
+- Full typecheck/build: npm run typecheck / npm run build (separate commands).
 
-```powershell
-npm.cmd run test --workspace @our-platform/server -- <test-filter>
-npm.cmd run typecheck --workspace @our-platform/server
-npm.cmd run typecheck --workspace @our-platform/web
-npm.cmd run typecheck --workspace @our-platform/shared
-npm.cmd run build --workspace @our-platform/web
-git --no-pager diff --check
-```
-
-Use root `npm.cmd test` only when shared schema or broad server behavior makes the full suite proportionate. Use root `npm.cmd run typecheck` when all workspaces cross a shared contract.
-
-## Test data
-
-- Prefer `AppDatabase(":memory:")` or an explicit temp directory.
-- Keep provider tests on injected fakes; assert zero calls when the feature is deterministic/local.
-- Check `PRAGMA foreign_key_check` and `PRAGMA integrity_check` for migration/deletion changes.
-- Never delete or mutate a real user project during automated tests.
-
-## Runtime/browser
-
-Use runtime checks for route, persisted-data, or UI behavior after deterministic tests pass. Keep them local and bounded. Browser QA must use the real UI and target temporary data by exact identity.
+Use in-memory/temp DBs and fake providers; assert zero external calls where required. Never use user data as test fixtures.
+Prefer additive, transactional migrations. Before changing ownership/deletion inspect actual foreign keys and cascades; verify rollback, foreign_key_check and integrity_check in isolated data.
+Runtime-dependent defects need relevant runtime evidence; tests do not prove the user's persisted state. UI changes warrant a focused visual check when available, not unrelated live generation.

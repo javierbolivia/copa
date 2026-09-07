@@ -4,7 +4,7 @@ Provider calls are never the first diagnostic step. Inspect code, persisted run 
 
 Before an external call, record the unresolved fact, exact provider, why local evidence is insufficient, disabled unrelated providers, maximum calls, expected telemetry, and stop condition. Require explicit authorization when calls consume quota/tokens or mutate external state.
 
-- Never expose `.env`, API keys, headers, or raw provider bodies.
+- Sanitize provider headers/bodies before using diagnostic output; root secret rules apply.
 - Keep provider errors separate from acquisition zeros, deterministic filtering, semantic rejection, and UI rendering.
 - Do not retry rate limits blindly or assume a new key fixes quota.
 - A successful primary model call must not invoke fallback. Fallback handles only the exact unresolved unit.

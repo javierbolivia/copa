@@ -10,8 +10,19 @@ import { GEMINI_ANALYSIS_MODEL } from "../src/services/module-service.js";
 
 const providerModules=MODULES.map(module=>module.key).filter((key):key is Exclude<ModuleKey,"sources">=>key!=="sources");
 
-function canonicalOutput(key:Exclude<ModuleKey,"sources">):Record<string,unknown>{
+function canonicalOutput(key:Exclude<ModuleKey,"sources">,input:Record<string,unknown>={}):Record<string,unknown>{
   const output:Record<string,unknown>={...createDemoOutput(key,[]),evidenceIds:[]};
+  if(key==="problems"){
+    const candidates=Array.isArray(input.candidates)?input.candidates:undefined;
+    const evidence=Array.isArray(input.evidence)?input.evidence.filter((item):item is {id:string;quoteText:string}=>typeof item==="object"&&item!==null&&typeof (item as {id?:unknown}).id==="string"&&typeof (item as {quoteText?:unknown}).quoteText==="string"):[];
+    output.items=candidates??evidence.map((item,index)=>({id:`provider-problem-${index+1}`,name:"Organización de fotografías digitales",category:"pain",summary:item.quoteText,evidenceIds:[item.id],researchRelevanceScore:100}));
+  }
+  if(key==="opportunities"&&Array.isArray(output.items)){
+    const parentOutputs=typeof input.parentOutputs==="object"&&input.parentOutputs!==null?input.parentOutputs as Record<string,unknown>:{};
+    const problems=typeof parentOutputs.problems==="object"&&parentOutputs.problems!==null?parentOutputs.problems as {items?:Array<{id?:unknown;evidenceIds?:unknown}>}:{};
+    const problem=problems.items?.[0];
+    output.items=output.items.map((item)=>({...item as Record<string,unknown>,problemId:problem?.id,evidenceIds:Array.isArray(problem?.evidenceIds)?problem.evidenceIds:[]}));
+  }
   if(key==="product"&&Array.isArray(output.proposals))output.proposals=output.proposals.map((proposal:unknown)=>({...proposal as Record<string,unknown>,evidenceIds:[]}));
   return output;
 }
@@ -38,8 +49,9 @@ describe("matriz compartida de proveedores de módulos",()=>{
   it("enruta y persiste DeepSeek en todos los módulos generativos",async()=>{
     const fetchMock=vi.fn(async(_url:unknown,init?:RequestInit)=>{
       const body=JSON.parse(String(init?.body)) as {messages:Array<{content:string}>};
+      const input=JSON.parse(body.messages[1]!.content) as Record<string,unknown>;
       const key=requestedModule(body.messages[1]!.content);
-      return deepSeekResponse(canonicalOutput(key??"research"));
+      return deepSeekResponse(canonicalOutput(key??"research",input));
     });
     app=await createApp({databasePath:":memory:",serveFrontend:false,deepSeek:{apiKey:"deepseek-matrix-key",fetch:fetchMock as typeof fetch}});
     const demo=(await app.inject({method:"POST",url:"/api/demo/projects"})).json<{project:Project}>();
@@ -64,8 +76,9 @@ describe("matriz compartida de proveedores de módulos",()=>{
   it("enruta y persiste Gemini en la misma matriz de módulos",async()=>{
     const fetchMock=vi.fn(async(_url:unknown,init?:RequestInit)=>{
       const body=JSON.parse(String(init?.body)) as {contents:Array<{parts:Array<{text:string}>}>};
+      const input=JSON.parse(body.contents[0]!.parts[0]!.text) as Record<string,unknown>;
       const key=requestedModule(body.contents[0]!.parts[0]!.text);
-      return geminiResponse(canonicalOutput(key??"research"));
+      return geminiResponse(canonicalOutput(key??"research",input));
     });
     app=await createApp({databasePath:":memory:",serveFrontend:false,gemini:{apiKey:"gemini-matrix-key",fetch:fetchMock as typeof fetch}});
     const demo=(await app.inject({method:"POST",url:"/api/demo/projects"})).json<{project:Project}>();

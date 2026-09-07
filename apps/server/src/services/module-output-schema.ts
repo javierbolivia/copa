@@ -62,7 +62,7 @@ export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
     case "research":return typeof output.summary==="string";
     case "sources":return typeof output.sourceCount==="number"&&typeof output.commentCount==="number";
     case "problems":return Array.isArray(output.items);
-    case "opportunities":return Array.isArray(output.items)&&output.items.every((item)=>isCanonicalOpportunityItem(item));
+    case "opportunities":return typeof output.selectedId==="string"&&Array.isArray(output.items)&&output.items.every((item)=>isCanonicalOpportunityItem(item));
     case "product":return isCanonicalProductOutput(output);
     case "avatar":return Array.isArray(output.currentSituation)&&Array.isArray(output.desiredOutcome);
     case "mechanism":return typeof output.mechanism==="string"&&typeof output.solutionMechanism==="string";
@@ -95,7 +95,7 @@ function isCanonicalOpportunityItem(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
   if (typeof item.id !== "string" || typeof item.name !== "string" || typeof item.problemId !== "string") return false;
-  if (!Array.isArray(item.evidenceIds)) return false;
+  if (!Array.isArray(item.evidenceIds)||!item.evidenceIds.every((id)=>typeof id==="string")) return false;
   const scores = item.scores;
   if (typeof scores !== "object" || scores === null || Array.isArray(scores)) return false;
   const scoreRecord = scores as Record<string, unknown>;

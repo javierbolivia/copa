@@ -130,14 +130,25 @@ export class ModuleService {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
     if(!isCanonicalModuleOutput(key,outputData))throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
     const active=this.activeVersion(projectId,key);if(!active)throw new Error("Genera una versión antes de editarla.");
+    if(active.freshness!=="fresh")throw new Error("La versión activa está obsoleta; regenera el módulo antes de editarlo.");
     const current=this.toResult(active);
     const parentIds=this.db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE project_id=? AND child_version_id=? ORDER BY created_at").all(projectId,current.versionId) as unknown as Array<{parent_version_id:string}>;
-    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:current.versionId,source:"user"},outputData,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    let normalizedOutput=outputData;
+    if(key==="opportunities"){
+      assertOpportunityReferences(outputData,this.parentOutput(projectId,current.versionId,"problems"));
+      normalizedOutput=applyOpportunityScoring(asRecord(outputData));
+    }
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:current.versionId,source:"user"},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
     return this.toResult(version);
   }
 
   approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
     const version=this.artifacts.getVersion(versionId);if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
+    if(version.status==="draft"&&key==="opportunities"){
+      if(!isCanonicalModuleOutput(key,version.outputData))throw new Error("El borrador no conserva el contrato estructurado de Oportunidades.");
+      assertOpportunityReferences(version.outputData,this.parentOutput(projectId,version.id,"problems"));
+      assertOpportunityScoring(version.outputData);
+    }
     if(key==="product"){
       const validation=this.validatePersistedProduct(version);
       if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
@@ -171,6 +182,8 @@ export class ModuleService {
     if(selectedProvider==="gemini"&&!this.options.gemini.configured)throw new Error("Gemini no está configurado. Define GEMINI_API_KEY o ejecuta con Demo / Mock.");
     if(selectedProvider==="deepseek"&&!this.options.deepSeek?.configured)throw new Error("DeepSeek no está configurado. Define DEEPSEEK_API_KEY o ejecuta con el proveedor Mock.");
     const startedAt = Date.now();
+    const activeVersionIdAtStart=this.activeVersion(projectId,key)?.id??null;
+    const researchFocusAtStart=key==="problems"?(this.settings.researchFocus(projectId)?.value??null):null;
 
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
     for (const parentKey of definition.parents) {
@@ -261,7 +274,7 @@ export class ModuleService {
         if(problemBatches){
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
-            const mapInput={...providerInput,stage:"map",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
+            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
             const mappedResult=await providerClient.generate<Record<string,unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;
@@ -269,7 +282,7 @@ export class ModuleService {
             mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
           }
           problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
-          providerInput={...providerInput,stage:"global_reduce",researchFocus:this.settings.researchFocus(projectId)?.value??project.niche,evidence:undefined,candidates:mapped};
+          providerInput={...providerInput,stage:"global_reduce",researchFocus:researchFocusAtStart??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
         generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})},maxOutputTokens:8_000});
@@ -296,11 +309,11 @@ export class ModuleService {
     //    legacy exact behavior; activation failures are explicit, never silent.
     let vocabularySnapshot: SemanticVocabularySnapshot | null = null;
     let vocabularyVersionId: string | null = null;
+    let vocabularyCandidateToActivateId: string | null = null;
     let vocabularyDryRun: DomainVocabularyDryRunResult | undefined;
     let discoveryAudit: Record<string, unknown> | undefined;
     if (key === "problems") {
-      const researchFocusValue = this.settings.researchFocus(projectId)?.value ?? null;
-      const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusValue);
+      const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusAtStart);
       const focusHash = researchFocusHash(effectiveFocus);
       const analysisSet = analysisSetSnapshot(this.db, projectId);
       const snapshotHash = analysisSnapshotHashFromRows(analysisSet.rows);
@@ -380,25 +393,20 @@ export class ModuleService {
           }
         }
         if (candidateSnapshot) {
-          // Activation by the EXACT candidate id that passed the dry-run — never "latest".
-          const activated = this.vocabulary.activateVocabularyVersion(
-            candidateSnapshot.vocabularyVersionId,
-          );
-          if (!activated) {
-            throw new Error(
-              `domain vocabulary candidate activation failed for ${candidateSnapshot.vocabularyVersionId}`,
-            );
-          }
+          // Activation is deferred until the final CAS transaction so a rejected
+          // generation cannot leave an ACTIVE vocabulary without an artifact.
+          vocabularyCandidateToActivateId = candidateSnapshot.vocabularyVersionId;
           vocabularySnapshot = candidateSnapshot;
           vocabularyVersionId = candidateSnapshot.vocabularyVersionId;
         }
       }
 
       const qualityOptions: {
+        researchFocus?: string | null;
         metrics?: Partial<ProblemPipelineMetrics>;
         vocabularySnapshot?: SemanticVocabularySnapshot | null;
         analysisSetSnapshot?: AnalysisSetSnapshot | null;
-      } = { analysisSetSnapshot: analysisSet };
+      } = { researchFocus: researchFocusAtStart, analysisSetSnapshot: analysisSet };
       if (problemMetrics) qualityOptions.metrics = problemMetrics;
       if (vocabularySnapshot) qualityOptions.vocabularySnapshot = vocabularySnapshot;
       output = qualityProblems(this.db, projectId, output, qualityOptions);
@@ -419,6 +427,10 @@ export class ModuleService {
       output.sourceCount = counts.sourceCount;
       output.commentCount = counts.commentCount;
       output.isDemo = counts.allDemo === 1;
+    }
+    if(key==="opportunities"){
+      assertOpportunityReferences(output,parentOutputs.problems);
+      output=applyOpportunityScoring(output);
     }
     // STRICT RESEARCH CONTRACT — a new Research generation is deterministically
     // validated against the complete module contract and grounded against the
@@ -445,6 +457,7 @@ export class ModuleService {
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
+      ...(key==="problems"?{researchFocus:deriveResearchFocus([],project.niche,researchFocusAtStart)}:{}),
       ...(vocabularyVersionId ? { vocabularyVersionId, vocabularyContentHash: vocabularySnapshot?.contentHash ?? null } : { vocabularyVersionId: null }),
       knowledgeUsed: knowledgeContext,
     };
@@ -459,6 +472,11 @@ export class ModuleService {
     const db=this.db.connection;
     db.exec("BEGIN IMMEDIATE");let createdVersionId:string|undefined;
     try {
+    this.assertActivationContext(projectId,key,parentIds,activeVersionIdAtStart,researchFocusAtStart);
+    if(vocabularyCandidateToActivateId){
+      const activated=this.vocabulary.activateVocabularyVersion(vocabularyCandidateToActivateId);
+      if(!activated)throw new Error(`domain vocabulary candidate activation failed for ${vocabularyCandidateToActivateId}`);
+    }
     const version = this.artifacts.createVersion({
       projectId,
       artifactType: key,
@@ -510,6 +528,29 @@ export class ModuleService {
     const row=this.db.connection.prepare(`SELECT active_version_id FROM artifacts
       WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1`).get(projectId,key) as {active_version_id:string|null}|undefined;
     return row?.active_version_id?this.artifacts.getVersion(row.active_version_id):undefined;
+  }
+
+  private parentOutput(projectId:string,childVersionId:string,parentKey:ModuleKey):unknown {
+    const row=this.db.connection.prepare(`SELECT parent.output_data FROM lineage_edges edge
+      JOIN artifact_versions parent ON parent.id=edge.parent_version_id
+      JOIN artifacts artifact ON artifact.id=parent.artifact_id
+      WHERE edge.project_id=? AND edge.child_version_id=? AND artifact.artifact_type=?
+      ORDER BY parent.created_at DESC LIMIT 1`).get(projectId,childVersionId,parentKey) as {output_data:string}|undefined;
+    return row?JSON.parse(row.output_data) as unknown:undefined;
+  }
+
+  private assertActivationContext(projectId:string,key:ModuleKey,parentIds:readonly string[],expectedActiveVersionId:string|null,expectedResearchFocus:string|null):void {
+    const current=this.db.connection.prepare("SELECT active_version_id FROM artifacts WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1").get(projectId,key) as {active_version_id:string|null}|undefined;
+    if((current?.active_version_id??null)!==expectedActiveVersionId)throw new Error("La versión activa cambió durante la generación; vuelve a ejecutar el módulo.");
+    if(key==="problems"&&(this.settings.researchFocus(projectId)?.value??null)!==expectedResearchFocus){
+      throw new Error("El Research Focus cambió durante la generación; vuelve a ejecutar Problemas.");
+    }
+    for(const parentId of parentIds){
+      const parent=this.db.connection.prepare(`SELECT version.freshness,artifact.active_version_id activeVersionId
+        FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id
+        WHERE version.id=? AND version.project_id=?`).get(parentId,projectId) as {freshness:string;activeVersionId:string|null}|undefined;
+      if(!parent||parent.freshness!=="fresh"||parent.activeVersionId!==parentId)throw new Error("Una versión padre cambió o quedó obsoleta durante la generación; vuelve a ejecutar el módulo.");
+    }
   }
 
   private isInvalidApprovedProduct(version:ArtifactVersion):boolean {
@@ -658,6 +699,48 @@ function applyOpportunityScoring(output:Record<string,unknown>):Record<string,un
   return {...output,items};
 }
 
+function assertOpportunityScoring(output:unknown):void{
+  const original=asRecord(output),normalized=applyOpportunityScoring(original);
+  const originalItems=Array.isArray(original.items)?original.items:[],normalizedItems=Array.isArray(normalized.items)?normalized.items:[];
+  for(let index=0;index<originalItems.length;index+=1){
+    const item=asRecord(originalItems[index]),expected=asRecord(normalizedItems[index]);
+    if(item.total!==expected.total||JSON.stringify(item.scoreFormula)!==JSON.stringify(expected.scoreFormula)){
+      throw new Error("El scoring del borrador no coincide con la fórmula autoritativa del backend.");
+    }
+  }
+}
+
+function assertOpportunityReferences(output:unknown,problemsOutput:unknown):void{
+  const opportunities=asRecord(output),problems=asRecord(problemsOutput);
+  const problemItems=Array.isArray(problems.items)?problems.items.map(asRecord):[];
+  const problemById=new Map(problemItems.filter((item)=>typeof item.id==="string").map((item)=>[item.id as string,item]));
+  const opportunityItems=Array.isArray(opportunities.items)?opportunities.items.map(asRecord):[];
+  const opportunityIds=new Set<string>();
+  for(const item of opportunityItems){
+    const id=typeof item.id==="string"?item.id:"";
+    if(!id||opportunityIds.has(id))throw new Error("Cada Oportunidad debe tener un id único.");
+    opportunityIds.add(id);
+    const problemId=typeof item.problemId==="string"?item.problemId:"";
+    const problem=problemById.get(problemId);
+    if(!problem)throw new Error(`La Oportunidad ${id} referencia un problemId que no existe en la versión padre de Problemas.`);
+    const allowedEvidence=problemEvidenceIds(problem);
+    const evidenceIds=Array.isArray(item.evidenceIds)?item.evidenceIds:[];
+    if(evidenceIds.some((evidenceId)=>typeof evidenceId!=="string"||!allowedEvidence.has(evidenceId))){
+      throw new Error(`La Oportunidad ${id} referencia evidencia que no pertenece al Problema padre.`);
+    }
+  }
+  if(typeof opportunities.selectedId!=="string"||!opportunityIds.has(opportunities.selectedId)){
+    throw new Error("selectedId debe identificar una Oportunidad existente.");
+  }
+}
+
+function problemEvidenceIds(problem:Record<string,unknown>):Set<string>{
+  const ids=new Set<string>();
+  if(Array.isArray(problem.evidenceIds))for(const id of problem.evidenceIds)if(typeof id==="string")ids.add(id);
+  if(Array.isArray(problem.evidence))for(const value of problem.evidence){const evidence=asRecord(value);if(typeof evidence.evidenceId==="string")ids.add(evidence.evidenceId);}
+  return ids;
+}
+
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{
   const replacements:[[string,string],[string,string],[string,string]]=[
     ["Fototeca en Orden",`Plan práctico: ${niche}`],
@@ -672,7 +755,7 @@ function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,
     contextual.insights=evidence.length?[{text:evidence[0]!.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[evidence[0]!.id]}]:[{text:`Hipótesis inicial sobre ${niche}; requiere evidencia.`,provenance:"AI_INFERENCE",evidenceIds:[]}];
   }
   if(key==="problems"){
-    contextual.items=evidence.slice(0,Math.min(5,evidence.length)).map((item,index)=>({id:`problem-${index+1}`,name:`Patrón observado ${index+1}`,category:"pain",summary:item.quoteText,frequency:Math.round(100/(index+1)),confidence:Math.min(95,55+evidence.length*4),evidenceIds:[item.id],quotes:[item.quoteText]}));
+    contextual.items=evidence.slice(0,Math.min(5,evidence.length)).map((item,index)=>({id:`problem-${index+1}`,name:`${niche}: patrón observado ${index+1}`,category:"pain",summary:item.quoteText,frequency:Math.round(100/(index+1)),confidence:Math.min(95,55+evidence.length*4),evidenceIds:[item.id],quotes:[item.quoteText]}));
   }
   if(key==="opportunities"){
     contextual=applyOpportunityScoring(contextual);
@@ -690,7 +773,7 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
   research:{schemaVersion:1,summary:`Mapa inicial para ${niche}`,subniches:[`Usuarios de ${niche}`],hypotheses:[{text:`Existe una necesidad resoluble en ${niche}.`,provenance:"AI_INFERENCE",evidenceIds:[]}],questions:["¿Qué resultado buscan y qué les impide lograrlo?"],searchSuggestions:[`${niche} problemas`,`${niche} soluciones`],insights:[]},
   sources:{schemaVersion:1,summary:`Corpus local para ${niche}`,sourceCount:0,commentCount:0,isDemo:false},
   problems:{schemaVersion:1,items:[]},
-  opportunities:{schemaVersion:1,items:[{id:"opportunity-1",name:`Solución práctica para ${niche}`,problemId:"problem-1",scores:{frequency:60,urgency:55,emotionalIntensity:50,willingnessToPay:40,solutionFeasibility:70,competition:50,differentiation:55,commercialPotential:55,evidenceConfidence:evidence.length?65:20},evidenceIds:ids}],selectedId:"opportunity-1"},
+  opportunities:{schemaVersion:1,items:[{id:"opportunity-1",name:`Solución práctica para ${niche}`,problemId:problem?.id??"",scores:{frequency:60,urgency:55,emotionalIntensity:50,willingnessToPay:40,solutionFeasibility:70,competition:50,differentiation:55,commercialPotential:55,evidenceConfidence:Array.isArray(problem?.evidenceIds)&&problem.evidenceIds.length?65:20},evidenceIds:Array.isArray(problem?.evidenceIds)?problem.evidenceIds:[]}],selectedId:"opportunity-1"},
   product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía digital",deliverables:["Guía paso a paso"],modules:["Diagnóstico","Plan","Implementación","Revisión"],checklists:[],templates:[],resources:[],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
   avatar:{schemaVersion:1,name:`Usuario objetivo de ${selectedProduct?.name??niche}`,productContext:selectedProduct?.concept,currentSituation:[{text:problem?.summary??quote,provenance:evidence.length?"EVIDENCE_BACKED":"AI_INFERENCE",evidenceIds:problem?.evidenceIds??(evidence[0]?[evidence[0].id]:[])}],desiredOutcome:[{text:selectedProduct?.outcome??`Lograr un resultado claro en ${niche}`,provenance:"AI_INFERENCE",evidenceIds:[]}],pains:problem?[problem.summary]:[],frustrations:[],desires:[],objections:["Necesita validar que el proceso sea realizable"],motivations:[selectedProduct?.promise].filter(Boolean),language:evidence.slice(0,3).map(item=>({text:item.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[item.id]})),purchaseConcerns:[]},
   mechanism:{schemaVersion:1,perceivedProblem:problem?.summary??quote,apparentCause:"Falta de un proceso claro",rootCauseHypothesis:"Las decisiones no están organizadas en una secuencia repetible",mechanism:"Método de diagnóstico, plan, acción y revisión",solutionMechanism:selectedProduct?.concept??"Pasos pequeños con criterios verificables",differentiation:"Trazabilidad entre evidencia y decisión",simpleExplanation:"Convertir un problema amplio en pasos comprobables",detailedExplanation:`El método ordena el trabajo de ${niche} y conserva el origen de cada decisión.`,provenance:"AI_INFERENCE",evidenceIds:problem?.evidenceIds??ids},

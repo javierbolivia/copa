@@ -318,9 +318,69 @@ describe("PHASE 4C — deterministic domain vocabulary dry-run", () => {
   });
 
   /* ================================================================ */
-  /*  TEST Q — decision flips are audited but never a hard-block       */
+  /*  TEST Q — vocabulary cannot manufacture support                  */
   /* ================================================================ */
-  it("Q: decision changes are audited and do not block by arbitrary threshold", () => {
+  it("Q: blocks a vocabulary that promotes unrelated evidence from no support to validated", () => {
+    seedAnalysisSet(db, projectId, [
+      { eid: "e1", cid: "c1", sid: "s1", quote: "La aplicación se bloquea al abrir" },
+      { eid: "e2", cid: "c2", sid: "s2", quote: "¿Por qué el precio es alto?" },
+      { eid: "e3", cid: "c3", sid: "s3", quote: "La tarjeta de memoria está llena" },
+      { eid: "e4", cid: "c4", sid: "s4", quote: "Los colores se ven apagados" },
+      { eid: "e5", cid: "c5", sid: "s5", quote: "El software tarda al procesar" },
+      { eid: "e6", cid: "c6", sid: "s6", quote: "La exportación pierde detalle" },
+    ]);
+    const candidate = snapshot("v-q-negative", [
+      { conceptKey: "dom_incoherente", label: "Concepto incoherente", cohesionWeight: 1, aliases: ["se bloquea", "precio alto"], exclusions: [] },
+    ]);
+    const result = runDomainVocabularyDryRun({
+      database: db,
+      projectId,
+      analysisSetSnapshot: analysisSetSnapshot(db, projectId),
+      rawProblems: problemsOutput([{
+        id: "p1", name: "La aplicación se bloquea", summary: "No abre correctamente", category: "pain",
+        evidenceIds: ["e2"], researchRelevanceScore: 100,
+      }]),
+      candidateSnapshot: candidate,
+    });
+
+    expect(result.decisionChanges).toContainEqual(expect.objectContaining({
+      clusterId: "p1", baselineDecision: "REJECTED_NO_SUPPORT", candidateDecision: "VALIDATED",
+    }));
+    expect(result.status).toBe("BLOCK");
+    expect(result.issues.some((issue) => issue.includes("manufacture support"))).toBe(true);
+  });
+
+  it("Q2: blocks empty or duplicate cluster ids before comparing decisions", () => {
+    seedAnalysisSet(db, projectId, [
+      { eid: "e1", cid: "c1", sid: "s1", quote: "La aplicación se bloquea al abrir" },
+      { eid: "e2", cid: "c2", sid: "s2", quote: "¿Por qué el precio es alto?" },
+      { eid: "e3", cid: "c3", sid: "s3", quote: "La tarjeta de memoria está llena" },
+      { eid: "e4", cid: "c4", sid: "s4", quote: "Los colores se ven apagados" },
+      { eid: "e5", cid: "c5", sid: "s5", quote: "El software tarda al procesar" },
+      { eid: "e6", cid: "c6", sid: "s6", quote: "La exportación pierde detalle" },
+    ]);
+    const candidate = snapshot("v-q-identity", [
+      { conceptKey: "dom_incoherente", label: "Concepto incoherente", cohesionWeight: 1, aliases: ["se bloquea", "precio alto"], exclusions: [] },
+    ]);
+    const invalidOutputs = [
+      problemsOutput([{ id: "", name: "La aplicación se bloquea", summary: "No abre", category: "pain", evidenceIds: ["e2"], researchRelevanceScore: 100 }]),
+      problemsOutput([
+        { id: "p1", name: "La aplicación se bloquea", summary: "No abre", category: "pain", evidenceIds: ["e2"], researchRelevanceScore: 100 },
+        { id: "p1", name: "El precio es alto", summary: "Cuesta demasiado", category: "pain", evidenceIds: ["e2"], researchRelevanceScore: 100 },
+      ]),
+    ];
+
+    for(const rawProblems of invalidOutputs){
+      const result=runDomainVocabularyDryRun({database:db,projectId,analysisSetSnapshot:analysisSetSnapshot(db,projectId),rawProblems,candidateSnapshot:candidate});
+      expect(result.status).toBe("BLOCK");
+      expect(result.issues.some((issue)=>issue.includes("cluster id"))).toBe(true);
+    }
+  });
+
+  /* ================================================================ */
+  /*  TEST R — legitimate cohesion decision flips remain audit-only   */
+  /* ================================================================ */
+  it("R: decision changes are audited and do not block by arbitrary threshold", () => {
     seedAnalysisSet(db, projectId, [
       { eid: "e1", cid: "c1", sid: "s1", quote: "El grano es un problema para editar" },
       { eid: "e2", cid: "c2", sid: "s2", quote: "El grano me da un problema serio" },

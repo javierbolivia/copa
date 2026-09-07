@@ -25,9 +25,11 @@ import { sequenceMatch, tokenizeForMatch } from "./semantic-vocabulary-matcher.j
  *   F    an individual alias matching >= 40%       -> BLOCK
  *   G    invariant / corruption (empty concepts)   -> BLOCK
  *   H    candidate qualityProblems run throws      -> BLOCK
+ *   I    REJECTED_NO_SUPPORT -> VALIDATED          -> BLOCK
  *
  * Decision flips are MEASURED and AUDITED but are NOT a hard-block by arbitrary
- * percentage (decision flips < 30% etc. is deliberately NOT implemented).
+ * percentage. The specific no-support promotion is blocked because vocabulary
+ * aliases must never manufacture evidence support.
  */
 
 export type DomainVocabularyDryRunStatus = "PASS" | "BLOCK";
@@ -137,7 +139,6 @@ function clustersOf(output: Record<string, unknown>): AuditCluster[] {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
     const row = raw as Record<string, unknown>;
     const clusterId = typeof row.clusterId === "string" ? row.clusterId : "";
-    if (!clusterId) return [];
     return [
       {
         clusterId,
@@ -163,6 +164,16 @@ function aggregatesOf(output: Record<string, unknown>): DomainVocabularyClusterA
     cohesionSum: clusters.reduce((sum, c) => sum + (c.cohesionScore ?? 0), 0),
     precisionSum: clusters.reduce((sum, c) => sum + (c.evidencePrecisionScore ?? 0), 0),
   };
+}
+
+function clusterIdentityIssues(clusters:readonly AuditCluster[],label:"baseline"|"candidate"):string[]{
+  const issues:string[]=[],seen=new Set<string>();
+  for(const cluster of clusters){
+    if(!cluster.clusterId){issues.push(`corruption: ${label} cluster id is empty`);continue;}
+    if(seen.has(cluster.clusterId))issues.push(`corruption: ${label} cluster id is duplicated: ${cluster.clusterId}`);
+    seen.add(cluster.clusterId);
+  }
+  return issues;
 }
 
 function decisionsOf(clusters: readonly AuditCluster[]): Map<string, string> {
@@ -322,10 +333,17 @@ export function runDomainVocabularyDryRun(
 
   const baselineClusters = clustersOf(baseline);
   const candidateClusters = candidate ? clustersOf(candidate) : [];
+  issues.push(...clusterIdentityIssues(baselineClusters,"baseline"));
+  if(candidate)issues.push(...clusterIdentityIssues(candidateClusters,"candidate"));
 
   const decisionChanges = candidate
     ? decisionChangesOf(baselineClusters, candidateClusters)
     : [];
+  for(const change of decisionChanges){
+    if(change.baselineDecision==="REJECTED_NO_SUPPORT"&&change.candidateDecision==="VALIDATED"){
+      issues.push(`block: vocabulary must not manufacture support for cluster ${change.clusterId}`);
+    }
+  }
 
   const baselineMetrics = baseline.analysisMetrics as ProblemPipelineMetrics;
   const candidateMetrics = (candidate?.analysisMetrics ?? {}) as ProblemPipelineMetrics;

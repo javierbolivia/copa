@@ -128,7 +128,10 @@ export class ModuleService {
 
   saveDraft(projectId:string,key:ModuleKey,outputData:unknown):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
-    if(!isCanonicalModuleOutput(key,outputData))throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
+    if(!isCanonicalModuleOutput(key,outputData)){
+      if(key==="opportunities")throw new Error("Para editar Oportunidades se requieren los nueve scores válidos (0–100), selectedId y referencias estructuradas. Si esta versión histórica no tiene scores, regenera Oportunidades; el histórico se conserva sin cambios.");
+      throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
+    }
     const active=this.activeVersion(projectId,key);if(!active)throw new Error("Genera una versión antes de editarla.");
     if(active.freshness!=="fresh")throw new Error("La versión activa está obsoleta; regenera el módulo antes de editarlo.");
     const current=this.toResult(active);

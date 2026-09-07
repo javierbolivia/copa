@@ -3,6 +3,7 @@ import { BookmarkCheck, CheckCircle2, GitBranch, Globe2, ShieldX } from "lucide-
 import { useEffect, useMemo, useState } from "react";
 import type { TraceabilityGraph } from "../../api/client";
 import { api } from "../../api/client";
+import { useRequestGuard } from "../../api/useRequestGuard";
 import { AvatarEditor, BeliefsEditor, LandingBuilder, MechanismEditor, OfferEditor, ProductEditor } from "./index";
 import type { AvatarEditorValue, BeliefsEditorValue, LandingEditorValue, LandingVersion, MechanismEditorValue, OfferEditorValue, ProductEditorValue } from "./types";
 import { ContentWorkspace, EmailsWorkspace, FunnelWorkspace, ProductFinalWorkspace, type CampaignContent, type CampaignEmail, type FunnelNode, type ProductFile } from "./CampaignWorkspaces";
@@ -21,10 +22,11 @@ export interface RefinedModuleOutputProps {
 
 export function RefinedModuleOutput(props:RefinedModuleOutputProps) {
   const {moduleKey,selected}=props;
+  const requests=useRequestGuard(`${props.projectId}:${moduleKey}:${selected.versionId}`);
   const [saving,setSaving]=useState(false),[message,setMessage]=useState<string|null>(null),[trace,setTrace]=useState<TraceabilityGraph|null>(null);
-  const save=async(outputData:unknown)=>{setSaving(true);setMessage(null);try{const draft=await api.saveModuleDraft(props.projectId,moduleKey,outputData);props.onVersionCreated(draft);setMessage("Borrador guardado. Revísalo y apruébalo cuando esté listo.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo guardar el borrador.");}finally{setSaving(false);}};
-  const approve=async()=>{setSaving(true);setMessage(null);try{const approved=await api.approveModuleVersion(props.projectId,moduleKey,selected.versionId);props.onVersionCreated(approved);setMessage("Versión aprobada y disponible para módulos posteriores.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo aprobar la versión.");}finally{setSaving(false);}};
-  const remember=async(decision:"APPROVED"|"REJECTED",visibility:"PROJECT"|"GLOBAL"="PROJECT")=>{setSaving(true);setMessage(null);try{await api.saveMemoryDecision(props.projectId,selected.versionId,{decision,reusable:decision==="APPROVED",preferred:decision==="APPROVED",visibility,editedOutput:selected.outputData});setMessage(decision==="APPROVED"?visibility==="GLOBAL"?"Guardado explícitamente como ejemplo futuro global.":"Guardado como ejemplo futuro preferido para este proyecto.":"Marcado como ejemplo rechazado; nunca se usará como referencia positiva.");}catch(error){setMessage(error instanceof Error?error.message:"No se pudo guardar la decisión de memoria.");}finally{setSaving(false);}};
+  const save=async(outputData:unknown)=>{const current=requests.begin();setSaving(true);setMessage(null);try{const draft=await api.saveModuleDraft(props.projectId,moduleKey,outputData);if(!current())return;props.onVersionCreated(draft);setMessage("Borrador guardado. Revísalo y apruébalo cuando esté listo.");}catch(error){if(current())setMessage(error instanceof Error?error.message:"No se pudo guardar el borrador.");}finally{if(current())setSaving(false);}};
+  const approve=async()=>{const current=requests.begin();setSaving(true);setMessage(null);try{const approved=await api.approveModuleVersion(props.projectId,moduleKey,selected.versionId);if(!current())return;props.onVersionCreated(approved);setMessage("Versión aprobada y disponible para módulos posteriores.");}catch(error){if(current())setMessage(error instanceof Error?error.message:"No se pudo aprobar la versión.");}finally{if(current())setSaving(false);}};
+  const remember=async(decision:"APPROVED"|"REJECTED",visibility:"PROJECT"|"GLOBAL"="PROJECT")=>{const current=requests.begin();setSaving(true);setMessage(null);try{await api.saveMemoryDecision(props.projectId,selected.versionId,{decision,reusable:decision==="APPROVED",preferred:decision==="APPROVED",visibility,editedOutput:selected.outputData});if(!current())return;setMessage(decision==="APPROVED"?visibility==="GLOBAL"?"Guardado explícitamente como ejemplo futuro global.":"Guardado como ejemplo futuro preferido para este proyecto.":"Marcado como ejemplo rechazado; nunca se usará como referencia positiva.");}catch(error){if(current())setMessage(error instanceof Error?error.message:"No se pudo guardar la decisión de memoria.");}finally{if(current())setSaving(false);}};
   const rememberGlobally=()=>{
     if(window.confirm("Esta decisión se compartirá como referencia global para futuros proyectos. ¿Quieres continuar?"))void remember("APPROVED","GLOBAL");
   };

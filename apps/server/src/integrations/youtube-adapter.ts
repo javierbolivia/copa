@@ -122,6 +122,9 @@ export class YouTubeAdapter {
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
   private readonly baseUrl = "https://www.googleapis.com/youtube/v3";
+  // Adapter-local single-flight, not a persistent cache: no cross-credential
+  // sharing and no reuse of metadata after the HTTP request has settled.
+  private readonly pendingMetadata = new Map<string, Promise<YouTubeListResponse>>();
 
   constructor(options: YouTubeAdapterOptions = {}) {
     this.apiKey = options.apiKey;
@@ -251,7 +254,21 @@ export class YouTubeAdapter {
     };
   }
 
-  private async get(resource: string, parameters: Readonly<Record<string, string>>): Promise<YouTubeListResponse> {
+  private get(resource: string, parameters: Readonly<Record<string, string>>): Promise<YouTubeListResponse> {
+    if (resource !== "videos" && resource !== "channels") return this.request(resource, parameters);
+    const key = JSON.stringify([resource, Object.entries(parameters).sort(([a],[b])=>a.localeCompare(b)).map(([name,value])=>[
+      name, name === "id" ? [...new Set(value.split(","))].sort().join(",") : value,
+    ])]);
+    const existing = this.pendingMetadata.get(key);
+    if (existing) return existing;
+    // Bound bookkeeping under many distinct requests; this is not a quota limiter.
+    if (this.pendingMetadata.size >= 100) return this.request(resource, parameters);
+    const pending = this.request(resource, parameters).finally(()=>{this.pendingMetadata.delete(key);});
+    this.pendingMetadata.set(key, pending);
+    return pending;
+  }
+
+  private async request(resource: string, parameters: Readonly<Record<string, string>>): Promise<YouTubeListResponse> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "YouTube no está configurado.");
     const url = new URL(`${this.baseUrl}/${resource}`);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);

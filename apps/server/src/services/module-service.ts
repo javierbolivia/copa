@@ -277,6 +277,11 @@ export class ModuleService {
       }
       catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
       output = generated.output;
+      // The provider is never the source of truth for `total`: recompute it
+      // deterministically from the validated `scores` (isCanonicalModuleOutput
+      // above already rejected missing/invalid scores). Any `total` the
+      // provider sent is discarded here.
+      if(key==="opportunities")output=applyOpportunityScoring(output);
       usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
       reportedModel = generated.reportedModel;
       structuredOutputDiagnostics = generated.structuredOutputDiagnostics;
@@ -629,6 +634,30 @@ function sanitizeProductKnowledge(
   }));
 }
 
+/** Deterministic weighted formula for Opportunity `total` (opportunity-scorer.md).
+ * Versioned as "1.0"; weights sum to 1.00. This is the ONLY place `total` is
+ * computed: the provider's own `total` (if any) is always discarded, and this
+ * function must be applied AFTER the final module output is assembled —
+ * both for the mock/demo path (inside contextualize) and for the real
+ * provider path (after `output = generated.output` in run()). */
+const OPPORTUNITY_SCORE_WEIGHTS = {
+  frequency:.15,urgency:.15,emotionalIntensity:.15,willingnessToPay:.10,
+  solutionFeasibility:.15,competition:.05,differentiation:.10,commercialPotential:.10,
+  evidenceConfidence:.05,
+} as const;
+
+function applyOpportunityScoring(output:Record<string,unknown>):Record<string,unknown>{
+  if(!Array.isArray(output.items))return output;
+  const items=output.items.map((raw)=>{
+    if(typeof raw!=="object"||raw===null||Array.isArray(raw))return raw;
+    const item=raw as Record<string,unknown>;
+    const scores=item.scores as Record<string,number>|undefined;
+    const total=Math.round(Object.entries(OPPORTUNITY_SCORE_WEIGHTS).reduce((sum,[name,weight])=>sum+(scores?.[name]??0)*weight,0));
+    return {...item,total,scoreFormula:{version:"1.0",weights:OPPORTUNITY_SCORE_WEIGHTS},rationale:`Puntuación determinista ${total}/100 calculada con pesos versionados.`};
+  });
+  return {...output,items};
+}
+
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{
   const replacements:[[string,string],[string,string],[string,string]]=[
     ["Fototeca en Orden",`Plan práctico: ${niche}`],
@@ -645,8 +674,8 @@ function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,
   if(key==="problems"){
     contextual.items=evidence.slice(0,Math.min(5,evidence.length)).map((item,index)=>({id:`problem-${index+1}`,name:`Patrón observado ${index+1}`,category:"pain",summary:item.quoteText,frequency:Math.round(100/(index+1)),confidence:Math.min(95,55+evidence.length*4),evidenceIds:[item.id],quotes:[item.quoteText]}));
   }
-  if(key==="opportunities"&&Array.isArray(contextual.items)){
-    contextual.items=contextual.items.map((raw)=>{const item=raw as Record<string,unknown>,scores=item.scores as Record<string,number>;const weights={frequency:.15,urgency:.15,emotionalIntensity:.15,willingnessToPay:.10,solutionFeasibility:.15,competition:.05,differentiation:.10,commercialPotential:.10,evidenceConfidence:.05};const total=Math.round(Object.entries(weights).reduce((sum,[name,weight])=>sum+(scores[name]??0)*weight,0));return {...item,total,scoreFormula:{version:"1.0",weights},rationale:`Puntuación determinista ${total}/100 calculada con pesos versionados.`};});
+  if(key==="opportunities"){
+    contextual=applyOpportunityScoring(contextual);
   }
   return contextual;
 }

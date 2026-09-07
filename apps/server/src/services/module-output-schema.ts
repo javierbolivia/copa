@@ -13,13 +13,35 @@ function object(properties: Record<string, JsonSchema>, required = Object.keys(p
   return { type: "object", properties, required, additionalProperties: true };
 }
 
+/** 0-100 bounded score used by every Opportunity scoring criterion. Rejects
+ * NaN, out-of-range values and non-numeric types via the shared JSON Schema
+ * validator (minimum/maximum + numeric type checks). */
+const opportunityScoreValue = { type: "number", minimum: 0, maximum: 100 } as const;
+
+/** The 9 criteria the provider MUST supply per Opportunity (opportunity-scorer.md).
+ * `total`/`scoreFormula` are intentionally NOT required here: the backend always
+ * computes and injects them after receiving the provider output (see
+ * applyOpportunityScoring in module-service.ts); the provider is never the
+ * source of truth for the weighted total. */
+const opportunityScores = object({
+  frequency: opportunityScoreValue,
+  urgency: opportunityScoreValue,
+  emotionalIntensity: opportunityScoreValue,
+  willingnessToPay: opportunityScoreValue,
+  solutionFeasibility: opportunityScoreValue,
+  competition: opportunityScoreValue,
+  differentiation: opportunityScoreValue,
+  commercialPotential: opportunityScoreValue,
+  evidenceConfidence: opportunityScoreValue,
+});
+
 /** Stable, module-specific contracts. They validate the fields consumed by the app while
  * allowing additive prompt evolution. OpenAI still receives these as structured outputs. */
 export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
   research: object({ schemaVersion: { type: "integer" }, summary: string, subniches: nonEmptyStringArray, hypotheses: nonEmptyResearchItemArray, questions: nonEmptyStringArray, searchSuggestions: nonEmptyStringArray, insights: nonEmptyResearchItemArray }),
   sources: object({ schemaVersion: { type: "integer" }, summary: string, sourceCount: { type: "integer" }, commentCount: { type: "integer" }, isDemo: { type: "boolean" } }),
   problems: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, category: string, summary: string, evidenceIds }) } }),
-  opportunities: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, problemId: string, evidenceIds }) }, selectedId: string }),
+  opportunities: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, problemId: string, evidenceIds, scores: opportunityScores }) }, selectedId: string }),
   product: ProductModuleOutputSchema,
   avatar: object({ schemaVersion: { type: "integer" }, name: string, currentSituation: { type: "array", items: object({ text: string, provenance: string, evidenceIds }) }, desiredOutcome: { type: "array", items: object({ text: string, provenance: string, evidenceIds }) } }),
   mechanism: object({ schemaVersion: { type: "integer" }, perceivedProblem: string, mechanism: string, solutionMechanism: string, simpleExplanation: string, provenance: string, evidenceIds }),
@@ -39,7 +61,8 @@ export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
   switch(key){
     case "research":return typeof output.summary==="string";
     case "sources":return typeof output.sourceCount==="number"&&typeof output.commentCount==="number";
-    case "problems":case "opportunities":return Array.isArray(output.items);
+    case "problems":return Array.isArray(output.items);
+    case "opportunities":return Array.isArray(output.items)&&output.items.every((item)=>isCanonicalOpportunityItem(item));
     case "product":return isCanonicalProductOutput(output);
     case "avatar":return Array.isArray(output.currentSituation)&&Array.isArray(output.desiredOutcome);
     case "mechanism":return typeof output.mechanism==="string"&&typeof output.solutionMechanism==="string";
@@ -51,6 +74,32 @@ export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
     case "content":return Array.isArray(output.calendar);
     case "final_product":return typeof output.guide==="object"&&Array.isArray(output.checklist)&&Array.isArray(output.workbook);
   }
+}
+
+/** The 9 canonical Opportunity scoring criteria (prompts/opportunity-scorer.md).
+ * Exported so module-service.ts can validate/read the exact same set without
+ * duplicating the list. */
+export const OPPORTUNITY_SCORE_CRITERIA = [
+  "frequency", "urgency", "emotionalIntensity", "willingnessToPay", "solutionFeasibility",
+  "competition", "differentiation", "commercialPotential", "evidenceConfidence",
+] as const;
+
+function isValidOpportunityScore(value: unknown): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+}
+
+/** Runtime guard mirroring the `opportunities` JSON Schema: every item must
+ * carry the 9 bounded numeric scores. `total`/`scoreFormula` are backend-only
+ * and deliberately not checked here (the provider is never their source). */
+function isCanonicalOpportunityItem(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  if (typeof item.id !== "string" || typeof item.name !== "string" || typeof item.problemId !== "string") return false;
+  if (!Array.isArray(item.evidenceIds)) return false;
+  const scores = item.scores;
+  if (typeof scores !== "object" || scores === null || Array.isArray(scores)) return false;
+  const scoreRecord = scores as Record<string, unknown>;
+  return OPPORTUNITY_SCORE_CRITERIA.every((criterion) => isValidOpportunityScore(scoreRecord[criterion]));
 }
 
 const PRODUCT_REQUIRED_TEXT = ["id", "name", "concept", "problem", "outcome", "promise", "format"] as const;

@@ -10,6 +10,8 @@ export { buildKnowledgeContext, estimateContextTokens } from "./context-builder.
 export { DisabledEmbeddingProvider } from "./embedding-provider.js";
 export type { EmbeddingBatchResult, EmbeddingProvider } from "./embedding-provider.js";
 export { KnowledgeRetriever } from "./knowledge-retriever.js";
+export { INDEXABLE_ARTIFACT_TYPES, KnowledgeIndexBuilder, artifactChunks, knowledgeIndexFingerprint } from "./knowledge-index-builder.js";
+export type { DerivedKnowledgeChunk, IndexableArtifactType, KnowledgeIndexAudit, KnowledgeIndexEntityType, KnowledgeIndexSyncResult, KnowledgeSemanticCandidate } from "./knowledge-index-builder.js";
 export { LearningMemoryService } from "./learning-memory-service.js";
 export type {
   LearnedMemoryCandidate,

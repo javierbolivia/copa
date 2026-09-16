@@ -34,6 +34,22 @@ describe("Product Studio backend", () => {
     return response.json<ProductDocument>();
   }
 
+  it("rechaza una versión de producto de otro proyecto al crear un ebook", async () => {
+    const source = await demo();
+    const target = await demo();
+    const foreign = (await app.inject({ method: "GET", url: `/api/projects/${source.id}/modules/product` }))
+      .json<{ results: Array<{ versionId: string }> }>().results[0]!;
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${target.id}/product-documents`,
+      payload: { documentType: "ebook", language: "es", length: "short", level: "beginner", productArtifactVersionId: foreign.versionId },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: "product_document_blocked" });
+  });
+
   it("crea wizard persistente, edita outline, genera por lote y aprueba", async () => {
     const project = await demo();
     let document = await create(project);

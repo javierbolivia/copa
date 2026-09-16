@@ -168,6 +168,34 @@ describe("KnowledgeIndexBuilder video transcripts", () => {
     builder.close();
   });
 
+  it("FTS5 retrieves the exact spoken segment for a content query, with its own timestamp and source provenance, not sibling segments", () => {
+    const source=fixture(); databases.push(source);
+    // A second, later segment of the SAME transcript with clearly distinct spoken content
+    // and non-overlapping timestamps, to prove the query resolves to the correct segment.
+    source.prepare("INSERT INTO video_transcript_segments VALUES(?,?,?,?,?,?,?,?,?)").run("segment-a2","project-a","transcript-a","source-a","video-a",1,4,7.2,"Ahora hablamos sobre la alimentación balanceada del cachorro");
+    const builder=new KnowledgeIndexBuilder(source); builder.sync();
+
+    const walkHits=builder.search("project-a","explica");
+    expect(walkHits).toHaveLength(1);
+    expect(walkHits[0]).toMatchObject({
+      entityType:"video_transcript", entityId:"segment-a", sourceId:"source-a", videoId:"video-a",
+      language:"es", startSeconds:1.5, endSeconds:4, sourceType:"VIDEO_TRANSCRIPT",
+      text:"En el video se explica el paseo tranquilo",
+    });
+
+    const feedingHits=builder.search("project-a","alimentación");
+    expect(feedingHits).toHaveLength(1);
+    expect(feedingHits[0]).toMatchObject({
+      entityType:"video_transcript", entityId:"segment-a2", sourceId:"source-a", videoId:"video-a",
+      language:"es", startSeconds:4, endSeconds:7.2, sourceType:"VIDEO_TRANSCRIPT",
+      text:"Ahora hablamos sobre la alimentación balanceada del cachorro",
+    });
+    // Each query must resolve to its own segment, never the sibling's timestamp/entity.
+    expect(walkHits[0]!.entityId).not.toBe(feedingHits[0]!.entityId);
+    expect(walkHits[0]!.startSeconds).not.toBe(feedingHits[0]!.startSeconds);
+    builder.close();
+  });
+
   it("never creates a chunk for an empty transcript segment", () => {
     const source=fixture(); databases.push(source);
     source.prepare("INSERT INTO sources VALUES(?,?,?,?,?)").run("source-f","project-a",1,"ready","youtube");

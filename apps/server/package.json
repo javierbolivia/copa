@@ -11,6 +11,7 @@
     "test": "vitest run",
     "benchmark:semantic": "tsx src/scripts/semantic-retrieval-benchmark.ts",
     "benchmark:semantic-hardening": "tsx src/scripts/semantic-retrieval-hardening-benchmark.ts",
+    "benchmark:knowledge-real": "tsx src/scripts/knowledge-real-benchmark.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

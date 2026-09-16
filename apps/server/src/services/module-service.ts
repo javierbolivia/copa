@@ -54,6 +54,25 @@ import {
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 
+export function sanitizeQuoteForLlm(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/al morir\s+mi\s+mam[aá]/gi, "al fallecer mi madre")
+    .replace(/hijo\s+de\s+puta/gi, "maltratador")
+    .replace(/hija\s+de\s+puta/gi, "maltratadora")
+    .replace(/cortad[oa]s?\s+las?\s+dos?\s+manos?/gi, "sancionado fuertemente")
+    .replace(/y\s+no\s+te\s+voy\s+a\s+dar/gi, "y no te la daré")
+    .replace(/\bmierda\b/gi, "problema")
+    .replace(/\bimb[eé]ciles?\b/gi, "irresponsables");
+}
+
+export function sanitizeEvidenceForLlm<T extends { id: string; quoteText: string }>(items: T[]): T[] {
+  return items.map((item) => ({
+    ...item,
+    quoteText: sanitizeQuoteForLlm(item.quoteText),
+  }));
+}
+
 export interface ModuleServiceOptions {
   readonly openAI: OpenAIProvider;
   readonly gemini: GeminiProvider;
@@ -368,7 +387,7 @@ export class ModuleService {
       } : {
         project: { name: project.name, niche: project.niche,...(key==="research"?{description:project.description}:{}) }, settings: projectSettings,
         ...(key==="research"?{researchFocus:researchFocusAtStart}:{}),
-        moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
+        moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence: sanitizeEvidenceForLlm(evidence), knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
         additionalInstructions: instructions?.trim() || null,
       };
       let generated!:LlmGenerateResult<Record<string,unknown>>;
@@ -378,7 +397,7 @@ export class ModuleService {
         if(problemBatches){
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
-            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batch,batch:{index:index+1,total:problemBatches.length}};
+            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:sanitizeEvidenceForLlm(batch),batch:{index:index+1,total:problemBatches.length}};
             const mappedResult=await providerClient.generate<Record<string,unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;

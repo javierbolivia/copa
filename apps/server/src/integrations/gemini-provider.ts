@@ -42,6 +42,14 @@ async function geminiHttpError(response: Response): Promise<IntegrationError> {
   return new IntegrationError("http_error", message ? `${prefix}: ${message}` : `${prefix}.`, { status: response.status, retryable: response.status >= 500 });
 }
 
+const GEMINI_SAFETY_SETTINGS = [
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
+];
+
 export class GeminiProvider implements LlmProvider {
   readonly name = "gemini";
   private readonly apiKey: string | undefined;
@@ -68,7 +76,12 @@ export class GeminiProvider implements LlmProvider {
         response = await this.fetchFn(`${this.endpoint}/${encodeURIComponent(request.model)}:generateContent`, {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey! },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: request.systemInstructions }] }, contents: [{ role: "user", parts: [{ text: request.input }] }], generationConfig }),
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: request.systemInstructions }] },
+            contents: [{ role: "user", parts: [{ text: request.input }] }],
+            generationConfig,
+            safetySettings: GEMINI_SAFETY_SETTINGS,
+          }),
           signal,
         });
       } catch (error) { throw normalizeFetchError(error, "Gemini"); }
@@ -81,7 +94,10 @@ export class GeminiProvider implements LlmProvider {
       return { response, body };
     });
     const candidates = body.candidates;
-    if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== "object") throw new IntegrationError("invalid_response", "Gemini no devolvió candidatos.");
+    if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== "object") {
+      const details = JSON.stringify(body).slice(0, 300);
+      throw new IntegrationError("invalid_response", `Gemini no devolvió candidatos. Respuesta: ${details}`);
+    }
     const parts = (candidates[0] as { content?: { parts?: Array<{ text?: unknown }> } }).content?.parts;
     const text = Array.isArray(parts) ? parts.map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";
     if (!text.trim()) throw new IntegrationError("invalid_response", "Gemini no devolvió texto.");

@@ -3,6 +3,7 @@ import type { JobRecord, JobRepository } from "../repositories/job-repository.js
 import type { SourceRepository } from "../repositories/source-repository.js";
 import { IntegrationError } from "../integrations/integration-error.js";
 import { YouTubeAdapter, extractYouTubeVideoId, type YouTubeComment } from "../integrations/youtube-adapter.js";
+import type { YouTubeTranscriptClient } from "../integrations/youtube-transcript-client.js";
 import { scoreYouTubeResearch, type ResearchScoredVideo } from "./youtube-research-score.js";
 
 export { extractYouTubeVideoId } from "../integrations/youtube-adapter.js";
@@ -16,7 +17,12 @@ export class YouTubeImportService {
   static readonly MAX_TOP_LEVEL_COMMENTS = 2_000;
   private readonly adapter:YouTubeAdapter;
   private closed=false;
-  constructor(private readonly sources:SourceRepository,private readonly jobs:JobRepository,apiKey:string|undefined=process.env.YOUTUBE_API_KEY,adapter?:YouTubeAdapter){this.adapter=adapter??new YouTubeAdapter(apiKey===undefined?{}:{apiKey});}
+  /**
+   * Optional. When absent, transcript acquisition is skipped entirely: comment
+   * import must never depend on captions being fetchable. Injected here (not
+   * constructed unconditionally) so tests keep zero network/database surprises.
+   */
+  constructor(private readonly sources:SourceRepository,private readonly jobs:JobRepository,apiKey:string|undefined=process.env.YOUTUBE_API_KEY,adapter?:YouTubeAdapter,private readonly transcripts?:YouTubeTranscriptClient){this.adapter=adapter??new YouTubeAdapter(apiKey===undefined?{}:{apiKey});}
   isConfigured():boolean{return this.adapter.configured;}
   close():void{this.closed=true;}
   async search(query:string,pageToken?:string):Promise<{items:ResearchScoredVideo[];nextPageToken?:string}>{
@@ -73,8 +79,29 @@ export class YouTubeImportService {
         this.jobs.checkpoint(projectId,jobId,{url:job.payload.url,topLevelLimit:limit,...(token?{pageToken:token}:{}),pageCount,savedCount,threadCount},Math.min(95,10+pageCount*7),`${threadCount} / ${limit} comentarios`);
         if(!token)break;
       }
+      if(this.superseded(job))return;
+      // The `videos` row only exists once finishYouTubeImport has run at least
+      // once above, so the transcript is fetched only now, after comments are
+      // already durably saved. A caption failure here must never undo that.
+      await this.acquireTranscript(projectId,job.sourceId,videoId);
       if(!this.superseded(job))this.jobs.complete(projectId,jobId,{videoId,count:savedCount,threadCount});
     }catch(error){if(this.superseded(job))return;const code=error instanceof IntegrationError?error.code:"database_error",message=error instanceof Error?error.message:"La importación falló.";this.fail(projectId,jobId,job.sourceId,code,message);}
+  }
+  /**
+   * Best-effort caption acquisition. A transcript is never a prerequisite for
+   * import: network failures, disabled captions, or an absent client are all
+   * swallowed here so the surrounding comment import always completes. Any
+   * failure is still recorded (not silently dropped) via saveYouTubeTranscript,
+   * whose non-ready statuses the Knowledge Index already excludes.
+   */
+  private async acquireTranscript(projectId:string,sourceId:string,videoId:string):Promise<void>{
+    if(!this.transcripts)return;
+    try{
+      const result=await this.transcripts.fetch(videoId);
+      this.sources.saveYouTubeTranscript(projectId,sourceId,result);
+    }catch{
+      // Never let a transcript-layer defect fail the surrounding comment import.
+    }
   }
   private superseded(attempt:JobRecord):boolean{
     if(this.closed)return true;

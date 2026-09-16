@@ -18,6 +18,7 @@ import { registerProjectRoutes } from "./routes/projects.js";
 import { registerProjectSystemRoutes } from "./routes/project-system.js";
 import { registerSourceRoutes } from "./routes/sources.js";
 import { YouTubeImportService } from "./services/youtube-import-service.js";
+import { YouTubeTranscriptClient } from "./integrations/youtube-transcript-client.js";
 import { FileExporterService } from "./services/file-exporter-service.js";
 import { ModuleService } from "./services/module-service.js";
 import { registerModuleRoutes } from "./routes/modules.js";
@@ -162,7 +163,7 @@ export async function createApp(
     ...(options.marketResearch?.now ? { now: options.marketResearch.now } : {}),
   });
 
-  const youtubeImports = new YouTubeImportService(sources, jobs);
+  const youtubeImports = new YouTubeImportService(sources, jobs, process.env.YOUTUBE_API_KEY, undefined, new YouTubeTranscriptClient());
   app.addHook("onClose", async () => {
     youtubeImports.close();
     database.close();

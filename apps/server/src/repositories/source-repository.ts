@@ -1,9 +1,11 @@
 import type { Comment, CreateSourceInput, EvidenceSnippet, Source, SourceBundle } from "@our-platform/shared";
 import type { StatementResultingChanges } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
 import type { YouTubeComment, YouTubeThread, YouTubeVideo } from "../integrations/youtube-adapter.js";
+import type { YouTubeTranscriptResult } from "../integrations/youtube-transcript-client.js";
 
 type SourceType = "youtube" | "manual" | "demo";
 
@@ -16,6 +18,13 @@ interface CommentRow {
   author: string; text: string; likes: number; published_at: string | null;
   thread_id: string | null; parent_comment_id: string | null; is_reply: number; is_demo: number; analysis_eligible:number;noise_reason:string|null;quality_score:number;
 }
+export interface VideoTranscript {
+  readonly id:string; readonly projectId:string; readonly sourceId:string; readonly videoId:string;
+  readonly language:string|null; readonly isGenerated:boolean|null; readonly provider:"youtube-transcript";
+  readonly origin:"VIDEO_TRANSCRIPT"; readonly status:YouTubeTranscriptResult["status"]; readonly fingerprint:string|null;
+  readonly retrievedAt:string; readonly errorCode:string|null; readonly errorMessage:string|null;
+}
+export interface VideoTranscriptSegment { readonly id:string; readonly transcriptId:string; readonly sourceId:string; readonly videoId:string; readonly segmentIndex:number; readonly startSeconds:number; readonly endSeconds:number; readonly text:string; readonly fingerprint:string; }
 
 export interface SourceListFilter { query?: string; sourceType?: SourceType }
 export interface CommentListFilter {
@@ -47,6 +56,9 @@ function classifyComment(text:string,isReply:boolean):{eligible:boolean;reason:s
 function parseMetadata(value: string): Record<string, unknown> {
   try { return JSON.parse(value) as Record<string, unknown>; } catch { return {}; }
 }
+const transcriptFingerprint=(value:string)=>createHash("sha256").update(value.normalize("NFKC").replace(/\s+/g," ").trim()).digest("hex");
+const toTranscript=(row:Record<string,unknown>):VideoTranscript=>({id:String(row.id),projectId:String(row.project_id),sourceId:String(row.source_id),videoId:String(row.video_id),language:row.language as string|null,isGenerated:row.is_generated===null?null:Number(row.is_generated)===1,provider:"youtube-transcript",origin:"VIDEO_TRANSCRIPT",status:String(row.status) as YouTubeTranscriptResult["status"],fingerprint:row.fingerprint as string|null,retrievedAt:String(row.retrieved_at),errorCode:row.error_code as string|null,errorMessage:row.error_message as string|null});
+const toTranscriptSegment=(row:Record<string,unknown>):VideoTranscriptSegment=>({id:String(row.id),transcriptId:String(row.transcript_id),sourceId:String(row.source_id),videoId:String(row.video_id),segmentIndex:Number(row.segment_index),startSeconds:Number(row.start_seconds),endSeconds:Number(row.end_seconds),text:String(row.text),fingerprint:String(row.text_fingerprint)});
 function toSource(row: SourceRow): Source {
   return { id: row.id, projectId: row.project_id, sourceType: row.source_type, title: row.title,
     url: row.url, status: row.status, includeInAnalysis:row.include_in_analysis===1, metadata: parseMetadata(row.metadata_json), createdAt: row.created_at };
@@ -107,6 +119,31 @@ export class SourceRepository {
   }
   getEvidence(projectId:string,evidenceId:string):EvidenceSnippet|undefined{
     return this.database.connection.prepare(`SELECT e.id,e.project_id projectId,e.source_id sourceId,e.comment_id commentId,e.quote_text quoteText,e.provenance,s.title sourceTitle,c.author FROM evidence_snippets e JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id WHERE e.project_id=? AND e.id=?`).get(projectId,evidenceId) as EvidenceSnippet|undefined;
+  }
+
+  getVideoTranscript(projectId:string,sourceId:string):VideoTranscript|undefined{
+    const row=this.database.connection.prepare("SELECT * FROM video_transcripts WHERE project_id=? AND source_id=?").get(projectId,sourceId) as Record<string,unknown>|undefined;
+    return row?toTranscript(row):undefined;
+  }
+  listVideoTranscriptSegments(projectId:string,sourceId:string):VideoTranscriptSegment[]{
+    return (this.database.connection.prepare(`SELECT s.* FROM video_transcript_segments s JOIN video_transcripts t ON t.id=s.transcript_id AND t.project_id=s.project_id WHERE s.project_id=? AND s.source_id=? ORDER BY s.segment_index`).all(projectId,sourceId) as Record<string,unknown>[]).map(toTranscriptSegment);
+  }
+  saveYouTubeTranscript(projectId:string,sourceId:string,result:YouTubeTranscriptResult,retrievedAt=new Date().toISOString()):VideoTranscript{
+    const video=this.database.connection.prepare("SELECT id FROM videos WHERE project_id=? AND source_id=?").get(projectId,sourceId) as {id:string}|undefined;
+    if(!video)throw new Error("youtube_video_not_found");
+    const existing=this.getVideoTranscript(projectId,sourceId),id=existing?.id??uuidv7(),ready=result.status==="ready";
+    const fingerprint=ready?transcriptFingerprint(result.segments.map(segment=>`${segment.startSeconds}:${segment.endSeconds}:${segment.text}`).join("\n")):(result.status==="temporary_error"||result.status==="rate_limited")?existing?.fingerprint??null:null;
+    this.database.connection.exec("BEGIN IMMEDIATE");
+    try{
+      this.database.connection.prepare(`INSERT INTO video_transcripts(id,project_id,source_id,video_id,language,is_generated,provider,origin,status,fingerprint,retrieved_at,error_code,error_message,created_at,updated_at) VALUES(?,?,?,?,?,?, 'youtube-transcript','VIDEO_TRANSCRIPT',?,?,?,?,?,?,?) ON CONFLICT(project_id,source_id,video_id) DO UPDATE SET language=excluded.language,is_generated=excluded.is_generated,status=excluded.status,fingerprint=excluded.fingerprint,retrieved_at=excluded.retrieved_at,error_code=excluded.error_code,error_message=excluded.error_message,updated_at=excluded.updated_at`).run(id,projectId,sourceId,video.id,result.language,result.isGenerated===null?null:result.isGenerated?1:0,result.status,fingerprint,retrievedAt,ready?null:result.status,ready?null:result.reason??null,retrievedAt,retrievedAt);
+      if(ready){
+        this.database.connection.prepare("DELETE FROM video_transcript_segments WHERE project_id=? AND transcript_id=?").run(projectId,id);
+        const insert=this.database.connection.prepare("INSERT INTO video_transcript_segments(id,project_id,transcript_id,source_id,video_id,segment_index,start_seconds,end_seconds,text,text_fingerprint,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)");
+        result.segments.forEach((segment,index)=>insert.run(uuidv7(),projectId,id,sourceId,video.id,index,segment.startSeconds,segment.endSeconds,segment.text,transcriptFingerprint(segment.text),retrievedAt));
+      }else if(result.status!=="temporary_error"&&result.status!=="rate_limited") this.database.connection.prepare("DELETE FROM video_transcript_segments WHERE project_id=? AND transcript_id=?").run(projectId,id);
+      this.database.connection.exec("COMMIT");
+    }catch(error){this.database.connection.exec("ROLLBACK");throw error;}
+    return this.getVideoTranscript(projectId,sourceId)!;
   }
 
   createManual(projectId: string, input: CreateSourceInput): SourceBundle {

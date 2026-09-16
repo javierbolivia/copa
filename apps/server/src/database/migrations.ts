@@ -1065,6 +1065,52 @@ export const migrations: readonly Migration[] = [
       END;
     `,
   },
+  {
+    version: 13,
+    name: "013_video_transcripts",
+    sql: `
+      CREATE TABLE video_transcripts (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        language TEXT,
+        is_generated INTEGER CHECK (is_generated IS NULL OR is_generated IN (0,1)),
+        provider TEXT NOT NULL CHECK (provider='youtube-transcript'),
+        origin TEXT NOT NULL CHECK (origin='VIDEO_TRANSCRIPT'),
+        status TEXT NOT NULL CHECK (status IN ('ready','unavailable','language_unavailable','rate_limited','video_unavailable','temporary_error')),
+        fingerprint TEXT,
+        retrieved_at TEXT NOT NULL,
+        error_code TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(project_id,id),
+        UNIQUE(project_id,source_id,video_id),
+        FOREIGN KEY(project_id,source_id,video_id) REFERENCES videos(project_id,source_id,id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX video_transcripts_project_source_idx ON video_transcripts(project_id,source_id,status);
+
+      CREATE TABLE video_transcript_segments (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        transcript_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        segment_index INTEGER NOT NULL CHECK (segment_index >= 0),
+        start_seconds REAL NOT NULL CHECK (start_seconds >= 0),
+        end_seconds REAL NOT NULL CHECK (end_seconds > start_seconds),
+        text TEXT NOT NULL CHECK (length(trim(text)) > 0),
+        text_fingerprint TEXT NOT NULL CHECK (length(text_fingerprint)=64),
+        created_at TEXT NOT NULL,
+        UNIQUE(project_id,id),
+        UNIQUE(project_id,transcript_id,segment_index),
+        FOREIGN KEY(project_id,transcript_id) REFERENCES video_transcripts(project_id,id) ON DELETE CASCADE,
+        FOREIGN KEY(project_id,source_id,video_id) REFERENCES videos(project_id,source_id,id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE INDEX video_transcript_segments_retrieval_idx ON video_transcript_segments(project_id,source_id,video_id,segment_index);
+    `,
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

@@ -5,8 +5,8 @@ function deferred<T>(){let resolve!:(value:T)=>void;const promise=new Promise<T>
 function video(id:string,title='Original'){return {id,snippet:{title,channelId:'channel',channelTitle:'Channel',publishedAt:'2026-01-01',tags:['evidence']}};}
 const json=(items:unknown[])=>new Response(JSON.stringify({items}));
 
-describe('YouTube metadata single-flight without retained cache',()=>{
-  it('20 overlapping imports make one request; the next lookup fetches fresh metadata',async()=>{
+describe('YouTube metadata acquisition cache',()=>{
+  it('20 overlapping imports make one request and reuses completed metadata within its TTL',async()=>{
     const gate=deferred<void>();let title='Original';
     const fetch=vi.fn(async()=>{await gate.promise;return json([video('a',title)]);});
     const adapter=new YouTubeAdapter({apiKey:'test',fetch});
@@ -16,8 +16,18 @@ describe('YouTube metadata single-flight without retained cache',()=>{
     const results=await Promise.all(waiting);
     expect(requestsWhilePending).toBe(1);
     expect(results.every(item=>item?.title==='Original')).toBe(true);
-    title='Updated';expect((await adapter.getVideo('a'))?.title).toBe('Updated');
-    expect(fetch).toHaveBeenCalledTimes(2);
+    title='Updated';expect((await adapter.getVideo('a'))?.title).toBe('Original');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('expires metadata deterministically and supports explicit invalidation',async()=>{
+    let now=0,title='First';const fetch=vi.fn(async()=>json([video('a',title)]));
+    const adapter=new YouTubeAdapter({apiKey:'test',fetch,metadataCacheTtlMs:100,now:()=>now});
+    expect((await adapter.getVideo('a'))?.title).toBe('First');
+    title='Second';now=99;expect((await adapter.getVideo('a'))?.title).toBe('First');
+    now=100;expect((await adapter.getVideo('a'))?.title).toBe('Second');
+    title='Third';adapter.clearMetadataCache();expect((await adapter.getVideo('a'))?.title).toBe('Third');
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it('equivalent ID sets share a request without sharing mutable output objects',async()=>{

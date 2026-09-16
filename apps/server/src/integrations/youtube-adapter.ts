@@ -10,6 +10,10 @@ export interface YouTubeAdapterOptions {
   readonly apiKey?: string;
   readonly fetch?: typeof fetch;
   readonly timeoutMs?: number;
+  /** Retention for completed public metadata lookups. Zero disables it. */
+  readonly metadataCacheTtlMs?: number;
+  /** Injectable clock for deterministic expiry tests. */
+  readonly now?: () => number;
 }
 
 export interface YouTubeVideo {
@@ -70,6 +74,8 @@ interface YouTubeListResponse {
   nextPageToken?: unknown;
 }
 
+interface CachedMetadata { readonly response: YouTubeListResponse; readonly expiresAt: number; }
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new IntegrationError("invalid_response", `YouTube omitió el campo ${field}.`);
@@ -122,20 +128,27 @@ export class YouTubeAdapter {
   private readonly apiKey: string | undefined;
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly metadataCacheTtlMs: number;
+  private readonly now: () => number;
   private readonly baseUrl = "https://www.googleapis.com/youtube/v3";
-  // Adapter-local single-flight, not a persistent cache: no cross-credential
-  // sharing and no reuse of metadata after the HTTP request has settled.
+  // Adapter-local cache: no cross-credential sharing and no stored API key.
   private readonly pendingMetadata = new Map<string, Promise<YouTubeListResponse>>();
+  private readonly metadataCache = new Map<string, CachedMetadata>();
 
   constructor(options: YouTubeAdapterOptions = {}) {
     this.apiKey = options.apiKey;
     this.fetchFn = options.fetch ?? globalThis.fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.metadataCacheTtlMs = Math.max(0, options.metadataCacheTtlMs ?? 5 * 60_000);
+    this.now = options.now ?? Date.now;
   }
 
   get configured(): boolean {
     return typeof this.apiKey === "string" && this.apiKey.trim().length > 0;
   }
+
+  /** Discards completed video/channel metadata; in-flight requests are untouched. */
+  clearMetadataCache(): void { this.metadataCache.clear(); }
 
   async getVideo(videoId: string): Promise<YouTubeVideo | undefined> {
     return (await this.getVideos([videoId]))[0];
@@ -260,11 +273,20 @@ export class YouTubeAdapter {
     const key = JSON.stringify([resource, Object.entries(parameters).sort(([a],[b])=>a.localeCompare(b)).map(([name,value])=>[
       name, name === "id" ? [...new Set(value.split(","))].sort().join(",") : value,
     ])]);
+    const cached = this.metadataCache.get(key);
+    if (cached && cached.expiresAt > this.now()) return Promise.resolve(cached.response);
+    if (cached) this.metadataCache.delete(key);
     const existing = this.pendingMetadata.get(key);
     if (existing) return existing;
     // Bound bookkeeping under many distinct requests; this is not a quota limiter.
     if (this.pendingMetadata.size >= 100) return this.request(resource, parameters);
-    const pending = this.request(resource, parameters).finally(()=>{this.pendingMetadata.delete(key);});
+    const pending = this.request(resource, parameters).then((response) => {
+      if (this.metadataCacheTtlMs > 0) {
+        if (this.metadataCache.size >= 100) this.metadataCache.delete(this.metadataCache.keys().next().value!);
+        this.metadataCache.set(key, { response, expiresAt: this.now() + this.metadataCacheTtlMs });
+      }
+      return response;
+    }).finally(()=>{this.pendingMetadata.delete(key);});
     this.pendingMetadata.set(key, pending);
     return pending;
   }

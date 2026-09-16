@@ -55,7 +55,7 @@ export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
   landing: object({ schemaVersion: { type: "integer" }, title: string, sections: { type: "array", items: object({ type: string }, ["type"]) }, evidenceIds }),
   funnel: object({ schemaVersion: { type: "integer" }, nodes: { type: "array", items: object({ id: string, type: string, label: string }) }, edges: { type: "array", items: object({ from: string, to: string, event: string }) }, paymentsEnabled: { type: "boolean" } }),
   emails: object({ schemaVersion: { type: "integer" }, sequences: { type: "array", items: object({ type: string, emails: { type: "array", items: object({ subject: string, body: string, cta: string }) } }) }, evidenceIds }),
-  content: object({ schemaVersion: { type: "integer" }, calendar: { type: "array", items: object({ day: { type: "integer" }, type: string, hook: string, body: string }) }, hooks: stringArray, channels: stringArray, evidenceIds }),
+  content: object({ schemaVersion: { type: "integer" }, calendar: { type: "array", items: object({ day: { type: "integer" }, type: string, channel: string, hook: string, body: string, cta: string }) }, hooks: stringArray, channels: stringArray, evidenceIds }),
   final_product: object({ schemaVersion: { type: "integer" }, files: { type: "array", items: string }, guide: object({ title: string, chapters: stringArray }), checklist: stringArray, workbook: stringArray, miniTool: object({ title: string, fields: stringArray }), evidenceIds }),
 };
 
@@ -76,7 +76,11 @@ export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
     case "landing":return typeof output.title==="string"&&Array.isArray(output.sections);
     case "funnel":return Array.isArray(output.nodes)&&Array.isArray(output.edges);
     case "emails":return Array.isArray(output.sequences);
-    case "content":return Array.isArray(output.calendar);
+    case "content":return Array.isArray(output.calendar)&&output.calendar.every((item)=>{
+      if(typeof item!=="object"||item===null||Array.isArray(item))return false;
+      const piece=item as Record<string,unknown>;
+      return Number.isInteger(piece.day)&&typeof piece.type==="string"&&piece.type.trim().length>0&&typeof piece.channel==="string"&&piece.channel.trim().length>0&&typeof piece.hook==="string"&&piece.hook.trim().length>0&&typeof piece.body==="string"&&piece.body.trim().length>0&&typeof piece.cta==="string"&&piece.cta.trim().length>0;
+    });
     case "final_product":return typeof output.guide==="object"&&Array.isArray(output.checklist)&&Array.isArray(output.workbook);
   }
 }

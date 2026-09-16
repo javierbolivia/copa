@@ -5,7 +5,18 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { createServer } from 'vite';
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const playwrightModule = process.env.PLAYWRIGHT_MODULE || 'playwright';
+let chromium;
+try {
+  ({ chromium } = require(playwrightModule));
+} catch (error) {
+  if (error?.code !== 'MODULE_NOT_FOUND') throw error;
+  console.error(
+    `SKIP frontend-request-races: Playwright is unavailable at "${playwrightModule}". ` +
+    'Set PLAYWRIGHT_MODULE to an existing local Playwright entry point; do not add a dependency solely for this optional diagnostic.'
+  );
+  process.exit(2);
+}
 const harness = `
 import React from 'react';
 import {createRoot} from 'react-dom/client';

@@ -60,7 +60,8 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     [exports, setExports] = useState<ProductExport[]>([]),
     [validation, setValidation] = useState<ProductValidation | null>(null),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState<string | null>(null);
+    [error, setError] = useState<string | null>(null),
+    [loading, setLoading] = useState(true);
   const [versions, setVersions] = useState<ProductDocumentVersion[]>([]);
   const [context, setContext] = useState<KnowledgeUsed | null>(null),
     [generation, setGeneration] = useState<Generation | null>(null),
@@ -91,7 +92,10 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     let restoredBlocks = next.version.blocks,
       restoredTheme = next.version.theme,
       restoredMetadata = next.version.metadata;
-    if (restoreLocal) {
+    // A stale document is a historical snapshot.  Do not render an old local
+    // draft over it: the API correctly rejects saving it and that would make
+    // the read-only version look like it contains unpublished changes.
+    if (restoreLocal && next.freshness !== "stale") {
       try {
         const raw = window.localStorage.getItem(draftKey(next.id));
         if (raw) {
@@ -115,25 +119,48 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     setMetadata(restoredMetadata);
     setActiveChapter(next.version.outline[0]?.id ?? null);
   };
-  const load = async () => {
-    const response = await api.productDocuments(projectId);
-    setDocuments(response.documents);
-    const current = response.documents[0] ?? null;
-    if (current) applyDocument(current, true);
-    else {
-      setDocument(null);
-      setBlocks([]);
-      setTheme(null);
-      setMetadata({});
-      persisted.current = "";
-    }
-    hydrated.current = true;
-  };
   useEffect(() => {
-    void load().catch((e) => setError(message(e)));
+    // Product documents are project-isolated. Clear the previous project
+    // immediately and ignore an older request that resolves after a switch.
+    let active = true;
+    hydrated.current = false;
+    setLoading(true);
+    setError(null);
+    setDocuments([]);
+    setDocument(null);
+    setBlocks([]);
+    setTheme(null);
+    setMetadata({});
+    setAssets([]);
+    setExports([]);
+    setVersions([]);
+    setContext(null);
+    setGeneration(null);
+    setValidation(null);
+    setEstimate(null);
+    setExportFeedback(null);
+    persisted.current = "";
+    void api
+      .productDocuments(projectId)
+      .then((response) => {
+        if (!active) return;
+        setDocuments(response.documents);
+        const current = response.documents[0] ?? null;
+        if (current) applyDocument(current, true);
+        hydrated.current = true;
+      })
+      .catch((e) => {
+        if (active) setError(message(e));
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [projectId]);
   useEffect(() => {
-    if (!document || !theme || !hydrated.current) return;
+    if (!document || document.freshness === "stale" || !theme || !hydrated.current) return;
     const serialized = serialize(blocks, theme, metadata);
     if (serialized === persisted.current) return;
     window.localStorage.setItem(draftKey(document.id), serialized);
@@ -197,7 +224,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
   ]);
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (!document || !theme) return;
+      if (!document || document.freshness === "stale" || !theme) return;
       if (serialize(blocks, theme, metadata) === persisted.current) return;
       event.preventDefault();
     };
@@ -210,7 +237,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     let base = document;
     if (savingPromise.current) base = await savingPromise.current;
     const current = draftRef.current;
-    if (!base || !current.theme) return base;
+    if (!base || base.freshness === "stale" || !current.theme) return base;
     const serialized = serialize(current.blocks, current.theme, current.metadata);
     if (serialized === persisted.current) return base;
     setSaveState("saving");
@@ -259,6 +286,12 @@ export function ProductStudio({ projectId }: { projectId: string }) {
       setBusy(false);
     }
   };
+  if (loading)
+    return (
+      <section className="ps-root" aria-busy="true">
+        <p className="muted-copy" role="status">Cargando documentos del proyecto…</p>
+      </section>
+    );
   if (!document)
     return (
       <Wizard
@@ -272,6 +305,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
   const chapter =
     document.version.outline.find((item) => item.id === activeChapter) ??
     document.version.outline[0];
+  const readOnly = document.freshness === "stale";
   const visible = chapter
     ? blocks.filter(
         (block) => String(block.metadata.chapterId ?? "") === chapter.id,
@@ -447,6 +481,17 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           <button onClick={() => setError(null)}>×</button>
         </div>
       )}
+      {readOnly && (
+        <div className="ps-stale-notice" role="status">
+          <strong>Versión histórica en solo lectura</strong>
+          <p>
+            {document.staleReason ??
+              "Una dependencia aprobada cambió después de crear este Ebook."}{" "}
+            Conserva su contenido y versiones; crea un documento nuevo desde el
+            contexto vigente para continuar.
+          </p>
+        </div>
+      )}
       <header className="ps-top">
         <div>
           <span>FINAL PRODUCT STUDIO</span>
@@ -527,6 +572,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           ),
         )}
       </nav>
+      <fieldset className="ps-document-surface" disabled={readOnly}>
       {view === "studio" && (
         <div className="ps-layout">
           <Outline
@@ -710,6 +756,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
         />
       )}
       {view === "versions" && <Versions versions={versions} />}
+      </fieldset>
     </section>
   );
 }

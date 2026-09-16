@@ -154,6 +154,7 @@ export interface CampaignContent {
   channel: string;
   status: "DRAFT" | "READY" | "PUBLISHED";
   body: string;
+  cta: string;
 }
 
 export interface ContentWorkspaceProps {
@@ -192,6 +193,7 @@ export function ContentWorkspace({ items, versionCreatedAt, readOnly = false, on
           <Field label="Canal"><input disabled={readOnly} value={item.channel} onChange={(event) => onUpdate({ ...item, channel: event.target.value })} /></Field>
           <Field label="Estado"><select disabled={readOnly} value={item.status} onChange={(event) => onUpdate({ ...item, status: event.target.value as CampaignContent["status"] })}><option value="DRAFT">Borrador</option><option value="READY">Listo</option><option value="PUBLISHED">Publicado</option></select></Field>
           <Field label="Contenido" wide><textarea disabled={readOnly} rows={7} value={item.body} onChange={(event) => onUpdate({ ...item, body: event.target.value })} /></Field>
+          <Field label="CTA hacia el Ebook" wide><input disabled={readOnly} value={item.cta} onChange={(event) => onUpdate({ ...item, cta: event.target.value })} /></Field>
         </div> : <><h3>{item.title}</h3><p>{item.body}</p><small>{item.channel} · Fecha de la versión {formatDate(versionCreatedAt)}</small></>}
         <footer className="refinement-card-actions">
           <button onClick={() => setEditingId(editingId === item.id ? null : item.id)} type="button">{editingId === item.id ? "Cerrar edición" : readOnly ? "Ver contenido" : "Editar"}</button>

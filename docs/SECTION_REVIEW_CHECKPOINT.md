@@ -22,11 +22,17 @@ This is the current sequential review, superseding earlier broad visual visits a
 11. Landing — **SECTION PASS**, 2026-09-16.
 12. Funnel — **SECTION PASS**, 2026-09-16.
 13. Emails — **ELIMINATED / DEPRECATED BY ARCHITECTURAL DECISION**, 2026-09-16.
-14. Content — in progress.
-15. Final Product — pending.
-16. Library — pending.
-17. History — pending.
-18. Settings — pending.
+14. Content — **OFFLINE REVIEW PASS**, 2026-09-16; visual verification remains part of the global visual pass.
+15. Final Product — **OFFLINE REVIEW PASS**, 2026-09-16; visual verification remains part of the global visual pass.
+16. Library — **OFFLINE REVIEW PASS**, 2026-09-16; visual verification remains part of the global visual pass.
+17. History — **OFFLINE REVIEW PASS**, 2026-09-16; visual verification remains part of the global visual pass.
+18. Settings — **OFFLINE REVIEW PASS**, 2026-09-16; visual verification remains part of the global visual pass.
+
+## Late-loop verification status — 2026-09-16
+
+Content, Final Product, Library, History and Settings have their targeted offline regressions and affected typechecks recorded in `.codex-loop/STATE.md`; no real project data or external provider was used. The complete offline gate (`npm.cmd test`, `npm.cmd run typecheck`, `npm.cmd run build`) is GREEN on the current uncommitted worktree, with only Vite's non-blocking production chunk-size warning.
+
+The remaining global condition is a real visual pass on `http://127.0.0.1:5173`. Computer Use currently exposes no application or browser surface (`apps: []`, `browsers: []`), so that inspection cannot be claimed. The optional `scripts/frontend-request-races.mjs` harness is also unavailable in this checkout because its required `playwright` package is neither declared nor installed; no dependency was added solely for a diagnostic.
 
 ## Overview
 

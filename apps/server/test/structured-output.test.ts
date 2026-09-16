@@ -25,6 +25,13 @@ const completeProduct = (): Record<string, unknown> => ({
 });
 
 describe("safe structured-output diagnostics", () => {
+  it("requires a channel and Ebook CTA for every newly generated Content piece", () => {
+    const complete = { schemaVersion: 1, calendar: [{ day: 1, type: "educational", channel: "Instagram", hook: "Ordena sin agobio", body: "Un paso breve.", cta: "Descubre el Ebook" }], hooks: ["Ordena sin agobio"], channels: ["Instagram"], evidenceIds: [] };
+    expect(validateJsonSchema(MODULE_OUTPUT_SCHEMAS.content, complete)).toEqual([]);
+    delete (complete.calendar[0] as Record<string, unknown>).cta;
+    expect(validateJsonSchema(MODULE_OUTPUT_SCHEMAS.content, complete)).toContainEqual(expect.objectContaining({ path: "$.calendar[0].cta", actual: "missing" }));
+  });
+
   it("accepts an exact complete Product contract", () => {
     expect(validateJsonSchema(MODULE_OUTPUT_SCHEMAS.product, completeProduct())).toEqual([]);
   });

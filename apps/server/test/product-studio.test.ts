@@ -50,6 +50,29 @@ describe("Product Studio backend", () => {
     expect(response.json()).toMatchObject({ error: "product_document_blocked" });
   });
 
+  it("captures all upstream context and becomes stale when it changes", async () => {
+    const project = await demo();
+    const document = await create(project);
+    const snapshot = JSON.parse(
+      String(document.version.metadata.upstreamParentVersionIds),
+    ) as Record<string, string>;
+    expect(snapshot).toMatchObject({ product: document.productArtifactVersionId });
+    expect(snapshot).toHaveProperty("avatar");
+
+    const replacement = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/modules/avatar/run`,
+      payload: { provider: "mock" },
+    });
+    expect(replacement.statusCode, replacement.body).toBe(200);
+
+    const stale = (await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/product-documents/${document.id}`,
+    })).json<ProductDocument>();
+    expect(stale).toMatchObject({ freshness: "stale", status: "STALE" });
+  });
+
   it("crea wizard persistente, edita outline, genera por lote y aprueba", async () => {
     const project = await demo();
     let document = await create(project);

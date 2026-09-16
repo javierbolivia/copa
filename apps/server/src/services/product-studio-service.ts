@@ -140,12 +140,16 @@ export class ProductStudioService {
     const selected = selectProduct(productData);
     const title =
       input.title?.trim() || stringValue(selected?.name) || "Producto digital";
-    const parentIds = [
-      product.id,
-      ...[opportunity?.id, mechanism?.id].filter((id): id is string =>
-        Boolean(id),
-      ),
-    ];
+    // The document can use every upstream stage when producing its outline and
+    // chapters.  Capture those exact versions now: resolving the active stage
+    // again during a later generation would silently mix newer research into an
+    // older document and would leave that document outside stale propagation.
+    const upstreamParents = this.snapshotParents(projectId, {
+      product,
+      ...(opportunity ? { opportunities: opportunity } : {}),
+      ...(mechanism ? { mechanism } : {}),
+    });
+    const parentIds = [...new Set(Object.values(upstreamParents))];
     const documentId = uuidv7();
     const artifact = this.artifacts.createVersion({
       projectId,
@@ -155,6 +159,7 @@ export class ProductStudioService {
         source: "product_studio_wizard",
         documentId,
         parentVersionIds: parentIds,
+        upstreamParentVersionIds: upstreamParents,
         selectedGlobalLibraryIds: input.selectedGlobalLibraryIds ?? [],
       },
       outputData: { documentId, title, documentType: input.documentType },
@@ -179,6 +184,9 @@ export class ProductStudioService {
         theme: DEFAULT_PRODUCT_THEME,
         metadata: {
           selectedGlobalLibraryIds: input.selectedGlobalLibraryIds ?? [],
+          // ProductDocumentVersion metadata is intentionally scalar/flat for
+          // its public schema; retain the structured lineage snapshot as JSON.
+          upstreamParentVersionIds: JSON.stringify(upstreamParents),
         },
       });
     } catch (error) {
@@ -1018,17 +1026,22 @@ export class ProductStudioService {
     projectId: string,
     document: ProductDocument,
   ): Record<string, unknown> {
-    const ids = [
-      document.productArtifactVersionId,
-      document.opportunityArtifactVersionId,
-      document.mechanismArtifactVersionId,
-    ].filter((id): id is string => Boolean(id));
+    const storedParents = recordValue(document.version.metadata)
+      .upstreamParentVersionIds;
+    const snapshot = recordValue(
+      typeof storedParents === "string" ? safeJson(storedParents) : storedParents,
+    );
+    const ids = Object.values(snapshot).filter(
+      (id): id is string => typeof id === "string" && id.length > 0,
+    );
     const parents: Record<string, unknown> = Object.fromEntries(
       ids.map((id) => {
         const item = this.artifacts.getVersion(id);
         return [item?.artifactType ?? id, item?.outputData ?? null];
       }),
     );
+    // Legacy documents predate the complete snapshot and retain their original
+    // behavior. New documents always use the captured, lineage-linked context.
     const upstreamStages = [
       "research",
       "sources",
@@ -1043,13 +1056,28 @@ export class ProductStudioService {
       "funnel",
       "content",
     ];
-    for (const stage of upstreamStages) {
+    for (const stage of snapshot && Object.keys(snapshot).length ? [] : upstreamStages) {
       if (!parents[stage]) {
         const resolved = this.resolveParent(projectId, stage);
         if (resolved) parents[stage] = resolved.outputData;
       }
     }
     return parents;
+  }
+  private snapshotParents(
+    projectId: string,
+    pinned: Record<string, { id: string }>,
+  ): Record<string, string> {
+    const stages = [
+      "research", "sources", "problems", "opportunities", "product", "avatar",
+      "mechanism", "beliefs", "offer", "landing", "funnel", "content",
+    ];
+    const result: Record<string, string> = {};
+    for (const stage of stages) {
+      const version = pinned[stage] ?? this.resolveParent(projectId, stage);
+      if (version) result[stage] = version.id;
+    }
+    return result;
   }
   private recordMockGeneration(
     projectId: string,
@@ -1414,6 +1442,18 @@ function selectedGlobalIds(document: ProductDocument): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
+}
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return {};
+  }
 }
 function mockChapterBlocks(
   chapter: ProductOutlineItem,

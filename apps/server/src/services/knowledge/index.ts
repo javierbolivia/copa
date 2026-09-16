@@ -53,3 +53,22 @@ export type {
   StructuralChunk,
   StructuralChunkOptions,
 } from "./extraction-types.js";
+export { isSemanticRetrievalEnabled } from "../semantic-retrieval/config.js";
+export { hybridRank, lexicalFallback, rerankHybrid } from "../semantic-retrieval/hybrid-ranking.js";
+export {
+  LOCAL_EMBEDDING_MODEL,
+  LOCAL_MODEL_LICENSE,
+  LOCAL_RERANKER_MODEL,
+  LocalTransformersEmbeddingProvider,
+  LocalTransformersReranker,
+} from "../semantic-retrieval/local-transformers.js";
+export type {
+  RankedSemanticCandidate,
+  SemanticCandidate,
+  SemanticEmbeddingBatchResult,
+  SemanticEmbeddingProvider,
+  SemanticEmbeddingResult,
+  SemanticRerankCandidate,
+  SemanticRerankResult,
+  SemanticReranker,
+} from "../semantic-retrieval/types.js";

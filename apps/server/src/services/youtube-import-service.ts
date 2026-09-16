@@ -93,9 +93,18 @@ export class YouTubeImportService {
    * swallowed here so the surrounding comment import always completes. Any
    * failure is still recorded (not silently dropped) via saveYouTubeTranscript,
    * whose non-ready statuses the Knowledge Index already excludes.
+   *
+   * Idempotency guard: a public video's captions do not change after this
+   * transcript was already fetched successfully, so a retry (job failed after
+   * pagination but before completion, or recovered after a restart in that
+   * narrow window) must not re-scrape captions for a source that already has
+   * a READY transcript. Non-ready statuses (unavailable/rate_limited/
+   * temporary_error/language_unavailable) are still retried, since those may
+   * be transient or may become available once retried.
    */
   private async acquireTranscript(projectId:string,sourceId:string,videoId:string):Promise<void>{
     if(!this.transcripts)return;
+    if(this.sources.getVideoTranscript(projectId,sourceId)?.status==="ready")return;
     try{
       const result=await this.transcripts.fetch(videoId);
       this.sources.saveYouTubeTranscript(projectId,sourceId,result);

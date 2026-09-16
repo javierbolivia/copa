@@ -83,6 +83,30 @@ describe("YouTube transcript acquisition during import", () => {
     expect(sources.getVideoTranscript(projectId, queued.source.id)).toBeUndefined();
   });
 
+  it("does not re-scrape captions on retry once the transcript is already READY, avoiding an avoidable duplicate acquisition", async () => {
+    const adapter = makeAdapter();
+    let fetchCalls = 0;
+    const fetcher: TranscriptFetcher = { fetch: async () => { fetchCalls++; return [{ text: "Primer segmento", offset: 0, duration: 2, lang: "es" }]; } };
+    const client = new YouTubeTranscriptClient(fetcher);
+    const service = new YouTubeImportService(sources, jobs, "fake", adapter, client);
+    const queued = service.queue(projectId, video.videoId);
+    await tick();
+    expect(jobs.get(projectId, queued.job.id)?.status).toBe("COMPLETED");
+    expect(fetchCalls).toBe(1);
+    expect(sources.getVideoTranscript(projectId, queued.source.id)).toMatchObject({ status: "ready" });
+
+    // Simulate the exact race the guard protects against: the job crashes (or the
+    // process restarts) after transcript acquisition succeeded but before the job
+    // itself was marked COMPLETED. A retry restarts run() from scratch, including
+    // the comment pagination (idempotent via upsert) and the transcript step.
+    jobs.fail(projectId, queued.job.id, "simulated_crash", "Simulated crash after transcript acquisition");
+    service.retry(projectId, queued.job.id);
+    await tick();
+    expect(jobs.get(projectId, queued.job.id)?.status).toBe("COMPLETED");
+    expect(fetchCalls).toBe(1); // no second scrape: the READY transcript was reused, not re-fetched
+    expect(sources.listComments(projectId)).toHaveLength(1); // comment upsert stayed idempotent
+  });
+
   it("does not acquire a transcript for an attempt superseded by cancellation", async () => {
     const adapter = makeAdapter();
     let fetchCalls = 0;

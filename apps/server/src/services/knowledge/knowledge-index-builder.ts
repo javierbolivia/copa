@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
+import { youtubeCommentRejection } from "../youtube-evidence-quality.js";
+
 export const INDEXABLE_ARTIFACT_TYPES = [
   "research", "problems", "opportunities", "product", "avatar", "mechanism", "beliefs", "offer",
 ] as const;
@@ -175,10 +177,18 @@ export class KnowledgeIndexBuilder {
     const evidence = this.source.prepare(`SELECT e.id evidence_id,e.project_id,e.source_id,e.comment_id,e.quote_text,e.created_at,c.updated_at,s.source_type
       FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id JOIN sources s ON s.id=e.source_id
       WHERE s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY e.id`).all() as SourceRow[];
-    for (const row of evidence) chunks.push(makeChunk("evidence", row, 0, String(row.quote_text), "evidence", String(row.created_at)));
+    for (const row of evidence) {
+      const rejection = youtubeCommentRejection({ text: String(row.quote_text) });
+      if (rejection) { excluded[`quality_${rejection}`] = (excluded[`quality_${rejection}`] ?? 0) + 1; continue; }
+      chunks.push(makeChunk("evidence", row, 0, String(row.quote_text), "evidence", String(row.created_at)));
+    }
     const comments = this.source.prepare(`SELECT c.id,c.project_id,c.source_id,c.text,c.updated_at,s.source_type FROM comments c JOIN sources s ON s.id=c.source_id
       WHERE s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') AND NOT EXISTS(SELECT 1 FROM evidence_snippets e WHERE e.comment_id=c.id) ORDER BY c.id`).all() as SourceRow[];
-    for (const row of comments) chunks.push(makeChunk("comment", row, 0, String(row.text), "eligible_comment", String(row.updated_at)));
+    for (const row of comments) {
+      const rejection = youtubeCommentRejection({ text: String(row.text) });
+      if (rejection) { excluded[`quality_${rejection}`] = (excluded[`quality_${rejection}`] ?? 0) + 1; continue; }
+      chunks.push(makeChunk("comment", row, 0, String(row.text), "eligible_comment", String(row.updated_at)));
+    }
     const artifactRows = this.source.prepare(`SELECT a.artifact_type,a.project_id,v.id version_id,v.output_data,v.created_at FROM artifacts a JOIN artifact_versions v ON v.id=a.active_version_id
       WHERE v.status='approved' AND v.freshness='fresh' AND a.artifact_type IN (${INDEXABLE_ARTIFACT_TYPES.map(() => "?").join(",")}) ORDER BY a.artifact_type,v.id`).all(...INDEXABLE_ARTIFACT_TYPES) as SourceRow[];
     for (const row of artifactRows) {

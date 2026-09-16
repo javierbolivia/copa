@@ -17,6 +17,8 @@ function fixture(): DatabaseSync {
   db.prepare("INSERT INTO comments VALUES(?,?,?,?,?,?)").run("comment-b","project-b","source-b","Las plantas necesitan riego",1,"2026-01-01");
   db.prepare("INSERT INTO comments VALUES(?,?,?,?,?,?)").run("comment-excluded","project-a","source-excluded","No indexar",1,"2026-01-01");
   db.prepare("INSERT INTO evidence_snippets VALUES(?,?,?,?,?,?)").run("evidence-a","project-a","source-a","comment-a","Mi perro ladra al pasear", "2026-01-01");
+  db.prepare("INSERT INTO comments VALUES(?,?,?,?,?,?)").run("comment-noise","project-a","source-a","Gracias",1,"2026-01-01");
+  db.prepare("INSERT INTO evidence_snippets VALUES(?,?,?,?,?,?)").run("evidence-noise","project-a","source-a","comment-noise","Gracias", "2026-01-01");
   const insertArtifact = (type: string, project: string, output: unknown, status = "approved", freshness = "fresh") => {
     const id=`artifact-${type}-${project}-${status}`; const version=`version-${type}-${project}-${status}`;
     db.prepare("INSERT INTO artifacts VALUES(?,?,?,?)").run(id,project,type,version);
@@ -40,11 +42,11 @@ describe("KnowledgeIndexBuilder", () => {
   it("projects only eligible canonical records with type-specific, traceable chunks", () => {
     const source=fixture(); databases.push(source); const builder=new KnowledgeIndexBuilder(source);
     const result=builder.sync(); const chunks=builder.list();
-    expect(result.created).toBe(chunks.length); expect(chunks.some((chunk)=>chunk.text.includes("No indexar"))).toBe(false);
+    expect(result.created).toBe(chunks.length); expect(chunks.some((chunk)=>chunk.text.includes("No indexar"))).toBe(false); expect(chunks.some((chunk)=>chunk.entityId==="evidence-noise")).toBe(false);
     expect(chunks.find((chunk)=>chunk.entityType==="evidence")).toMatchObject({sourceId:"source-a",evidenceId:"evidence-a",lifecycle:"evidence"});
     expect(chunks.filter((chunk)=>chunk.entityType==="comment")).toHaveLength(1);
     expect(chunks.map((chunk)=>chunk.entityType)).toEqual(expect.arrayContaining(["research","problems","opportunities","product","avatar","mechanism","beliefs","offer"]));
-    expect(result.audit.duplicateChunks).toBe(0); expect(result.audit.emptyChunks).toBe(0);
+    expect(result.audit.duplicateChunks).toBe(0); expect(result.audit.emptyChunks).toBe(0); expect(result.audit.excluded.quality_low_information).toBe(1);
     builder.close();
   });
   it("is isolated, incremental, removes ineligible origins, and rebuilds deterministically", () => {

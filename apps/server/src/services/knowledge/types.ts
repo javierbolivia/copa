@@ -82,6 +82,12 @@ export interface RankedKnowledgeHit extends KnowledgeRepositoryHit {
   readonly normalizedLexicalScore: number;
   readonly policyWeight: number;
   readonly score: number;
+  readonly retrieval?: {
+    readonly mode: "lexical" | "hybrid";
+    readonly lexicalScore: number;
+    readonly semanticScore?: number;
+    readonly rerankScore?: number;
+  };
 }
 
 export interface KnowledgeCitation {
@@ -115,9 +121,14 @@ export interface KnowledgeRetrievalResult extends KnowledgeContextResult {
   readonly query: string;
   readonly agentType: string;
   readonly policy: AgentKnowledgePolicy;
-  readonly retrievalMode: "lexical";
+  readonly retrievalMode: "lexical" | "hybrid";
   readonly embeddingProvider: {
     readonly name: string;
     readonly available: boolean;
+  };
+  readonly diagnostics?: {
+    readonly candidateCount: number;
+    readonly semanticCandidateCount: number;
+    readonly fallbackReason?: "disabled" | "literal_query" | "model_unavailable" | "index_unavailable" | "inference_failed";
   };
 }

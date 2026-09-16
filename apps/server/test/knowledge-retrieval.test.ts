@@ -14,6 +14,7 @@ import type {
   KnowledgeRepositorySearchRequest,
   KnowledgeRepositorySearchResult,
 } from "../src/services/knowledge/types.js";
+import type { SemanticEmbeddingProvider, SemanticReranker } from "../src/services/semantic-retrieval/types.js";
 
 function hit(
   id: string,
@@ -42,6 +43,26 @@ class FakeRepository implements KnowledgeRepositoryPort {
   ): Promise<KnowledgeRepositorySearchResult> {
     this.lastRequest = request;
     return this.result;
+  }
+}
+
+class SemanticFixture implements SemanticEmbeddingProvider {
+  readonly name = "semantic-fixture";
+  readonly available = true;
+  inputs: readonly string[] = [];
+  async embed(input: string) { const result = await this.embedBatch([input]); return { status: "ready" as const, provider: this.name, dimensions: 2, vector: result.vectors?.[0] ?? [] }; }
+  async embedBatch(inputs: readonly string[]) {
+    this.inputs = inputs;
+    return { status: "ready" as const, provider: this.name, dimensions: 2,
+      vectors: inputs.map((input, index) => index === 0 ? [1, 0] : input.includes("paráfrasis") ? [1, 0] : [0, 1]) };
+  }
+}
+
+class RerankFixture implements SemanticReranker {
+  readonly name = "rerank-fixture";
+  readonly available = true;
+  async rerank(_query: string, candidates: readonly { id: string; text: string }[]) {
+    return { status: "ready" as const, provider: this.name, scores: candidates.map((candidate) => candidate.text.includes("paráfrasis") ? 10 : 0) };
   }
 }
 
@@ -125,6 +146,45 @@ describe("knowledge context", () => {
 });
 
 describe("KnowledgeRetriever", () => {
+  it("keeps the exact lexical route when the feature flag is off", async () => {
+    const semantic = new SemanticFixture();
+    const retriever = new KnowledgeRetriever(new FakeRepository({ scoreDirection: "higher_is_better", hits: [hit("lexical", { rawScore: 10 })] }), undefined, { enabled: () => false, embeddingProvider: semantic });
+    const result = await retriever.retrieve({ projectId: "project-1", query: "consulta conceptual", agentType: "product" });
+    expect(result.retrievalMode).toBe("lexical");
+    expect(result.diagnostics?.fallbackReason).toBe("disabled");
+    expect(semantic.inputs).toEqual([]);
+  });
+
+  it("uses hybrid ranking only over eligible project-scoped candidates and preserves provenance", async () => {
+    const semantic = new SemanticFixture();
+    const repository = new FakeRepository({ scoreDirection: "higher_is_better", hits: [
+      hit("lexical", { rawScore: 10, content: "coincidencia literal" }),
+      hit("semantic", { rawScore: 1, content: "paráfrasis sobre frustración al pasear", sourceUrl: "https://evidence.test/a" }),
+      hit("other-project", { rawScore: 100, projectId: "project-2", content: "secreto plantas" }),
+      hit("rejected", { rawScore: 100, kind: "approved_memory", approvalStatus: "rejected", content: "no elegible" }),
+    ] });
+    const result = await new KnowledgeRetriever(repository, undefined, { enabled: () => true, embeddingProvider: semantic, reranker: new RerankFixture() }).retrieve({ projectId: "project-1", query: "qué frustración sienten durante el paseo", agentType: "product" });
+    expect(result.retrievalMode).toBe("hybrid");
+    expect(result.chunks.map((chunk) => chunk.chunkId)).toEqual(["chunk-semantic", "chunk-lexical"]);
+    expect(semantic.inputs).not.toContain("secreto plantas");
+    expect(semantic.inputs).not.toContain("no elegible");
+    expect(result.chunks[0]?.retrieval).toMatchObject({ mode: "hybrid", lexicalScore: expect.any(Number), semanticScore: expect.any(Number), rerankScore: 10 });
+    expect(result.chunks[0]?.citation.source).toBe("https://evidence.test/a");
+  });
+
+  it("routes literal identifiers to FTS and falls back when the semantic backend is unavailable", async () => {
+    const semantic: SemanticEmbeddingProvider = { name: "missing", available: false, async embed() { return { status: "unavailable", provider: "missing", reason: "missing" }; }, async embedBatch() { return { status: "unavailable", provider: "missing", reason: "missing" }; } };
+    const repository = new FakeRepository({ scoreDirection: "higher_is_better", hits: [hit("exact", { content: "ID CASE-77" })] });
+    const retriever = new KnowledgeRetriever(repository, undefined, { enabled: () => true, embeddingProvider: semantic });
+    const literal = await retriever.retrieve({ projectId: "project-1", query: "CASE-77", agentType: "product" });
+    expect(literal.retrievalMode).toBe("lexical");
+    expect(literal.diagnostics?.fallbackReason).toBe("literal_query");
+    const unavailable = await retriever.retrieve({ projectId: "project-1", query: "pregunta natural", agentType: "product" });
+    expect(unavailable.retrievalMode).toBe("lexical");
+    expect(unavailable.diagnostics?.fallbackReason).toBe("model_unavailable");
+    const indexDown = await new KnowledgeRetriever(repository, undefined, { enabled: () => true, embeddingProvider: semantic, indexAvailable: () => false }).retrieve({ projectId: "project-1", query: "pregunta natural", agentType: "product" });
+    expect(indexDown.diagnostics?.fallbackReason).toBe("index_unavailable");
+  });
   it("is lexical-only, deterministic, deduplicated and isolated by project/library/approval", async () => {
     const repository = new FakeRepository({
       scoreDirection: "higher_is_better",

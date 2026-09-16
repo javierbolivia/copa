@@ -2,6 +2,8 @@ import { getAgentKnowledgePolicy } from "./agent-knowledge-policies.js";
 import { buildKnowledgeContext } from "./context-builder.js";
 import { DisabledEmbeddingProvider } from "./embedding-provider.js";
 import type { EmbeddingProvider } from "./embedding-provider.js";
+import { isSemanticRetrievalEnabled } from "../semantic-retrieval/config.js";
+import type { SemanticEmbeddingProvider, SemanticReranker } from "../semantic-retrieval/types.js";
 import { knowledgeContentFingerprint, rankLexicalHits } from "./lexical-ranking.js";
 import type {
   AgentKnowledgePolicy,
@@ -89,16 +91,53 @@ function selectWithCaps(
   return result;
 }
 
+function isLiteralQuery(query: string): boolean {
+  const trimmed = query.trim();
+  return /^['"].+['"]$/.test(trimmed) || /https?:\/\//i.test(trimmed) ||
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(trimmed) ||
+    /\b[A-Z]{1,8}[A-Z0-9_-]{2,}\b/.test(trimmed);
+}
+
+function cosine(left: readonly number[], right: readonly number[]): number {
+  return left.reduce((sum, value, index) => sum + value * (right[index] ?? 0), 0);
+}
+
+function hybridRank(
+  lexical: readonly RankedKnowledgeHit[],
+  vectors: readonly (readonly number[])[],
+): readonly RankedKnowledgeHit[] {
+  const [query, ...documents] = vectors;
+  if (!query || documents.length !== lexical.length) throw new Error("Semantic vectors do not match Knowledge candidates.");
+  return lexical.map((hit, index): RankedKnowledgeHit => {
+    const semanticScore = cosine(query, documents[index] ?? []);
+    return { ...hit, score: hit.score * 0.55 + semanticScore * 0.45,
+      retrieval: { mode: "hybrid", lexicalScore: hit.score, semanticScore } };
+  }).sort((left, right) => right.score - left.score || left.chunkId.localeCompare(right.chunkId));
+}
+
+export interface KnowledgeHybridOptions {
+  readonly enabled?: () => boolean;
+  readonly embeddingProvider?: SemanticEmbeddingProvider;
+  readonly reranker?: SemanticReranker;
+  /** Lets a future persistent index report an unavailable sqlite-vec backend. */
+  readonly indexAvailable?: () => boolean;
+}
+
+type HybridFallbackReason = "disabled" | "literal_query" | "model_unavailable" | "index_unavailable" | "inference_failed";
+
 export class KnowledgeRetriever {
   readonly #repository: KnowledgeRepositoryPort;
   readonly #embeddingProvider: EmbeddingProvider;
+  readonly #hybrid: KnowledgeHybridOptions;
 
   constructor(
     repository: KnowledgeRepositoryPort,
     embeddingProvider: EmbeddingProvider = new DisabledEmbeddingProvider(),
+    hybrid: KnowledgeHybridOptions = {},
   ) {
     this.#repository = repository;
     this.#embeddingProvider = embeddingProvider;
+    this.#hybrid = hybrid;
   }
 
   async retrieve(request: KnowledgeRetrievalRequest): Promise<KnowledgeRetrievalResult> {
@@ -141,7 +180,38 @@ export class KnowledgeRetriever {
       isSafeHit(hit, { ...request, projectId, query }, kindSet, selectedLibraries),
     );
     const ranked = rankLexicalHits(safeHits, search.scoreDirection, policy);
-    const selected = selectWithCaps(ranked, policy, maxChunks);
+    const semanticEnabled = this.#hybrid.enabled?.() ?? isSemanticRetrievalEnabled();
+    let retrievalMode: "lexical" | "hybrid" = "lexical";
+    let fallbackReason: HybridFallbackReason | undefined = semanticEnabled ? undefined : "disabled";
+    let hybridRanked = ranked;
+    if (semanticEnabled && isLiteralQuery(query)) {
+      fallbackReason = "literal_query";
+    } else if (semanticEnabled && this.#hybrid.indexAvailable?.() === false) {
+      fallbackReason = "index_unavailable";
+    } else if (semanticEnabled && this.#hybrid.embeddingProvider !== undefined) {
+      try {
+        const embeddings = await this.#hybrid.embeddingProvider.embedBatch([query, ...ranked.map((item) => item.content)]);
+        if (embeddings.status === "ready" && embeddings.vectors) {
+          hybridRanked = hybridRank(ranked, embeddings.vectors);
+          const pool = hybridRanked.slice(0, 20);
+          if (this.#hybrid.reranker !== undefined) {
+            const reranked = await this.#hybrid.reranker.rerank(query, pool.map((item) => ({ id: item.chunkId, text: item.content })));
+            if (reranked.status === "ready" && reranked.scores) {
+              const scores = new Map(pool.map((item, index) => [item.chunkId, reranked.scores?.[index] ?? Number.NEGATIVE_INFINITY]));
+              hybridRanked = [...pool].map((item): RankedKnowledgeHit => {
+                const rerankScore = scores.get(item.chunkId) ?? Number.NEGATIVE_INFINITY;
+                return { ...item, retrieval: { ...item.retrieval!, rerankScore } };
+              })
+                .sort((left, right) => (right.retrieval?.rerankScore ?? 0) - (left.retrieval?.rerankScore ?? 0) || left.chunkId.localeCompare(right.chunkId))
+                .concat(hybridRanked.slice(pool.length));
+            }
+          }
+          retrievalMode = "hybrid";
+          fallbackReason = undefined;
+        } else fallbackReason = "model_unavailable";
+      } catch { fallbackReason = "inference_failed"; }
+    } else if (semanticEnabled) fallbackReason = "model_unavailable";
+    const selected = selectWithCaps(hybridRanked, policy, maxChunks);
     const context = buildKnowledgeContext(selected, maxContextTokens);
 
     return {
@@ -149,11 +219,12 @@ export class KnowledgeRetriever {
       query,
       agentType: request.agentType,
       policy,
-      retrievalMode: "lexical",
+      retrievalMode,
       embeddingProvider: {
         name: this.#embeddingProvider.name,
         available: this.#embeddingProvider.available,
       },
+      diagnostics: { candidateCount: ranked.length, semanticCandidateCount: retrievalMode === "hybrid" ? hybridRanked.length : 0, ...(fallbackReason === undefined ? {} : { fallbackReason }) },
       ...context,
     };
   }

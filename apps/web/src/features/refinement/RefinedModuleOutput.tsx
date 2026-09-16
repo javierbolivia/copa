@@ -85,7 +85,7 @@ function Specialized({evidence,projectId,moduleKey,selected,versions,files,savin
     return <LandingBuilder value={toLanding(output)} versions={landingVersions} selectedVersionId={selected.versionId} saving={saving} readOnly={selected.freshness!=="fresh"||selected.status==="superseded"||selected.status==="archived"} onSave={(value)=>onSave(fromLanding(output,value))} onSelectVersion={onSelectVersion} onExportHtml={exportLandingHtml} onExportReact={exportLandingReact} onRegenerate={onRegenerate} onOpenTraceability={onTrace}/>;
   }
   if(moduleKey==="funnel")return <FunnelAdapter output={output} onSave={onSave}/>;
-  if(moduleKey==="content")return <ContentAdapter output={output} versionCreatedAt={selected.createdAt} onSave={onSave}/>;
+  if(moduleKey==="content")return <ContentAdapter output={output} versionCreatedAt={selected.createdAt} readOnly={selected.freshness!=="fresh"||selected.status==="superseded"||selected.status==="archived"} onSave={onSave}/>;
   if(moduleKey==="final_product")return <ProductStudio projectId={projectId}/>;
   return null;
 }
@@ -97,10 +97,10 @@ function FunnelAdapter({output,onSave}:{output:Record<string,unknown>;onSave:(va
   const exportMarkdown=()=>downloadText("funnel.md",renderFunnelMarkdown({...output,nodes:nodes.map(n=>({id:n.id,type:n.stage,label:n.name,description:n.description,active:n.active,linkedArtifact:n.linkedArtifact,metricLabel:n.metricLabel,metricValue:n.metricValue,price:n.metricValue})),edges}));
   return <><FunnelWorkspace nodes={nodes} edges={edges} onUpdate={update} onReorder={(ids)=>setNodes(ids.map(id=>nodes.find(item=>item.id===id)!).filter(Boolean))} onExport={exportMarkdown}/><SaveBar onSave={()=>onSave({...output,nodes:nodes.map(node=>({id:node.id,type:node.stage,label:node.name,description:node.description,active:node.active,linkedArtifact:node.linkedArtifact,metricLabel:node.metricLabel,metricValue:node.metricValue})),edges:output.edges||edges})}/></>;
 }
-function ContentAdapter({output,versionCreatedAt,onSave}:{output:Record<string,unknown>;versionCreatedAt:string;onSave:(value:unknown)=>Promise<boolean>}){
+function ContentAdapter({output,versionCreatedAt,readOnly,onSave}:{output:Record<string,unknown>;versionCreatedAt:string;readOnly:boolean;onSave:(value:unknown)=>Promise<boolean>}){
   const initial=toContent(output),[items,setItems]=useState(initial);useEffect(()=>setItems(initial),[JSON.stringify(output)]);
   const exportItems=(ids:string[])=>downloadText("content.md",items.filter(item=>ids.includes(item.id)).map(item=>`# ${item.title}\n\n${item.body}`).join("\n\n---\n\n"));
-  return <><ContentWorkspace items={items} versionCreatedAt={versionCreatedAt} onUpdate={(item)=>setItems(current=>current.map(value=>value.id===item.id?item:value))} onDuplicate={(id)=>setItems(current=>{const source=current.find(item=>item.id===id);return source?[...current,{...source,id:crypto.randomUUID(),title:`${source.title} (copia)`}]:current;})} onDelete={(id)=>setItems(current=>current.filter(item=>item.id!==id))} onExport={exportItems}/><SaveBar onSave={()=>onSave({...output,calendar:items.map((item,index)=>({day:index+1,type:item.format,hook:item.title,body:item.body,channel:item.channel}))})}/></>;
+  return <><ContentWorkspace items={items} versionCreatedAt={versionCreatedAt} readOnly={readOnly} onUpdate={(item)=>setItems(current=>current.map(value=>value.id===item.id?item:value))} onDuplicate={(id)=>setItems(current=>{const source=current.find(item=>item.id===id);return source?[...current,{...source,id:crypto.randomUUID(),title:`${source.title} (copia)`}]:current;})} onDelete={(id)=>setItems(current=>current.filter(item=>item.id!==id))} onExport={exportItems}/>{!readOnly&&<SaveBar onSave={()=>onSave({...output,calendar:items.map((item,index)=>({day:index+1,type:item.format,hook:item.title,body:item.body,channel:item.channel}))})}/>}</>;
 }
 function SaveBar({onSave}:{onSave:()=>Promise<boolean>}){return <div className="refinement-save-bar"><span>Los cambios se guardan como una nueva versión draft.</span><button className="button primary" type="button" onClick={()=>void onSave()}>Guardar cambios</button></div>}
 

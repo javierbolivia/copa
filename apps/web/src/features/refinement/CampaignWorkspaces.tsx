@@ -159,13 +159,14 @@ export interface CampaignContent {
 export interface ContentWorkspaceProps {
   items: readonly CampaignContent[];
   versionCreatedAt: string;
+  readOnly?: boolean;
   onUpdate: (item: CampaignContent) => void;
   onDuplicate: (itemId: string) => void;
   onDelete: (itemId: string) => void;
   onExport: (itemIds: string[]) => void;
 }
 
-export function ContentWorkspace({ items, versionCreatedAt, onUpdate, onDuplicate, onDelete, onExport }: ContentWorkspaceProps) {
+export function ContentWorkspace({ items, versionCreatedAt, readOnly = false, onUpdate, onDuplicate, onDelete, onExport }: ContentWorkspaceProps) {
   const [format, setFormat] = useState("ALL");
   const [channel, setChannel] = useState("ALL");
   const [status, setStatus] = useState("ALL");
@@ -175,6 +176,7 @@ export function ContentWorkspace({ items, versionCreatedAt, onUpdate, onDuplicat
   const filtered = useMemo(() => items.filter((item) => (format === "ALL" || item.format === format) && (channel === "ALL" || item.channel === channel) && (status === "ALL" || item.status === status)), [channel, format, items, status]);
   return <section className="refinement-workspace" aria-labelledby="content-heading">
     <WorkspaceHeading eyebrow="CONTENT OPERATIONS WORKSPACE" title="Contenido de campaña" description="Filtra y administra cada pieza desde una superficie editorial." id="content-heading" action={<button className="button secondary" disabled={filtered.length === 0} onClick={() => onExport(filtered.map((item) => item.id))} type="button">Exportar visibles</button>} />
+    {readOnly && <div className="refinement-readonly" role="status">Esta versión es histórica o requiere revisión. Puedes inspeccionarla y exportarla, pero genera una versión vigente antes de editar.</div>}
     <div className="refinement-filters" aria-label="Filtros de contenido">
       <Filter label="Formato" value={format} values={formats} onChange={setFormat} />
       <Filter label="Canal" value={channel} values={channels} onChange={setChannel} />
@@ -185,17 +187,17 @@ export function ContentWorkspace({ items, versionCreatedAt, onUpdate, onDuplicat
       {filtered.map((item) => <article className="refinement-content-card" key={item.id}>
         <div className="refinement-card-header"><span className="refinement-format">{item.format}</span><span className={`refinement-status is-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</span></div>
         {editingId === item.id ? <div className="refinement-inline-editor">
-          <Field label="Título"><input value={item.title} onChange={(event) => onUpdate({ ...item, title: event.target.value })} /></Field>
-          <Field label="Formato"><input value={item.format} onChange={(event) => onUpdate({ ...item, format: event.target.value })} /></Field>
-          <Field label="Canal"><input value={item.channel} onChange={(event) => onUpdate({ ...item, channel: event.target.value })} /></Field>
-          <Field label="Estado"><select value={item.status} onChange={(event) => onUpdate({ ...item, status: event.target.value as CampaignContent["status"] })}><option value="DRAFT">Borrador</option><option value="READY">Listo</option><option value="PUBLISHED">Publicado</option></select></Field>
-          <Field label="Contenido" wide><textarea rows={7} value={item.body} onChange={(event) => onUpdate({ ...item, body: event.target.value })} /></Field>
+          <Field label="Título"><input disabled={readOnly} value={item.title} onChange={(event) => onUpdate({ ...item, title: event.target.value })} /></Field>
+          <Field label="Formato"><input disabled={readOnly} value={item.format} onChange={(event) => onUpdate({ ...item, format: event.target.value })} /></Field>
+          <Field label="Canal"><input disabled={readOnly} value={item.channel} onChange={(event) => onUpdate({ ...item, channel: event.target.value })} /></Field>
+          <Field label="Estado"><select disabled={readOnly} value={item.status} onChange={(event) => onUpdate({ ...item, status: event.target.value as CampaignContent["status"] })}><option value="DRAFT">Borrador</option><option value="READY">Listo</option><option value="PUBLISHED">Publicado</option></select></Field>
+          <Field label="Contenido" wide><textarea disabled={readOnly} rows={7} value={item.body} onChange={(event) => onUpdate({ ...item, body: event.target.value })} /></Field>
         </div> : <><h3>{item.title}</h3><p>{item.body}</p><small>{item.channel} · Fecha de la versión {formatDate(versionCreatedAt)}</small></>}
         <footer className="refinement-card-actions">
-          <button onClick={() => setEditingId(editingId === item.id ? null : item.id)} type="button">{editingId === item.id ? "Cerrar edición" : "Editar"}</button>
-          <button onClick={() => onDuplicate(item.id)} type="button">Duplicar</button>
+          <button onClick={() => setEditingId(editingId === item.id ? null : item.id)} type="button">{editingId === item.id ? "Cerrar edición" : readOnly ? "Ver contenido" : "Editar"}</button>
+          <button disabled={readOnly} onClick={() => onDuplicate(item.id)} type="button">Duplicar</button>
           <button onClick={() => onExport([item.id])} type="button">Exportar</button>
-          <button className="is-danger" onClick={() => onDelete(item.id)} type="button">Eliminar</button>
+          <button className="is-danger" disabled={readOnly} onClick={() => onDelete(item.id)} type="button">Eliminar</button>
         </footer>
       </article>)}
     </div>}

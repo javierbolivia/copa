@@ -9,3 +9,4 @@ export * from "./firecrawl-provider.js";
 export * from "./brave-search-provider.js";
 export * from "./web-discovery.js";
 export * from "./youtube-adapter.js";
+export * from "./youtube-transcript-client.js";

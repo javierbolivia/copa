@@ -154,18 +154,18 @@ export interface CampaignContent {
   channel: string;
   status: "DRAFT" | "READY" | "PUBLISHED";
   body: string;
-  updatedAt: string;
 }
 
 export interface ContentWorkspaceProps {
   items: readonly CampaignContent[];
+  versionCreatedAt: string;
   onUpdate: (item: CampaignContent) => void;
   onDuplicate: (itemId: string) => void;
   onDelete: (itemId: string) => void;
   onExport: (itemIds: string[]) => void;
 }
 
-export function ContentWorkspace({ items, onUpdate, onDuplicate, onDelete, onExport }: ContentWorkspaceProps) {
+export function ContentWorkspace({ items, versionCreatedAt, onUpdate, onDuplicate, onDelete, onExport }: ContentWorkspaceProps) {
   const [format, setFormat] = useState("ALL");
   const [channel, setChannel] = useState("ALL");
   const [status, setStatus] = useState("ALL");
@@ -190,7 +190,7 @@ export function ContentWorkspace({ items, onUpdate, onDuplicate, onDelete, onExp
           <Field label="Canal"><input value={item.channel} onChange={(event) => onUpdate({ ...item, channel: event.target.value })} /></Field>
           <Field label="Estado"><select value={item.status} onChange={(event) => onUpdate({ ...item, status: event.target.value as CampaignContent["status"] })}><option value="DRAFT">Borrador</option><option value="READY">Listo</option><option value="PUBLISHED">Publicado</option></select></Field>
           <Field label="Contenido" wide><textarea rows={7} value={item.body} onChange={(event) => onUpdate({ ...item, body: event.target.value })} /></Field>
-        </div> : <><h3>{item.title}</h3><p>{item.body}</p><small>{item.channel} · Actualizado {formatDate(item.updatedAt)}</small></>}
+        </div> : <><h3>{item.title}</h3><p>{item.body}</p><small>{item.channel} · Fecha de la versión {formatDate(versionCreatedAt)}</small></>}
         <footer className="refinement-card-actions">
           <button onClick={() => setEditingId(editingId === item.id ? null : item.id)} type="button">{editingId === item.id ? "Cerrar edición" : "Editar"}</button>
           <button onClick={() => onDuplicate(item.id)} type="button">Duplicar</button>

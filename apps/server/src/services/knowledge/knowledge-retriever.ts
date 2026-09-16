@@ -91,11 +91,18 @@ function selectWithCaps(
   return result;
 }
 
-function isLiteralQuery(query: string): boolean {
+export type KnowledgeQueryRoute = "EXACT" | "LEXICAL" | "NATURAL_LANGUAGE" | "SEMANTIC";
+
+/** Deterministic routing: preserve FTS priority for identifiers and literals. */
+export function classifyKnowledgeQuery(query: string): KnowledgeQueryRoute {
   const trimmed = query.trim();
-  return /^['"].+['"]$/.test(trimmed) || /https?:\/\//i.test(trimmed) ||
+  if (/^['"].+['"]$/.test(trimmed) || /https?:\/\//i.test(trimmed) ||
     /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i.test(trimmed) ||
-    /\b[A-Z]{1,8}[A-Z0-9_-]{2,}\b/.test(trimmed);
+    /\b[A-Z]{1,8}[A-Z0-9_-]{2,}\b/.test(trimmed)) return "EXACT";
+  const words = trimmed.match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (words.length >= 6 || /[?¿]|\b(qué|como|cómo|why|what|how)\b/i.test(trimmed)) return "NATURAL_LANGUAGE";
+  if (words.length >= 3) return "SEMANTIC";
+  return "LEXICAL";
 }
 
 function cosine(left: readonly number[], right: readonly number[]): number {
@@ -184,7 +191,7 @@ export class KnowledgeRetriever {
     let retrievalMode: "lexical" | "hybrid" = "lexical";
     let fallbackReason: HybridFallbackReason | undefined = semanticEnabled ? undefined : "disabled";
     let hybridRanked = ranked;
-    if (semanticEnabled && isLiteralQuery(query)) {
+    if (semanticEnabled && classifyKnowledgeQuery(query) === "EXACT") {
       fallbackReason = "literal_query";
     } else if (semanticEnabled && this.#hybrid.indexAvailable?.() === false) {
       fallbackReason = "index_unavailable";

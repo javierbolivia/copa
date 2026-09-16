@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getAgentKnowledgePolicy } from "../src/services/knowledge/agent-knowledge-policies.js";
 import { buildKnowledgeContext } from "../src/services/knowledge/context-builder.js";
 import { DisabledEmbeddingProvider } from "../src/services/knowledge/embedding-provider.js";
-import { KnowledgeRetriever } from "../src/services/knowledge/knowledge-retriever.js";
+import { classifyKnowledgeQuery, KnowledgeRetriever } from "../src/services/knowledge/knowledge-retriever.js";
 import {
   normalizeLexicalScores,
   rankLexicalHits,
@@ -146,6 +146,13 @@ describe("knowledge context", () => {
 });
 
 describe("KnowledgeRetriever", () => {
+  it("routes exact, lexical, natural-language and semantic queries deterministically", () => {
+    expect(classifyKnowledgeQuery("CASE-77")).toBe("EXACT");
+    expect(classifyKnowledgeQuery("https://hallazia.local/evidence/7")).toBe("EXACT");
+    expect(classifyKnowledgeQuery("frustración paseo perros")).toBe("SEMANTIC");
+    expect(classifyKnowledgeQuery("qué problemas aparecen repetidamente durante el paseo de perros?")).toBe("NATURAL_LANGUAGE");
+    expect(classifyKnowledgeQuery("perros")).toBe("LEXICAL");
+  });
   it("keeps the exact lexical route when the feature flag is off", async () => {
     const semantic = new SemanticFixture();
     const retriever = new KnowledgeRetriever(new FakeRepository({ scoreDirection: "higher_is_better", hits: [hit("lexical", { rawScore: 10 })] }), undefined, { enabled: () => false, embeddingProvider: semantic });

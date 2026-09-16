@@ -190,6 +190,24 @@ describe("Phase 20.4 market research acquisition", () => {
     expect(result.providers.find((report) => report.provider === "brave")).toMatchObject({ valid: 1, unique: 0, duplicates: 1 });
   });
 
+  it("no deja que un snippet inservible bloquee una extracción útil del mismo documento", async () => {
+    const clients: MarketResearchClients = {
+      tavily: new TavilyProvider({
+        apiKey: "tavily-key",
+        fetch: (async () => json({ results: [{ url: "https://shared.test/guia", title: "G", content: "cookies" }] })) as unknown as typeof fetch,
+      }),
+      exa: new ExaProvider({
+        apiKey: "exa-key",
+        fetch: (async () => json({ results: [{ url: "https://shared.test/guia", title: "G", text: "Evidencia útil y suficientemente detallada del documento compartido." }] })) as unknown as typeof fetch,
+      }),
+    };
+
+    const result = await acquireMarketResearchSignals(clients, { topic: TOPIC, retrievedAt });
+
+    expect(result.metrics).toMatchObject({ validSignals: 2, uniqueSignals: 1, duplicatesRemoved: 0, analyzedSignals: 1 });
+    expect(result.signals).toMatchObject([{ provider: "exa", text: "Evidencia útil y suficientemente detallada del documento compartido." }]);
+  });
+
   it("conserva comentarios distintos de YouTube que comparten la URL del vídeo", async () => {
     const clients: MarketResearchClients = { youtube: youtubeClient(3) };
 

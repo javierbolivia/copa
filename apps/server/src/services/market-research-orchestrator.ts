@@ -385,6 +385,10 @@ export async function acquireMarketResearchSignals(
     const unique: RankedSignal[] = [];
     let duplicates = 0;
     for (const signal of acquisition.signals) {
+      // Unusable snippets must not reserve an identity: a later provider can
+      // legitimately have a substantive extraction of the same document.
+      const text = boundedAnalysisText(signal.text);
+      if (text.length < MIN_USABLE_TEXT_LENGTH) continue;
       const key = marketSignalDedupeKey(signal);
       const documentKey = webDocumentKey(signal);
       if (seen.has(key) || (documentKey !== null && seen.has(documentKey))) {
@@ -394,8 +398,6 @@ export async function acquireMarketResearchSignals(
       }
       seen.add(key);
       if (documentKey !== null) seen.add(documentKey);
-      const text = boundedAnalysisText(signal.text);
-      if (text.length < MIN_USABLE_TEXT_LENGTH) continue;
       unique.push({ provider: acquisition.provider, signal, text, key });
     }
     uniqueSignals += unique.length;

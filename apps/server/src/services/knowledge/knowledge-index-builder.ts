@@ -7,7 +7,7 @@ export const INDEXABLE_ARTIFACT_TYPES = [
   "research", "problems", "opportunities", "product", "avatar", "mechanism", "beliefs", "offer",
 ] as const;
 export type IndexableArtifactType = (typeof INDEXABLE_ARTIFACT_TYPES)[number];
-export type KnowledgeIndexEntityType = "evidence" | "comment" | IndexableArtifactType;
+export type KnowledgeIndexEntityType = "evidence" | "comment" | "video_transcript" | IndexableArtifactType;
 
 export interface DerivedKnowledgeChunk {
   readonly originKey: string;
@@ -17,6 +17,10 @@ export interface DerivedKnowledgeChunk {
   readonly versionId: string | null;
   readonly sourceId: string | null;
   readonly evidenceId: string | null;
+  readonly videoId: string | null;
+  readonly language: string | null;
+  readonly startSeconds: number | null;
+  readonly endSeconds: number | null;
   readonly chunkIndex: number;
   readonly text: string;
   readonly textFingerprint: string;
@@ -42,7 +46,7 @@ export interface KnowledgeSemanticCandidate { readonly projectId: string; readon
 type SourceRow = Record<string, unknown>;
 
 const emptyCounts = (): Record<KnowledgeIndexEntityType, number> => ({
-  evidence: 0, comment: 0, research: 0, problems: 0, opportunities: 0,
+  evidence: 0, comment: 0, video_transcript: 0, research: 0, problems: 0, opportunities: 0,
   product: 0, avatar: 0, mechanism: 0, beliefs: 0, offer: 0,
 });
 
@@ -119,7 +123,8 @@ export class KnowledgeIndexBuilder {
     this.#target.exec(`PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS knowledge_chunks (
         origin_key TEXT PRIMARY KEY, project_id TEXT NOT NULL, entity_type TEXT NOT NULL,
-        entity_id TEXT NOT NULL, version_id TEXT, source_id TEXT, evidence_id TEXT,
+        entity_id TEXT NOT NULL, version_id TEXT, source_id TEXT, evidence_id TEXT, video_id TEXT,
+        language TEXT, start_seconds REAL, end_seconds REAL,
         chunk_index INTEGER NOT NULL, text TEXT NOT NULL CHECK(length(trim(text))>0),
         text_fingerprint TEXT NOT NULL, source_type TEXT NOT NULL, lifecycle TEXT NOT NULL,
         source_updated_at TEXT NOT NULL
@@ -161,7 +166,7 @@ export class KnowledgeIndexBuilder {
         const old = existing.get(key);
         if (old && old.textFingerprint === chunk.textFingerprint && old.sourceUpdatedAt === chunk.sourceUpdatedAt) { reused++; continue; }
         if (old) { this.#target.prepare("DELETE FROM knowledge_chunks WHERE origin_key=?").run(key); updated++; } else created++;
-        this.#target.prepare(`INSERT INTO knowledge_chunks(origin_key,project_id,entity_type,entity_id,version_id,source_id,evidence_id,chunk_index,text,text_fingerprint,source_type,lifecycle,source_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(chunk.originKey,chunk.projectId,chunk.entityType,chunk.entityId,chunk.versionId,chunk.sourceId,chunk.evidenceId,chunk.chunkIndex,chunk.text,chunk.textFingerprint,chunk.sourceType,chunk.lifecycle,chunk.sourceUpdatedAt);
+        this.#target.prepare(`INSERT INTO knowledge_chunks(origin_key,project_id,entity_type,entity_id,version_id,source_id,evidence_id,video_id,language,start_seconds,end_seconds,chunk_index,text,text_fingerprint,source_type,lifecycle,source_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(chunk.originKey,chunk.projectId,chunk.entityType,chunk.entityId,chunk.versionId,chunk.sourceId,chunk.evidenceId,chunk.videoId,chunk.language,chunk.startSeconds,chunk.endSeconds,chunk.chunkIndex,chunk.text,chunk.textFingerprint,chunk.sourceType,chunk.lifecycle,chunk.sourceUpdatedAt);
       }
       for (const key of existing.keys()) if (!desired.has(key)) { this.#target.prepare("DELETE FROM knowledge_chunks WHERE origin_key=?").run(key); removed++; }
       this.#target.exec(`DELETE FROM knowledge_chunks_fts;
@@ -188,6 +193,13 @@ export class KnowledgeIndexBuilder {
       const rejection = youtubeCommentRejection({ text: String(row.text) });
       if (rejection) { excluded[`quality_${rejection}`] = (excluded[`quality_${rejection}`] ?? 0) + 1; continue; }
       chunks.push(makeChunk("comment", row, 0, String(row.text), "eligible_comment", String(row.updated_at)));
+    }
+    const transcriptSegments = this.source.prepare(`SELECT segment.id segment_id,segment.project_id,segment.source_id,segment.video_id,segment.segment_index,segment.start_seconds,segment.end_seconds,segment.text,transcript.language,transcript.retrieved_at
+      FROM video_transcript_segments segment JOIN video_transcripts transcript ON transcript.id=segment.transcript_id AND transcript.project_id=segment.project_id
+      JOIN sources s ON s.id=segment.source_id AND s.project_id=segment.project_id
+      WHERE transcript.status='ready' AND s.include_in_analysis=1 AND s.status IN ('ready','completed') ORDER BY segment.id`).all() as SourceRow[];
+    for (const row of transcriptSegments) {
+      chunks.push(makeChunk("video_transcript", row, Number(row.segment_index), String(row.text), "video_transcript", String(row.retrieved_at)));
     }
     const artifactRows = this.source.prepare(`SELECT a.artifact_type,a.project_id,v.id version_id,v.output_data,v.created_at FROM artifacts a JOIN artifact_versions v ON v.id=a.active_version_id
       WHERE v.status='approved' AND v.freshness='fresh' AND a.artifact_type IN (${INDEXABLE_ARTIFACT_TYPES.map(() => "?").join(",")}) ORDER BY a.artifact_type,v.id`).all(...INDEXABLE_ARTIFACT_TYPES) as SourceRow[];
@@ -219,9 +231,9 @@ export class KnowledgeIndexBuilder {
 }
 
 function makeChunk(type: KnowledgeIndexEntityType, row: SourceRow, chunkIndex: number, rawText: string, lifecycle: string, sourceUpdatedAt: string): DerivedKnowledgeChunk {
-  const text = normalizedText(rawText); const entityId = type === "evidence" ? String(row.evidence_id) : type === "comment" ? String(row.id) : String(row.version_id);
+  const text = normalizedText(rawText); const entityId = type === "evidence" ? String(row.evidence_id) : type === "comment" ? String(row.id) : type === "video_transcript" ? String(row.segment_id) : String(row.version_id);
   const sourceId = typeof row.source_id === "string" ? row.source_id : null; const evidenceId = type === "evidence" ? String(row.evidence_id) : null;
-  return { originKey: `${type}:${entityId}:${chunkIndex}`, projectId: String(row.project_id), entityType: type, entityId, versionId: typeof row.version_id === "string" ? row.version_id : null, sourceId, evidenceId, chunkIndex, text, textFingerprint: knowledgeIndexFingerprint(text), sourceType: typeof row.source_type === "string" ? row.source_type : type === "evidence" || type === "comment" ? "comment" : "artifact", lifecycle, sourceUpdatedAt };
+  return { originKey: `${type}:${entityId}:${chunkIndex}`, projectId: String(row.project_id), entityType: type, entityId, versionId: typeof row.version_id === "string" ? row.version_id : null, sourceId, evidenceId, videoId:type==="video_transcript"?String(row.video_id):null,language:type==="video_transcript"&&typeof row.language==="string"?row.language:null,startSeconds:type==="video_transcript"?Number(row.start_seconds):null,endSeconds:type==="video_transcript"?Number(row.end_seconds):null, chunkIndex, text, textFingerprint: knowledgeIndexFingerprint(text), sourceType: type === "video_transcript" ? "VIDEO_TRANSCRIPT" : typeof row.source_type === "string" ? row.source_type : type === "evidence" || type === "comment" ? "comment" : "artifact", lifecycle, sourceUpdatedAt };
 }
 
-function rowToChunk(row: Record<string, unknown>): DerivedKnowledgeChunk { return { originKey:String(row.origin_key),projectId:String(row.project_id),entityType:String(row.entity_type) as KnowledgeIndexEntityType,entityId:String(row.entity_id),versionId:row.version_id as string|null,sourceId:row.source_id as string|null,evidenceId:row.evidence_id as string|null,chunkIndex:Number(row.chunk_index),text:String(row.text),textFingerprint:String(row.text_fingerprint),sourceType:String(row.source_type),lifecycle:String(row.lifecycle),sourceUpdatedAt:String(row.source_updated_at) }; }
+function rowToChunk(row: Record<string, unknown>): DerivedKnowledgeChunk { return { originKey:String(row.origin_key),projectId:String(row.project_id),entityType:String(row.entity_type) as KnowledgeIndexEntityType,entityId:String(row.entity_id),versionId:row.version_id as string|null,sourceId:row.source_id as string|null,evidenceId:row.evidence_id as string|null,videoId:row.video_id as string|null,language:row.language as string|null,startSeconds:row.start_seconds===null?null:Number(row.start_seconds),endSeconds:row.end_seconds===null?null:Number(row.end_seconds),chunkIndex:Number(row.chunk_index),text:String(row.text),textFingerprint:String(row.text_fingerprint),sourceType:String(row.source_type),lifecycle:String(row.lifecycle),sourceUpdatedAt:String(row.source_updated_at) }; }

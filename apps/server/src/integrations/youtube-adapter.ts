@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
   httpIntegrationError,
@@ -273,21 +274,24 @@ export class YouTubeAdapter {
     const url = new URL(`${this.baseUrl}/${resource}`);
     for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
     url.searchParams.set("key", this.apiKey!);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(url, { signal: controller.signal });
-    } catch (error) {
-      throw normalizeFetchError(error, "YouTube");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("YouTube", response.status, await readErrorType(response));
-    try {
-      return await response.json() as YouTubeListResponse;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "YouTube devolvió una respuesta que no es JSON.", { cause: error });
-    }
+    return withIntegrationTimeout("YouTube", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(url, { signal });
+      } catch (error) {
+        throw normalizeFetchError(error, "YouTube");
+      }
+      if (!response.ok) throw httpIntegrationError("YouTube", response.status, await readErrorType(response));
+      let body: YouTubeListResponse;
+      try {
+        body = await response.json() as YouTubeListResponse;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "YouTube devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "YouTube devolvió una respuesta JSON que no es un objeto.");
+      }
+      return body;
+    });
   }
 }

@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
   httpIntegrationError,
@@ -57,28 +58,30 @@ export class BraveSearchProvider {
     const url = new URL(this.endpoint);
     url.searchParams.set("q", query);
     url.searchParams.set("count", String(maxResults));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(url, {
-        method: "GET",
-        headers: { Accept: "application/json", "X-Subscription-Token": this.apiKey! },
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Brave Search");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Brave Search", response.status, await readErrorType(response));
+    const { response, body } = await withIntegrationTimeout("Brave Search", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(url, {
+          method: "GET",
+          headers: { Accept: "application/json", "X-Subscription-Token": this.apiKey! },
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Brave Search");
+      }
+      if (!response.ok) throw httpIntegrationError("Brave Search", response.status, await readErrorType(response));
 
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Brave Search devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Brave Search devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Brave Search devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const web = record(body.web);
     const rawResults = Array.isArray(web?.results) ? web.results : [];
     const usage = numeric(body.usage);

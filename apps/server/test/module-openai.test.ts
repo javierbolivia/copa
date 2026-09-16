@@ -69,7 +69,7 @@ describe("pipeline real de modulos con OpenAI", () => {
     const generation = db.prepare("SELECT * FROM generations").get() as Record<string, unknown>;
     const snapshot = JSON.parse(generation.input_snapshot as string) as Record<string, unknown>;
     expect(generation).toMatchObject({ agent_key: "research_agent", provider: "openai", model: "project-powerful", status: "COMPLETED", input_tokens: 101, output_tokens: 37 });
-    expect(generation.prompt_version).toMatch(/^1\.0\.0\+sha256\.[a-f0-9]{12}$/);
+    expect(generation.prompt_version).toMatch(/^1\.1\.0\+sha256\.[a-f0-9]{12}$/);
     expect(generation.estimated_cost).toBeCloseTo(0.000498, 8);
     expect(snapshot).toMatchObject({ provider: "openai", model: "project-powerful", promptPath: "prompts/research.md", instructions: "Prioriza patrones repetidos", context: { moduleKey: "research" } });
     expect(snapshot.promptHash).toMatch(/^[a-f0-9]{64}$/);

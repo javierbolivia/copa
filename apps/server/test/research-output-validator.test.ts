@@ -25,6 +25,19 @@ function complete(): Record<string, unknown> {
 }
 
 describe("Research output validator", () => {
+  it.each(["UNKNOWN", "", "evidence_backed"]) ("rejects unsupported provenance %s instead of approving an unclassified claim",(provenance)=>{
+    const input=complete();
+    input.hypotheses=[{text:"Afirmación",provenance,evidenceIds:[]}];
+    expect(validateResearchOutput(input,ALLOWED).audit.ok).toBe(false);
+  });
+  it("rejects an inference carrying evidence badges and counts the bounded input separately",()=>{
+    const input=complete();
+    input.hypotheses=[{text:"Inferencia",provenance:"AI_INFERENCE",evidenceIds:[VALID]}];
+    const result=validateResearchOutput(input,[VALID,OTHER]);
+    expect(result.audit.ok).toBe(false);
+    expect(result.audit.inputEvidenceCount).toBe(2);
+    expect(result.audit.citedEvidenceCount).toBe(1);
+  });
   it("TEST 1/complete — valid complete output with valid evidence is APPROVAL-eligible", () => {
     const r = validateResearchOutput(complete(), ALLOWED);
     expect(r.audit.ok).toBe(true);

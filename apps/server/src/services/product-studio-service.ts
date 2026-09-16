@@ -23,6 +23,9 @@ import { getAgentKnowledgePolicy } from "./knowledge/index.js";
 export class ProductStudioConflictError extends Error {}
 
 export class ProductStudioService {
+  // Cancelling a job does not finish the chapter request already in flight.
+  private readonly runningBatchDocuments = new Set<string>();
+
   constructor(
     private readonly database: AppDatabase,
     private readonly documents: ProductDocumentRepository,
@@ -627,6 +630,7 @@ export class ProductStudioService {
     documentId: string,
   ): Promise<{ jobId: string; document: ProductDocument }> {
     const current = this.requireFresh(projectId, documentId);
+    this.assertBatchIdle(documentId);
     const pending = this.documents
       .listChapters(projectId, documentId)
       .filter((item) => ["PENDING", "FAILED"].includes(item.status));
@@ -641,6 +645,7 @@ export class ProductStudioService {
       "Capítulos pendientes en cola",
     ).id;
     this.jobs.start(projectId, jobId, "Generando capítulos pendientes");
+    this.runningBatchDocuments.add(documentId);
     try {
       for (const [index, chapter] of pending.entries()) {
         if (this.jobs.isCancelled(projectId, jobId)) break;
@@ -672,6 +677,8 @@ export class ProductStudioService {
           : "Falló la generación por lote.",
       );
       throw error;
+    } finally {
+      this.runningBatchDocuments.delete(documentId);
     }
     return {
       jobId,
@@ -692,6 +699,7 @@ export class ProductStudioService {
       if (!document) throw new Error("El documento no existe.");
       return { jobId, document };
     }
+    this.assertBatchIdle(documentId);
     if (job.status === "RUNNING")
       throw new ProductStudioConflictError("El lote ya se está ejecutando.");
     this.requireFresh(projectId, documentId);
@@ -704,6 +712,7 @@ export class ProductStudioService {
         ? job.payload.pendingChapterIds.map(String)
         : [],
       start = Number(job.payload.nextIndex ?? 0);
+    this.runningBatchDocuments.add(documentId);
     try {
       for (let index = start; index < ids.length; index++) {
         if (this.jobs.isCancelled(projectId, jobId)) break;
@@ -733,8 +742,16 @@ export class ProductStudioService {
         error instanceof Error ? error.message : "Falló la reanudación.",
       );
       throw error;
+    } finally {
+      this.runningBatchDocuments.delete(documentId);
     }
     return { jobId, document: this.documents.get(projectId, documentId)! };
+  }
+
+  private assertBatchIdle(documentId: string): void {
+    if (this.runningBatchDocuments.has(documentId)) {
+      throw new ProductStudioConflictError("El lote anterior aún está terminando; espera antes de reanudar o generar otro lote.");
+    }
   }
 
   approveChapter(

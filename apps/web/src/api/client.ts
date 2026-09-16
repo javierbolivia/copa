@@ -149,6 +149,7 @@ const json = (method: string, body?: unknown): RequestInit =>
       };
 
 export const api = {
+  technicalReviews:()=>request<{sections:Record<string,{reviewedAt:string}>}>("/api/technical-reviews"),
   health: () => request<Health>("/api/health"),
   projects: () => request<ProjectList>("/api/projects?includeArchived=true"),
   createProject: (input: CreateProjectInput) =>
@@ -221,10 +222,10 @@ export const api = {
     ),
   providerStatus: (id: string) =>
     request<ProviderStatus>(`/api/projects/${id}/providers/status`),
-  saveModuleDraft: (id: string, key: ModuleKey, outputData: unknown) =>
+  saveModuleDraft: (id: string, key: ModuleKey, outputData: unknown, expectedBaseVersionId?: string, sourceVersionId?: string) =>
     request<ModuleResult>(
       `/api/projects/${id}/modules/${key}/drafts`,
-      json("POST", { outputData }),
+      json("POST", { outputData, ...(expectedBaseVersionId?{expectedBaseVersionId}:{}), ...(sourceVersionId?{sourceVersionId}:{}) }),
     ),
   approveModuleVersion: (id: string, key: ModuleKey, versionId: string) =>
     request<ModuleResult>(

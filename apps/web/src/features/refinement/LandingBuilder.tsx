@@ -1,174 +1,46 @@
-import { useEffect, useMemo, useState } from "react";
-import { Field, StringListField } from "./EditorScaffold";
-import type { LandingEditorValue, LandingPreviewMode, LandingSection, LandingVersion } from "./types";
+import {lazy,Suspense,useEffect,useState} from "react";
+import {renderLandingHtml,type LandingContentSection,type LandingDesignTokens} from "@our-platform/shared";
+import {Field} from "./EditorScaffold";
+import {fromLanding} from "./landing-adapter";
+import type {LandingEditorValue,LandingPreviewMode,LandingVersion} from "./types";
 import "./refinement.css";
-
 export interface LandingBuilderProps {
-  value: LandingEditorValue;
-  versions: LandingVersion[];
-  selectedVersionId?: string | undefined;
-  saving?: boolean | undefined;
-  exporting?: boolean | undefined;
-  readOnly?: boolean | undefined;
-  onSave: (value: LandingEditorValue) => void | Promise<void>;
-  onSelectVersion?: ((versionId: string) => void) | undefined;
-  onExportHtml: (value: LandingEditorValue) => void | Promise<void>;
-  onOpenTraceability?: ((field: string) => void) | undefined;
+  value:LandingEditorValue;versions:LandingVersion[];selectedVersionId?:string|undefined;saving?:boolean|undefined;exporting?:boolean|undefined;readOnly?:boolean|undefined;
+  onSave:(value:LandingEditorValue)=>void|boolean|Promise<void|boolean>;
+  onSelectVersion?:((versionId:string)=>void)|undefined;onExportHtml:(value:LandingEditorValue)=>void|Promise<void>;
+  onOpenTraceability?:((field:string)=>void)|undefined;
 }
-
-type LandingEditorSection = "hero" | "problem" | "solution" | "benefits" | "offer" | "guarantee" | "cta";
-
-const editorSections: ReadonlyArray<{id: LandingEditorSection; label: string}> = [
-  {id: "hero", label: "Hero"},
-  {id: "problem", label: "Problema"},
-  {id: "solution", label: "Solución"},
-  {id: "benefits", label: "Beneficios"},
-  {id: "offer", label: "Oferta"},
-  {id: "guarantee", label: "Garantía"},
-  {id: "cta", label: "CTA"},
-];
-
-const cloneLanding = (value: LandingEditorValue): LandingEditorValue => ({
-  ...value,
-  hero: {...value.hero},
-  problem: {...value.problem},
-  solution: {...value.solution},
-  benefits: [...value.benefits],
-  offer: {...value.offer},
-});
-
-export function LandingBuilder({
-  value,
-  versions,
-  selectedVersionId,
-  saving = false,
-  exporting = false,
-  readOnly = false,
-  onSave,
-  onSelectVersion,
-  onExportHtml,
-  onOpenTraceability,
-}: LandingBuilderProps) {
-  const [draft, setDraft] = useState(() => cloneLanding(value));
-  const [editing, setEditing] = useState(false);
-  const [activeSection, setActiveSection] = useState<LandingEditorSection>("hero");
-  const [previewMode, setPreviewMode] = useState<LandingPreviewMode>("desktop");
-  const [compareVersionId, setCompareVersionId] = useState("");
-
-  useEffect(() => {
-    if (!editing) setDraft(cloneLanding(value));
-  }, [value, editing]);
-
-  const compareVersion = versions.find((version) => version.id === compareVersionId);
-  const differences = useMemo(() => compareVersion ? compareLanding(value, compareVersion.value) : [], [compareVersion, value]);
-  const previewValue = editing ? draft : value;
-
-  const cancel = () => {
-    setDraft(cloneLanding(value));
-    setEditing(false);
-  };
-  const save = async () => {
-    await onSave(cloneLanding(draft));
-    setEditing(false);
-  };
-
+const LandingVisualEditor=lazy(()=>import("./LandingVisualEditor"));
+const labels:Record<string,string>={hero:"Apertura",problem:"Problema",mechanism:"Mecanismo",benefits:"Beneficios",product:"Producto",offer:"Oferta",bonuses:"Bonos",guarantee:"Garantía",faq:"Preguntas frecuentes",cta:"Llamada a la acción"};
+const text=(value:unknown)=>typeof value==="string"?value:"";
+export function LandingBuilder({value,versions,selectedVersionId,saving=false,exporting=false,readOnly=false,onSave,onSelectVersion,onExportHtml,onOpenTraceability}:LandingBuilderProps){
+  const [visual,setVisual]=useState(false);
+  const [draft,setDraft]=useState(()=>structuredClone(value)),[editing,setEditing]=useState(false),[error,setError]=useState<string|null>(null);
+  const [index,setIndex]=useState(0),[mode,setMode]=useState<LandingPreviewMode>("desktop"),[compareId,setCompareId]=useState(""),[newType,setNewType]=useState("faq");
+  useEffect(()=>{if(!editing)setDraft(structuredClone(value));},[value,editing]);
+  const shown=editing?draft:value,section=draft.sections[index],comparison=versions.find(item=>item.id===compareId);
+  const replace=(updated:LandingContentSection)=>setDraft(current=>({...current,sections:current.sections.map((item,i)=>i===index?updated:item)}));
+  const move=(delta:number)=>{const target=index+delta;if(target<0||target>=draft.sections.length)return;const sections=[...draft.sections];[sections[index],sections[target]]=[sections[target]!,sections[index]!];setDraft({...draft,sections});setIndex(target);};
+  const save=async()=>{setError(null);try{if(await onSave(structuredClone(draft))===false){setError("No se guardó el borrador. Tus cambios permanecen en el editor.");return;}setEditing(false);}catch(reason){setError(reason instanceof Error?reason.message:"No se pudo guardar. Tus cambios permanecen en el editor.");}};
   return <section className="rf-landing-builder">
-    <header className="rf-landing-toolbar">
-      <div><span className="rf-eyebrow">LANDING SECTION WORKSPACE</span><h2>{value.pageName || "Landing sin nombre"}</h2><p>Arquitectura de secciones, copy estructurado y vista previa segura sincronizada.</p></div>
-      <div className="rf-actions">
-        {editing ? <><button className="rf-button rf-button--quiet" type="button" disabled={saving} onClick={cancel}>Cancelar</button><button className="rf-button rf-button--primary" type="button" disabled={saving} onClick={() => void save()}>{saving ? "Guardando…" : "Guardar"}</button></> : <button className="rf-button rf-button--quiet" type="button" disabled={readOnly} onClick={() => setEditing(true)}>Editar</button>}
-        <button className="rf-button rf-button--primary" type="button" disabled={exporting} onClick={() => void onExportHtml(previewValue)}>{exporting ? "Exportando…" : "Exportar HTML"}</button>
-      </div>
-    </header>
-
-    <div className="rf-landing-meta">
-      <label>Versión
-        <select value={selectedVersionId ?? ""} disabled={!onSelectVersion} onChange={(event) => onSelectVersion?.(event.target.value)}>
-          {!selectedVersionId && <option value="">Actual</option>}
-          {versions.map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {formatDate(version.createdAt)}{version.status ? ` · ${version.status}` : ""}</option>)}
-        </select>
-      </label>
-      <label>Comparar con
-        <select value={compareVersionId} onChange={(event) => setCompareVersionId(event.target.value)}>
-          <option value="">Sin comparación</option>
-          {versions.filter((version) => version.id !== selectedVersionId).map((version) => <option key={version.id} value={version.id}>v{version.versionNumber} · {formatDate(version.createdAt)}</option>)}
-        </select>
-      </label>
-      <div className="rf-preview-toggle" role="group" aria-label="Tamaño de vista previa">
-        <button className={previewMode === "desktop" ? "is-active" : ""} type="button" onClick={() => setPreviewMode("desktop")}>Desktop</button>
-        <button className={previewMode === "mobile" ? "is-active" : ""} type="button" onClick={() => setPreviewMode("mobile")}>Mobile</button>
-      </div>
-    </div>
-
-    {compareVersion && <VersionComparison version={compareVersion} differences={differences}/>}
-
-    <div className="rf-landing-grid">
-      <div className="rf-landing-editor">
-        <nav aria-label="Secciones de la landing">{editorSections.map((section) => <button className={activeSection === section.id ? "is-active" : ""} type="button" key={section.id} onClick={() => setActiveSection(section.id)}>{section.label}</button>)}</nav>
-        <div className="rf-landing-editor__panel">
-          <LandingSectionEditor sectionId={activeSection} value={draft} editing={editing} onChange={setDraft} onOpenTraceability={onOpenTraceability}/>
-        </div>
-      </div>
-      <div className="rf-preview-stage">
-        <div className={`rf-preview-frame rf-preview-frame--${previewMode}`}>
-          <LandingPreview value={previewValue} onOpenTraceability={onOpenTraceability}/>
-        </div>
-      </div>
-    </div>
+    <header className="rf-landing-toolbar"><div><span className="rf-eyebrow">DOCUMENTO Y VISTA PREVIA</span><h2>{value.pageName||"Landing sin título"}</h2><p>Conserva el orden, todas las secciones y sus citas. Vista previa y exportación usan el mismo HTML y CSS estáticos.</p></div><div className="rf-actions"><button className="rf-button rf-button--primary" disabled={readOnly||editing} onClick={()=>setVisual(true)}>Abrir constructor visual</button>{editing?<><button className="rf-button" disabled={saving} onClick={()=>{setDraft(structuredClone(value));setEditing(false);setError(null);}}>Cancelar</button><button className="rf-button rf-button--primary" disabled={saving} onClick={()=>void save()}>{saving?"Guardando…":"Guardar borrador"}</button></>:<button className="rf-button" disabled={readOnly} onClick={()=>setEditing(true)}>Editar</button>}<button className="rf-button rf-button--primary" disabled={exporting} onClick={()=>void onExportHtml(shown)}>Exportar HTML de vista previa</button></div></header>
+    {visual&&<Suspense fallback={<p role="status">Cargando constructor visual…</p>}><LandingVisualEditor value={value} onSave={onSave} saving={saving} onClose={()=>setVisual(false)}/></Suspense>}
+    {error&&<p role="alert" className="refinement-feedback">{error}</p>}
+    <div className="rf-landing-meta"><label>Versión<select value={selectedVersionId??""} disabled={!onSelectVersion||editing||saving} onChange={event=>onSelectVersion?.(event.target.value)}>{!selectedVersionId&&<option value="">Actual</option>}{versions.map(version=><option key={version.id} value={version.id}>v{version.versionNumber} · {new Date(version.createdAt).toLocaleString("es")}</option>)}</select></label><label>Comparar con<select value={compareId} onChange={event=>setCompareId(event.target.value)}><option value="">Sin comparación</option>{versions.filter(version=>version.id!==selectedVersionId).map(version=><option key={version.id} value={version.id}>v{version.versionNumber} · {new Date(version.createdAt).toLocaleDateString("es")}</option>)}</select></label><div className="rf-preview-toggle" role="group" aria-label="Tamaño de vista previa"><button className={mode==="desktop"?"is-active":""} aria-pressed={mode==="desktop"} onClick={()=>setMode("desktop")}>Escritorio</button><button className={mode==="mobile"?"is-active":""} aria-pressed={mode==="mobile"} onClick={()=>setMode("mobile")}>Móvil</button></div></div>
+    {comparison&&<aside className="rf-version-comparison"><strong>Comparación con v{comparison.versionNumber}</strong><p>{JSON.stringify(value)===JSON.stringify(comparison.value)?"Mismo contenido y estilo.":"Hay diferencias en el documento. Consulta cada versión desde el selector; sus fechas originales se conservan."}</p></aside>}
+    <div className="rf-landing-grid"><div className="rf-landing-editor"><nav aria-label="Secciones de la landing"><button className={index===-1?"is-active":""} onClick={()=>setIndex(-1)}>Página y estilo</button>{draft.sections.map((item,i)=><button key={i} className={index===i?"is-active":""} onClick={()=>setIndex(i)}>{i+1}. {labels[item.type]??item.type}</button>)}</nav><div className="rf-landing-editor__panel">{index===-1?<LandingStyleEditor value={draft} editing={editing} onChange={setDraft}/>:section?<><div className="rf-field-stack"><span className="rf-eyebrow">{labels[section.type]??section.type}</span>{editing&&<div className="rf-actions"><button className="rf-button" disabled={index===0} onClick={()=>move(-1)}>Subir sección</button><button className="rf-button" disabled={index===draft.sections.length-1} onClick={()=>move(1)}>Bajar sección</button><button className="rf-button" onClick={()=>{setDraft({...draft,sections:draft.sections.filter((_,i)=>i!==index)});setIndex(Math.max(0,index-1));}}>Retirar sección</button></div>}{([["eyebrow","Antetítulo"],["headline","Título"],["subheadline","Subtítulo"],["body","Cuerpo"],["cta","Texto del botón"]] as const).map(([key,label])=><Field key={key} label={label} value={text(section[key])} editing={editing} multiline={key!=="eyebrow"&&key!=="cta"} onChange={content=>replace({...section,[key]:content})}/>)}<LandingItems section={section} editing={editing} onChange={replace}/>{onOpenTraceability&&<button className="rf-button" onClick={()=>onOpenTraceability(`sections.${index}`)}>Ver origen de la versión</button>}</div></>:<p>No hay una sección seleccionada.</p>}{editing&&<div className="landing-add-section"><label>Tipo de sección<select value={newType} onChange={event=>setNewType(event.target.value)}>{Object.entries(labels).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label><button className="rf-button" onClick={()=>{setDraft({...draft,sections:[...draft.sections,{type:newType}]});setIndex(draft.sections.length);}}>Añadir sección vacía</button></div>}</div></div>
+    <div className="rf-preview-stage"><p className="form-hint">{editing?"Vista previa de los cambios sin guardar":"Vista previa de la versión guardada"} · Sin publicación ni checkout.</p><div className={`rf-preview-frame rf-preview-frame--${mode}`}><LandingPreview value={shown}/></div></div></div>
   </section>;
 }
-
-function LandingSectionEditor({sectionId, value, editing, onChange, onOpenTraceability}: {sectionId: LandingEditorSection; value: LandingEditorValue; editing: boolean; onChange: (value: LandingEditorValue) => void; onOpenTraceability?: ((field: string) => void) | undefined}) {
-  if (sectionId === "benefits") return <StringListField label="Beneficios" value={value.benefits} editing={editing} onChange={(benefits) => onChange({...value, benefits})} traceability={onOpenTraceability ? () => onOpenTraceability("benefits") : undefined}/>;
-  if (sectionId === "guarantee") return <Field label="Garantía" value={value.guarantee} editing={editing} multiline onChange={(guarantee) => onChange({...value, guarantee})} traceability={onOpenTraceability ? () => onOpenTraceability("guarantee") : undefined}/>;
-  if (sectionId === "cta") return <div className="rf-field-stack"><Field label="Texto del botón" value={value.ctaLabel} editing={editing} onChange={(ctaLabel) => onChange({...value, ctaLabel})}/><Field label="Nota al pie" value={value.footerNote} editing={editing} multiline onChange={(footerNote) => onChange({...value, footerNote})}/></div>;
-  const section = value[sectionId];
-  const update = (patch: Partial<LandingSection>) => onChange({...value, [sectionId]: {...section, ...patch}});
-  return <div className="rf-field-stack">
-    {sectionId === "hero" && <Field label="Nombre interno" value={value.pageName} editing={editing} onChange={(pageName) => onChange({...value, pageName})}/>} 
-    <Field label="Antetítulo" value={section.eyebrow} editing={editing} onChange={(eyebrow) => update({eyebrow})}/>
-    <Field label="Título" value={section.headline} editing={editing} multiline onChange={(headline) => update({headline})} traceability={onOpenTraceability ? () => onOpenTraceability(`${sectionId}.headline`) : undefined}/>
-    <Field label="Cuerpo" value={section.body} editing={editing} multiline onChange={(body) => update({body})}/>
-  </div>;
+function LandingItems({section,editing,onChange}:{section:LandingContentSection;editing:boolean;onChange:(value:LandingContentSection)=>void}){
+  const items=section.items??[];
+  const update=(index:number,value:string|Record<string,unknown>)=>onChange({...section,items:items.map((item,i)=>i===index?value:item)});
+  return <div className="rf-field-stack"><h3>{section.type==="faq"?"Preguntas y respuestas":"Elementos de la sección"}</h3>{items.length===0&&!editing&&<p className="form-hint">Sin elementos registrados.</p>}{items.map((item,i)=><article className="landing-item" key={i}>{typeof item==="string"?<Field label={`Elemento ${i+1}`} value={item} editing={editing} multiline onChange={content=>update(i,content)}/>:<>{(item.q!==undefined||section.type==="faq"?[["q","Pregunta"],["a","Respuesta"]]:[["name","Nombre"],["description","Descripción"]]).map(([key,label])=><Field key={key} label={`${label} ${i+1}`} value={text(item[key!])} editing={editing} multiline onChange={content=>update(i,{...item,[key!]:content})}/>)}</>}{editing&&<button className="rf-button" onClick={()=>onChange({...section,items:items.filter((_,j)=>i!==j)})}>Eliminar elemento {i+1}</button>}</article>)}{editing&&<button className="rf-button" onClick={()=>onChange({...section,items:[...items,section.type==="faq"?{q:"",a:""}:""]})}>Añadir {section.type==="faq"?"pregunta":"elemento"}</button>}</div>;
 }
-
-export function LandingPreview({value, onOpenTraceability}: {value: LandingEditorValue; onOpenTraceability?: ((field: string) => void) | undefined}) {
-  return <article className="rf-page-preview" aria-label="Vista previa de landing">
-    <section className="rf-page-hero"><PreviewEyebrow value={value.hero.eyebrow}/><h1>{value.hero.headline || "Tu headline aparecerá aquí"}</h1><p>{value.hero.body}</p><button type="button">{value.ctaLabel || "Empezar ahora"}</button>{onOpenTraceability && <TraceButton onClick={() => onOpenTraceability("hero.headline")}/>}</section>
-    <PreviewSection section={value.problem} traceability={onOpenTraceability ? () => onOpenTraceability("problem.headline") : undefined}/>
-    <PreviewSection section={value.solution} traceability={onOpenTraceability ? () => onOpenTraceability("solution.headline") : undefined}/>
-    {value.benefits.length > 0 && <section className="rf-page-benefits"><h2>Lo que conseguirás</h2><div>{value.benefits.map((benefit, index) => <article key={`${benefit}-${index}`}><span>✓</span><p>{benefit}</p></article>)}</div>{onOpenTraceability && <TraceButton onClick={() => onOpenTraceability("benefits")}/>}</section>}
-    <PreviewSection section={value.offer} accent traceability={onOpenTraceability ? () => onOpenTraceability("offer.headline") : undefined}/>
-    {value.guarantee && <section className="rf-page-guarantee"><strong>Garantía</strong><p>{value.guarantee}</p></section>}
-    <section className="rf-page-final"><button type="button">{value.ctaLabel || "Empezar ahora"}</button><small>{value.footerNote}</small></section>
-  </article>;
+function LandingStyleEditor({value,editing,onChange}:{value:LandingEditorValue;editing:boolean;onChange:(value:LandingEditorValue)=>void}){
+  const tokens=value.designTokens,setToken=(key:keyof LandingDesignTokens,content:string)=>onChange({...value,designTokens:{...tokens,[key]:content}});
+  return <div className="rf-field-stack"><Field label="Nombre de la página" value={value.pageName} editing={editing} onChange={pageName=>onChange({...value,pageName})}/><Field label="Nota al pie" value={value.footerNote} editing={editing} multiline onChange={footerNote=>onChange({...value,footerNote})}/><h3>Estilo de la página</h3>{([["accent","Color de acento"],["background","Color de fondo"],["text","Color del texto"]] as const).map(([key,label])=><label key={key}>{label}<input aria-label={label} type="color" value={tokens[key]} disabled={!editing} onChange={event=>setToken(key,event.target.value)}/></label>)}<label>Tipografía<select disabled={!editing} value={tokens.font} onChange={event=>setToken("font",event.target.value)}><option value="sans">Sans serif</option><option value="serif">Serif</option></select></label><label>Ancho<select disabled={!editing} value={tokens.width} onChange={event=>setToken("width",event.target.value)}><option value="compact">Lectura compacta</option><option value="wide">Amplio</option></select></label><label>Espaciado<select disabled={!editing} value={tokens.spacing} onChange={event=>setToken("spacing",event.target.value)}><option value="compact">Compacto</option><option value="relaxed">Amplio</option></select></label><p className="form-hint">Estos controles generan CSS local. No cargan fuentes, imágenes ni scripts externos.</p></div>;
 }
-
-function PreviewSection({section, accent = false, traceability}: {section: LandingSection; accent?: boolean | undefined; traceability?: (() => void) | undefined}) {
-  return <section className={accent ? "rf-page-section is-accent" : "rf-page-section"}><PreviewEyebrow value={section.eyebrow}/><h2>{section.headline}</h2><p>{section.body}</p>{traceability && <TraceButton onClick={traceability}/>}</section>;
-}
-function PreviewEyebrow({value}: {value: string}) { return value ? <span>{value}</span> : null; }
-function TraceButton({onClick}: {onClick: () => void}) { return <button className="rf-trace-button" type="button" onClick={onClick}>¿De dónde sale esto?</button>; }
-
-function VersionComparison({version, differences}: {version: LandingVersion; differences: string[]}) {
-  return <aside className="rf-version-comparison"><div><span className="rf-eyebrow">COMPARACIÓN</span><strong>Actual vs. v{version.versionNumber}</strong></div>{differences.length ? <ul>{differences.map((difference) => <li key={difference}>{difference}</li>)}</ul> : <p>Las versiones no tienen diferencias de contenido.</p>}</aside>;
-}
-
-function compareLanding(current: LandingEditorValue, previous: LandingEditorValue): string[] {
-  const fields: ReadonlyArray<[string, string, string]> = [
-    ["Nombre", current.pageName, previous.pageName],
-    ["Hero", JSON.stringify(current.hero), JSON.stringify(previous.hero)],
-    ["Problema", JSON.stringify(current.problem), JSON.stringify(previous.problem)],
-    ["Solución", JSON.stringify(current.solution), JSON.stringify(previous.solution)],
-    ["Beneficios", JSON.stringify(current.benefits), JSON.stringify(previous.benefits)],
-    ["Oferta", JSON.stringify(current.offer), JSON.stringify(previous.offer)],
-    ["Garantía", current.guarantee, previous.guarantee],
-    ["CTA", current.ctaLabel, previous.ctaLabel],
-  ];
-  return fields.filter(([, a, b]) => a !== b).map(([label]) => `${label} cambió`);
-}
-
-function formatDate(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("es");
+export function LandingPreview({value}:{value:LandingEditorValue;onOpenTraceability?:((field:string)=>void)|undefined}){
+  return <iframe title="Vista previa de landing" sandbox="" srcDoc={renderLandingHtml(fromLanding({},value))} style={{width:"100%",height:760,border:0,background:value.designTokens.background}}/>;
 }

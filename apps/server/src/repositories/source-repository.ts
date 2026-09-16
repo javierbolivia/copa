@@ -99,7 +99,7 @@ export class SourceRepository {
     return this.get(projectId, sourceId);
   }
 
-  analysisSet(projectId:string):Comment[]{return (this.database.connection.prepare(`SELECT c.* FROM comments c JOIN sources s ON s.id=c.source_id AND s.project_id=c.project_id WHERE c.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,c.created_at`).all(projectId) as unknown as CommentRow[]).map(toComment);}
+  analysisSet(projectId:string):Comment[]{return (this.database.connection.prepare(`SELECT c.* FROM comments c JOIN sources s ON s.id=c.source_id AND s.project_id=c.project_id WHERE c.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,c.created_at`).all(projectId) as unknown as CommentRow[]).map(toComment);}
 
   getBundle(projectId: string, sourceId: string): SourceBundle | undefined {
     const source=this.get(projectId,sourceId); if(!source)return undefined;
@@ -186,9 +186,9 @@ export class SourceRepository {
     try {
       this.database.connection.prepare(`INSERT INTO sources(id,project_id,source_type,title,url,status,raw_text,metadata_json,created_at,updated_at) VALUES(?,?,?,?,?,'ready',?,?,?,?)`)
         .run(sourceId,projectId,sourceData.sourceType,sourceData.title,sourceData.url,sourceData.rawText,JSON.stringify(sourceData.metadata),now,now);
-      const insertComment=this.database.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,likes,is_reply,is_demo,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,0,?, '{}',?)`);
+      const insertComment=this.database.connection.prepare(`INSERT INTO comments(id,project_id,source_id,platform_comment_id,author,text,likes,is_reply,is_demo,analysis_eligible,noise_reason,quality_score,metadata_json,created_at) VALUES(?,?,?,?,?,?,?,0,?,?,?,?, '{}',?)`);
       const insertEvidence=this.database.connection.prepare(`INSERT INTO evidence_snippets(id,project_id,source_id,comment_id,quote_text,provenance,created_at) VALUES(?,?,?,?,?,'EVIDENCE_BACKED',?)`);
-      comments.forEach(comment=>{const id=uuidv7();insertComment.run(id,projectId,sourceId,comment.platformId,comment.author,comment.text,comment.likes,isDemo?1:0,now);insertEvidence.run(uuidv7(),projectId,sourceId,id,comment.text,now);});
+      comments.forEach(comment=>{const id=uuidv7(),quality=classifyComment(comment.text,false);insertComment.run(id,projectId,sourceId,comment.platformId,comment.author,comment.text,comment.likes,isDemo?1:0,quality.eligible?1:0,quality.reason,quality.score,now);insertEvidence.run(uuidv7(),projectId,sourceId,id,comment.text,now);});
       this.database.connection.prepare(`UPDATE workflow_steps SET state='COMPLETED',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='sources'`).run(now,projectId);
       this.database.connection.prepare(`UPDATE workflow_steps SET state=CASE WHEN state='PENDING' THEN 'READY' ELSE state END,updated_at=? WHERE project_id=? AND step_key='problems'`).run(now,projectId);
       this.invalidateSourceArtifacts(projectId,"Se añadió una fuente de evidencia.",now);

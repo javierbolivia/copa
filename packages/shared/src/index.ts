@@ -14,3 +14,6 @@ export * from "./learning-memory.js";
 export * from "./internal-skill.js";
 export * from "./youtube-query-plan.js";
 export * from "./product-module.js";
+export * from "./avatar-module.js";
+
+export * from "./landing-document.js";

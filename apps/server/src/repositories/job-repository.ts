@@ -25,8 +25,29 @@ export class JobRepository {
   retry(projectId:string,id:string):Job|undefined{const now=new Date().toISOString();this.database.connection.prepare(`UPDATE jobs SET status='QUEUED',progress=0,message='Reintento en cola',error_code=NULL,error_message=NULL,cancel_requested=0,completed_at=NULL,updated_at=? WHERE project_id=? AND id=? AND status IN ('FAILED','CANCELLED') AND attempts < max_attempts`).run(now,projectId,id);return this.get(projectId,id);}
   isCancelled(projectId:string,id:string):boolean{return (this.database.connection.prepare("SELECT cancel_requested FROM jobs WHERE project_id=? AND id=?").get(projectId,id) as {cancel_requested:number}|undefined)?.cancel_requested===1;}
   isCancellationRequested(projectId:string,id:string):boolean{return this.isCancelled(projectId,id);}
-  recoverYouTubeImports():Array<{projectId:string;jobId:string}>{const now=new Date().toISOString();this.database.connection.prepare(`UPDATE jobs SET status='FAILED',message='Se agotaron los reintentos después de una interrupción',error_code='retry_exhausted',error_message='Se agotaron los reintentos después de una interrupción',completed_at=?,updated_at=? WHERE job_type='youtube_import' AND status='RUNNING' AND attempts>=max_attempts`).run(now,now);this.database.connection.prepare(`UPDATE jobs SET status='QUEUED',progress=0,message='Recuperado después de reiniciar la aplicación',updated_at=? WHERE job_type='youtube_import' AND status='RUNNING' AND attempts<max_attempts`).run(now);return this.database.connection.prepare(`SELECT project_id projectId,id jobId FROM jobs WHERE job_type='youtube_import' AND status='QUEUED' AND attempts<max_attempts`).all() as unknown as Array<{projectId:string;jobId:string}>;}
-  failPendingYouTubeWithoutProvider():void{const now=new Date().toISOString();this.database.connection.prepare(`UPDATE jobs SET status='FAILED',message='YouTube no está configurado después del reinicio',error_code='youtube_not_configured',error_message='Añade YOUTUBE_API_KEY y reintenta el job.',completed_at=?,updated_at=? WHERE job_type='youtube_import' AND status='QUEUED'`).run(now,now);}
+  recoverYouTubeImports():Array<{projectId:string;jobId:string}>{
+    this.failYouTubeImports("retry_exhausted");
+    this.database.connection.prepare(`UPDATE jobs SET status='QUEUED',progress=0,message='Recuperado después de reiniciar la aplicación',updated_at=? WHERE job_type='youtube_import' AND status='RUNNING' AND attempts<max_attempts`).run(new Date().toISOString());
+    return this.database.connection.prepare(`SELECT project_id projectId,id jobId FROM jobs WHERE job_type='youtube_import' AND status='QUEUED' AND attempts<max_attempts`).all() as unknown as Array<{projectId:string;jobId:string}>;
+  }
+  failPendingYouTubeWithoutProvider():void{this.failYouTubeImports("youtube_not_configured");}
+  private failYouTubeImports(code:"retry_exhausted"|"youtube_not_configured"):void{
+    const exhausted=code==="retry_exhausted",now=new Date().toISOString();
+    const message=exhausted?"Se agotaron los reintentos después de una interrupción":"YouTube no está configurado después del reinicio";
+    const detail=exhausted?message:"Añade YOUTUBE_API_KEY y reintenta el job.";
+    const condition=exhausted?"status='RUNNING' AND attempts>=max_attempts":"status='QUEUED'";
+    const db=this.database.connection;
+    db.exec("BEGIN IMMEDIATE");
+    try{
+      const failed=db.prepare(`UPDATE jobs SET status='FAILED',message=?,error_code=?,error_message=?,completed_at=?,updated_at=? WHERE job_type='youtube_import' AND ${condition} RETURNING project_id,source_id`).all(message,code,detail,now,now) as Array<{project_id:string;source_id:string|null}>;
+      const updateSource=db.prepare("UPDATE sources SET status='failed',error_code=?,error_message=?,updated_at=? WHERE project_id=? AND id=?");
+      for(const job of failed)if(job.source_id!==null)updateSource.run(code,detail,now,job.project_id,job.source_id);
+      db.exec("COMMIT");
+    }catch(error){
+      if(db.isTransaction)db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   listGenerations(projectId:string):Generation[]{return (this.database.connection.prepare(`SELECT g.*,
     (SELECT v.id FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) artifact_version_id,
     (SELECT v.version_number FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) version_number

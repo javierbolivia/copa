@@ -5,33 +5,39 @@ import type { EditorCommonProps, ProductEditorValue, ProductModule } from "./typ
 export type ProductEditorProps = EditorCommonProps<ProductEditorValue>;
 
 const sections: readonly EditorSection[] = [
-  {id: "identity", label: "Identidad", summary: "Nombre, promesa y formato"},
+  {id: "identity", label: "Definición", summary: "Concepto, problema y resultado"},
   {id: "modules", label: "Módulos", summary: "Recorrido del producto"},
-  {id: "deliverables", label: "Entregables", summary: "Materiales incluidos"},
-  {id: "bonuses", label: "Bonuses", summary: "Valor adicional"},
+  {id: "deliverables", label: "Entregables", summary: "Materiales y herramientas"},
+  {id: "bonuses", label: "Extras", summary: "Recursos y bonos"},
 ];
 
 const cloneProduct = (value: ProductEditorValue): ProductEditorValue => ({
   ...value,
   modules: value.modules.map((module) => ({...module})),
   deliverables: [...value.deliverables],
+  checklists: [...value.checklists],
+  templates: [...value.templates],
+  resources: [...value.resources],
   bonuses: [...value.bonuses],
 });
 
-export function ProductEditor({value, onSave, saving, readOnly, onOpenTraceability}: ProductEditorProps) {
+export function ProductEditor({value, onSave, saving, readOnly, onEditingChange, onOpenTraceability}: ProductEditorProps) {
   const renderSection = useCallback((sectionId: string, draft: ProductEditorValue, setDraft: (value: ProductEditorValue) => void, editing: boolean) => {
     const trace = (field: string) => { onOpenTraceability?.(field); };
     if (sectionId === "identity") return <div className="rf-field-stack">
       <Field label="Nombre" value={draft.name} editing={editing} placeholder="Nombre del producto" onChange={(name) => setDraft({...draft, name})} traceability={onOpenTraceability ? () => trace("name") : undefined}/>
+      <Field label="Concepto" value={draft.concept} editing={editing} multiline onChange={(concept)=>setDraft({...draft,concept})}/>
+      <Field label="Problema que aborda" value={draft.problem} editing={editing} multiline onChange={(problem)=>setDraft({...draft,problem})} traceability={onOpenTraceability?()=>trace("problem"):undefined}/>
+      <Field label="Resultado esperado" value={draft.outcome} editing={editing} multiline onChange={(outcome)=>setDraft({...draft,outcome})}/>
       <Field label="Promesa" value={draft.promise} editing={editing} multiline placeholder="Transformación concreta y creíble" onChange={(promise) => setDraft({...draft, promise})} traceability={onOpenTraceability ? () => trace("promise") : undefined}/>
       <Field label="Formato" value={draft.format} editing={editing} placeholder="Curso, guía, programa…" onChange={(format) => setDraft({...draft, format})}/>
     </div>;
     if (sectionId === "modules") return <ModuleList value={draft.modules} editing={editing} onChange={(modules) => setDraft({...draft, modules})}/>;
-    if (sectionId === "deliverables") return <StringListField label="Entregables" value={draft.deliverables} editing={editing} placeholder="Ej. Workbook de implementación" onChange={(deliverables) => setDraft({...draft, deliverables})}/>;
-    return <StringListField label="Bonuses" value={draft.bonuses} editing={editing} placeholder="Ej. Plantillas extra" onChange={(bonuses) => setDraft({...draft, bonuses})}/>;
+    if (sectionId === "deliverables") return <div className="rf-field-stack"><StringListField label="Entregables" value={draft.deliverables} editing={editing} placeholder="Ej. Guía de implementación" onChange={(deliverables) => setDraft({...draft, deliverables})}/><StringListField label="Checklists" value={draft.checklists} editing={editing} onChange={(checklists)=>setDraft({...draft,checklists})}/><StringListField label="Plantillas" value={draft.templates} editing={editing} onChange={(templates)=>setDraft({...draft,templates})}/></div>;
+    return <div className="rf-field-stack"><StringListField label="Recursos" value={draft.resources} editing={editing} onChange={(resources)=>setDraft({...draft,resources})}/><StringListField label="Bonos" value={draft.bonuses} editing={editing} placeholder="Ej. Material complementario" onChange={(bonuses) => setDraft({...draft, bonuses})}/></div>;
   }, [onOpenTraceability]);
 
-  return <EditorScaffold title="Product Definition Workspace" description="Define la transformación, la arquitectura modular y los activos que recibirá el cliente." value={value} sections={sections} cloneValue={cloneProduct} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly}/>;
+  return <EditorScaffold title="Definición del producto" description="Define el problema, el resultado esperado, el recorrido y los materiales que recibirá el cliente." value={value} sections={sections} cloneValue={cloneProduct} renderSection={renderSection} onSave={onSave} saving={saving} readOnly={readOnly} onEditingChange={onEditingChange}/>;
 }
 
 function ModuleList({value, editing, onChange}: {value: ProductModule[]; editing: boolean; onChange: (value: ProductModule[]) => void}) {

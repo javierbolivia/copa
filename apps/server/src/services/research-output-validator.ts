@@ -24,6 +24,8 @@ export const RESEARCH_SCHEMA_VERSION = 2;
 
 export interface ResearchValidationAudit {
   schemaVersion: number;
+  inputEvidenceCount: number;
+  citedEvidenceCount: number;
   totalEvidenceRefs: number;
   resolvedEvidenceRefs: number;
   unresolvedEvidenceRefs: number;
@@ -91,7 +93,10 @@ function normalizeItems(raw: unknown, allowed: ReadonlySet<string>, key: string,
     const item = rawItem as Record<string, unknown>;
     const text = typeof item.text === "string" ? item.text.trim() : "";
     if (!text) errors.push(`${key} contains an item with empty text`);
-    const provenance = typeof item.provenance === "string" && item.provenance.trim() ? item.provenance : "AI_INFERENCE";
+    const provenance = typeof item.provenance === "string" ? item.provenance.trim() : "";
+    if(provenance!==EVIDENCE_BACKED&&provenance!=="AI_INFERENCE")errors.push(`${key} contains unsupported provenance`);
+    if(!Array.isArray(item.evidenceIds)||item.evidenceIds.some(id=>typeof id!=="string"))errors.push(`${key} contains malformed evidenceIds`);
+    if(provenance==="AI_INFERENCE"&&Array.isArray(item.evidenceIds)&&item.evidenceIds.length)errors.push(`${key} has an AI_INFERENCE item with evidence references`);
     const resolution = resolveEvidenceIds(item.evidenceIds, allowed);
     audit.totalEvidenceRefs += resolution.total;
     audit.resolvedEvidenceRefs += resolution.resolved;
@@ -114,6 +119,8 @@ export function validateResearchOutput(input: unknown, allowedEvidenceIds: strin
   const empty: string[] = [];
   const audit: ResearchValidationAudit = {
     schemaVersion: RESEARCH_SCHEMA_VERSION,
+    inputEvidenceCount: allowed.size,
+    citedEvidenceCount: 0,
     totalEvidenceRefs: 0,
     resolvedEvidenceRefs: 0,
     unresolvedEvidenceRefs: 0,
@@ -147,6 +154,7 @@ export function validateResearchOutput(input: unknown, allowedEvidenceIds: strin
   }
 
   audit.unresolvedEvidenceIds = [...new Set(audit.unresolvedEvidenceIds)];
+  audit.citedEvidenceCount=new Set([out.hypotheses,out.insights].flatMap(section=>Array.isArray(section)?section.flatMap(item=>Array.isArray(item.evidenceIds)?item.evidenceIds:[]):[])).size;
   audit.ok = errors.length === 0;
   out.validationAudit = audit;
   return { output: out, audit };

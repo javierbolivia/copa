@@ -1,3 +1,9 @@
+import {validateLandingOutput} from "./landing-output-validator.js";
+import {validateOfferOutput} from "./offer-output-validator.js";
+import {validateBeliefsOutput} from "./beliefs-output-validator.js";
+import {validateMechanismOutput} from "./mechanism-output-validator.js";
+import {AVATAR_FIELDS} from "@our-platform/shared";
+import {validateAvatarOutput} from "./avatar-output-validator.js";
 import type { ArtifactVersion, LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
@@ -96,14 +102,14 @@ export class ModuleService {
 
   get(projectId: string, key: ModuleKey): ModuleResult | undefined {
     const version = this.activeVersion(projectId, key);
-    if (!version || (key === "product" && !this.validatePersistedProduct(version).audit.ok)) return undefined;
+    if (!version || (key === "product" && !this.validatePersistedProduct(version).audit.ok) || (version&&key==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version&&key==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version&&key==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version&&key==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version&&key==="landing"&&!this.validatePersistedLanding(version).audit.ok)) return undefined;
     return this.toResult(version);
   }
 
   history(projectId: string, key: ModuleKey): ModuleResult[] {
     return this.artifacts.list(projectId)
       .filter((version) => version.artifactType === key)
-      .map((version) => this.toResult(version, this.isInvalidApprovedProduct(version)));
+      .map((version) => this.toResult(version, this.isInvalidApprovedStrategyOutput(version)));
   }
 
   list(projectId: string): ModuleResult[] {
@@ -114,34 +120,56 @@ export class ModuleService {
         ).get(version.artifactId, projectId) as { active_version_id: string | null } | undefined;
         return row?.active_version_id === version.id;
       })
-      .map((version) => this.toResult(version, this.isInvalidApprovedProduct(version)));
+      .map((version) => this.toResult(version, this.isInvalidApprovedStrategyOutput(version)));
   }
 
   artifactVersions(projectId:string):ArtifactVersion[] {
-    return this.artifacts.list(projectId).map((version)=>this.isInvalidApprovedProduct(version)?{
+    return this.artifacts.list(projectId).map((version)=>this.isInvalidApprovedStrategyOutput(version)?{
       ...version,
       status:"draft",
       freshness:"stale",
-      staleReason:"Producto incompleto o con claims sin grounding; no es aprobable.",
+      staleReason:"Documento incompleto o con afirmaciones sin respaldo válido; requiere revisión o regeneración.",
     }:version);
   }
 
-  saveDraft(projectId:string,key:ModuleKey,outputData:unknown):ModuleResult {
+  saveDraft(projectId:string,key:ModuleKey,outputData:unknown,expectedBaseVersionId?:string,sourceVersionId?:string):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
     if(!isCanonicalModuleOutput(key,outputData)){
       if(key==="opportunities")throw new Error("Para editar Oportunidades se requieren los nueve scores válidos (0–100), selectedId y referencias estructuradas. Si esta versión histórica no tiene scores, regenera Oportunidades; el histórico se conserva sin cambios.");
       throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
     }
-    const active=this.activeVersion(projectId,key);if(!active)throw new Error("Genera una versión antes de editarla.");
+    const activePointer=this.activeVersion(projectId,key);
+    if(sourceVersionId&&key!=="product"&&key!=="avatar"&&key!=="mechanism"&&key!=="beliefs"&&key!=="offer"&&key!=="landing")throw new Error("La edición desde una versión concreta solo está disponible para Producto, Avatar, Mecanismo, Creencias, Oferta y Landing.");
+    const active=sourceVersionId?this.artifacts.getVersion(sourceVersionId):activePointer;
+    if(!active||active.projectId!==projectId||active.artifactType!==key)throw new Error("La versión de origen no existe en este módulo.");
+    if(sourceVersionId){
+      const snapshot=asRecord(active.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(active.status==="draft"){
+        if(expected===undefined||(activePointer?.id??null)!==expected)throw new Error("El documento activo cambió o el borrador no conserva su versión de origen; regenera antes de editar.");
+      }else if(active.status!=="approved"||active.id!==activePointer?.id)throw new Error("Solo puedes editar el documento activo o un borrador vigente.");
+    }
+    if(expectedBaseVersionId!==undefined&&activePointer?.id!==expectedBaseVersionId)throw new Error("La versión activa cambió mientras revisabas el documento. Recarga antes de guardar.");
     if(active.freshness!=="fresh")throw new Error("La versión activa está obsoleta; regenera el módulo antes de editarlo.");
     const current=this.toResult(active);
     const parentIds=this.db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE project_id=? AND child_version_id=? ORDER BY created_at").all(projectId,current.versionId) as unknown as Array<{parent_version_id:string}>;
     let normalizedOutput=outputData;
+    if(key==="research"){
+      const validation=validateResearchOutput(outputData,this.researchSnapshotEvidence(active));
+      if(!validation.audit.ok)throw new Error(`Investigación incompleta o sin evidencia válida: ${validation.audit.errors.join("; ")}`);
+      normalizedOutput=validation.output;
+    }
+    if(key==="landing"){const validation=validateLandingOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="offer"){const validation=validateOfferOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="beliefs"){const validation=validateBeliefsOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="mechanism"){const validation=validateMechanismOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="avatar"){const validation=validateAvatarOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="problems")normalizedOutput=this.validateProblemDraft(active,outputData);
     if(key==="opportunities"){
       assertOpportunityReferences(outputData,this.parentOutput(projectId,current.versionId,"problems"));
       normalizedOutput=applyOpportunityScoring(asRecord(outputData));
     }
-    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:current.versionId,source:"user"},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"?(activePointer?.id??null):current.versionId,...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing")?{editingSourceVersionId:active.id}:{}),source:"user"},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
     return this.toResult(version);
   }
 
@@ -156,7 +184,64 @@ export class ModuleService {
       const validation=this.validatePersistedProduct(version);
       if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
     }
-    const approved=this.artifacts.approveVersion(projectId,versionId);if(!approved)return undefined;
+    const approved=this.artifacts.approveVersion(projectId,versionId,key==="research"?()=>{
+      const validation=validateResearchOutput(version.outputData,this.researchSnapshotEvidence(version));
+      if(!validation.audit.ok)throw new Error(`Investigación incompleta o sin evidencia válida: ${validation.audit.errors.join("; ")}`);
+      const snapshot=asRecord(version.inputSnapshot),brief=asRecord(snapshot.researchBrief);
+      const expected=typeof snapshot.editedFromVersionId==="string"?snapshot.editedFromVersionId:brief.activeVersionIdAtStart;
+      if(expected!==undefined&&(this.activeVersion(projectId,key)?.id??null)!==expected)throw new Error("Hay una Investigación aprobada más reciente; revisa el nuevo brief antes de aprobar este borrador.");
+      if(snapshot.researchBrief){
+        const currentProject=this.db.connection.prepare("SELECT name,niche,description FROM projects WHERE id=?").get(projectId);
+        if(JSON.stringify(currentProject)!==JSON.stringify(brief.project)||(this.settings.researchFocus(projectId)?.value??null)!==brief.researchFocus)throw new Error("El alcance de Investigación cambió; regenera el borrador antes de aprobarlo.");
+      }
+    }:key==="problems"&&version.status==="draft"?()=>{
+      const expected=asRecord(version.inputSnapshot).editedFromVersionId;
+      const active=this.activeVersion(projectId,key);
+      if(typeof expected!=="string"||active?.id!==expected)throw new Error("Hay una versión de Problemas más reciente; revisa la interpretación activa antes de aprobar el borrador.");
+      const normalized=this.validateProblemDraft(active,version.outputData);
+      if(["items","analysisMetrics","analysisAudit"].some(field=>JSON.stringify(normalized[field])!==JSON.stringify(asRecord(version.outputData)[field])))throw new Error("El borrador de Problemas contiene soporte o métricas no verificadas; vuelve a guardar una revisión validada.");
+    }:key==="opportunities"&&version.status==="draft"?()=>{
+      const expected=asRecord(version.inputSnapshot).editedFromVersionId;
+      if(typeof expected!=="string"||this.activeVersion(projectId,key)?.id!==expected)throw new Error("Hay una decisión de Oportunidades más reciente; revisa la selección activa antes de aprobar el borrador.");
+      assertOpportunityReferences(version.outputData,this.parentOutput(projectId,version.id,"problems"));
+      assertOpportunityScoring(version.outputData);
+    }:key==="landing"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay una Landing más reciente; revisa la versión activa antes de aprobar.");
+      const validation=this.validatePersistedLanding(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="offer"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay una Oferta más reciente; revisa la versión activa antes de aprobar.");
+      const validation=this.validatePersistedOffer(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="beliefs"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay una interpretación de Creencias más reciente; revisa la versión activa antes de aprobar.");
+      const validation=this.validatePersistedBeliefs(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="mechanism"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Mecanismo más reciente; revisa la interpretación activa antes de aprobar.");
+      const validation=this.validatePersistedMechanism(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="avatar"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Avatar más reciente; revisa el perfil activo antes de aprobar.");
+      const validation=this.validatePersistedAvatar(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="product"&&version.status==="draft"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.editedFromVersionId;
+      if(snapshot.source==="user"&&((expected!==null&&typeof expected!=="string")||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay una versión de Producto más reciente; revisa el producto activo antes de aprobar este borrador.");
+      const validation=this.validatePersistedProduct(version);
+      if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
+    }:undefined);if(!approved)return undefined;
     if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
     if(key==="final_product")this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData);
     this.knowledge.saveMemoryDecision({originProjectId:projectId,artifactVersionId:approved.id,disposition:"APPROVED",visibility:"PROJECT",reusable:false,preferred:false});
@@ -166,6 +251,11 @@ export class ModuleService {
   canPromoteToMemory(projectId:string,versionId:string):boolean {
     const version=this.artifacts.getVersion(versionId);
     if(!version||version.projectId!==projectId)return false;
+    if(version.artifactType==="landing")return version.status==="approved"&&this.validatePersistedLanding(version).audit.ok;
+    if(version.artifactType==="offer")return version.status==="approved"&&this.validatePersistedOffer(version).audit.ok;
+    if(version.artifactType==="beliefs")return version.status==="approved"&&this.validatePersistedBeliefs(version).audit.ok;
+    if(version.artifactType==="mechanism")return version.status==="approved"&&this.validatePersistedMechanism(version).audit.ok;
+    if(version.artifactType==="avatar")return version.status==="approved"&&this.validatePersistedAvatar(version).audit.ok;
     if(version.artifactType!=="product")return true;
     return version.status==="approved"&&this.validatePersistedProduct(version).audit.ok;
   }
@@ -186,7 +276,7 @@ export class ModuleService {
     if(selectedProvider==="deepseek"&&!this.options.deepSeek?.configured)throw new Error("DeepSeek no está configurado. Define DEEPSEEK_API_KEY o ejecuta con el proveedor Mock.");
     const startedAt = Date.now();
     const activeVersionIdAtStart=this.activeVersion(projectId,key)?.id??null;
-    const researchFocusAtStart=key==="problems"?(this.settings.researchFocus(projectId)?.value??null):null;
+    const researchFocusAtStart=key==="problems"||key==="research"?(this.settings.researchFocus(projectId)?.value??null):null;
 
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
     for (const parentKey of definition.parents) {
@@ -211,12 +301,12 @@ export class ModuleService {
       if(parent&&parent.freshness!=="stale")parentOutputs[optional]=parent.outputData;
     }
 
-    const evidence = this.db.connection.prepare(
+    const evidence = key==="research"?this.researchEvidence(projectId):this.db.connection.prepare(
       key === "problems"
-        ? "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
-        : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
+        ? "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
+        : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
     ).all(projectId) as unknown as Array<{ id: string; quoteText: string }>;
-    const project = this.db.connection.prepare("SELECT name,niche FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string };
+    const project = this.db.connection.prepare("SELECT name,niche,description FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string;description:string|null };
     const productGroundingSnapshot = key === "product" ? buildProductGroundingSnapshot({
       evidence,
       opportunities: parentOutputs.opportunities,
@@ -266,7 +356,8 @@ export class ModuleService {
           chunks: sanitizeProductKnowledge(knowledgeContext, new Set(evidenceIds)),
         },
       } : {
-        project: { name: project.name, niche: project.niche }, settings: projectSettings,
+        project: { name: project.name, niche: project.niche,...(key==="research"?{description:project.description}:{}) }, settings: projectSettings,
+        ...(key==="research"?{researchFocus:researchFocusAtStart}:{}),
         moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence, knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
         additionalInstructions: instructions?.trim() || null,
       };
@@ -446,6 +537,11 @@ export class ModuleService {
       output = validation.output;
       artifactStatus = validation.audit.ok ? "approved" : "draft";
     }
+    if(key==="landing"){const validation=validateLandingOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
+    if(key==="offer"){const validation=validateOfferOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
+    if(key==="beliefs"){const validation=validateBeliefsOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
+    if(key==="mechanism"){const validation=validateMechanismOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
+    if(key==="avatar"){const validation=validateAvatarOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
     if (key === "product") {
       const validation = validateProductOutput(output, {
         groundingSnapshot: productGroundingSnapshot!,
@@ -456,11 +552,13 @@ export class ModuleService {
     }
     const inputSnapshot = {
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
+      ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing")?{activeVersionIdAtStart}:{}),
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
       ...(key==="problems"?{researchFocus:deriveResearchFocus([],project.niche,researchFocusAtStart)}:{}),
+      ...(key==="research"?{researchBrief:{project,researchFocus:researchFocusAtStart,evidenceLimit:20,activeVersionIdAtStart}}:{}),
       ...(vocabularyVersionId ? { vocabularyVersionId, vocabularyContentHash: vocabularySnapshot?.contentHash ?? null } : { vocabularyVersionId: null }),
       knowledgeUsed: knowledgeContext,
     };
@@ -476,6 +574,10 @@ export class ModuleService {
     db.exec("BEGIN IMMEDIATE");let createdVersionId:string|undefined;
     try {
     this.assertActivationContext(projectId,key,parentIds,activeVersionIdAtStart,researchFocusAtStart);
+    if(key==="research"){
+      const currentProject=this.db.connection.prepare("SELECT name,niche,description FROM projects WHERE id=?").get(projectId);
+      if(JSON.stringify(currentProject)!==JSON.stringify(project)||JSON.stringify(this.researchEvidence(projectId))!==JSON.stringify(evidence))throw new Error("El contexto o la evidencia de Investigación cambió durante la generación; vuelve a ejecutarla.");
+    }
     if(vocabularyCandidateToActivateId){
       const activated=this.vocabulary.activateVocabularyVersion(vocabularyCandidateToActivateId);
       if(!activated)throw new Error(`domain vocabulary candidate activation failed for ${vocabularyCandidateToActivateId}`);
@@ -533,6 +635,50 @@ export class ModuleService {
     return row?.active_version_id?this.artifacts.getVersion(row.active_version_id):undefined;
   }
 
+  private validateProblemDraft(version:ArtifactVersion,outputData:unknown):Record<string,unknown>{
+    if(!isCanonicalModuleOutput("problems",outputData))throw new Error("El borrador no conserva el contrato de Problemas.");
+    const snapshot=asRecord(version.inputSnapshot),output=asRecord(outputData);
+    const project=this.db.connection.prepare("SELECT niche FROM projects WHERE id=?").get(version.projectId) as {niche:string};
+    const focus=deriveResearchFocus([],project.niche,this.settings.researchFocus(version.projectId)?.value??null);
+    if(typeof snapshot.researchFocus!=="string"||snapshot.researchFocus!==focus)throw new Error("El foco de Problemas cambió; regenera la interpretación antes de editarla.");
+    const allowed=new Set(Array.isArray(snapshot.evidenceIds)?snapshot.evidenceIds.filter((id):id is string=>typeof id==="string"):[]);
+    const analysis=analysisSetSnapshot(this.db,version.projectId);
+    const rows=analysis.rows.filter(row=>allowed.has(row.id)),available=new Set(rows.map(row=>row.id));
+    const items=Array.isArray(output.items)?output.items.map(asRecord):[];
+    const ids=items.map(item=>item.id);
+    if(ids.some(id=>typeof id!=="string"||!id.trim())||new Set(ids).size!==ids.length)throw new Error("Cada problema necesita un identificador único.");
+    for(const item of items){
+      if(!Array.isArray(item.evidenceIds)||item.evidenceIds.length===0||item.evidenceIds.some(id=>typeof id!=="string"||!available.has(id)))throw new Error("El problema cita evidencia ajena, excluida o no disponible en su contexto original.");
+    }
+    const vocabularyId=snapshot.vocabularyVersionId;
+    const vocabulary=typeof vocabularyId==="string"?this.vocabulary.loadVocabularySnapshot(vocabularyId):null;
+    if(typeof vocabularyId==="string"&&(!vocabulary||vocabulary.contentHash!==snapshot.vocabularyContentHash))throw new Error("El vocabulario original de Problemas no está disponible; regenera la interpretación.");
+    const normalized=qualityProblems(this.db,version.projectId,output,{researchFocus:focus,analysisSetSnapshot:{...analysis,rows},vocabularySnapshot:vocabulary,metrics:asRecord(asRecord(version.outputData).analysisMetrics) as Partial<ProblemPipelineMetrics>});
+    const validated=Array.isArray(normalized.items)?normalized.items.map(asRecord):[];
+    if(validated.length!==items.length||validated.some(item=>!ids.includes(item.id)))throw new Error("Uno o más problemas no pasan los controles de soporte, cohesión, precisión o foco. Revisa las afirmaciones y sus citas.");
+    return normalized;
+  }
+
+  private researchEvidence(projectId:string):Array<{id:string;quoteText:string}>{
+    return this.db.connection.prepare(`SELECT e.id,e.quote_text AS quoteText FROM evidence_snippets e
+      JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id
+      JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id
+      WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed')
+      ORDER BY c.quality_score DESC,c.likes DESC,e.created_at,e.id LIMIT 20`).all(projectId) as Array<{id:string;quoteText:string}>;
+  }
+
+  private researchSnapshotEvidence(version:ArtifactVersion):string[]{
+    const snapshot=asRecord(version.inputSnapshot);
+    const ids=Array.isArray(snapshot.evidenceIds)?snapshot.evidenceIds.filter((id):id is string=>typeof id==="string"):[];
+    // A draft may only cite its original evidence, still available and eligible.
+    const eligible=this.db.connection.prepare(`SELECT e.id FROM evidence_snippets e
+      JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id
+      JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id
+      WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed')`).all(version.projectId) as Array<{id:string}>;
+    const current=new Set(eligible.map(row=>row.id));
+    return ids.filter(id=>current.has(id));
+  }
+
   private parentOutput(projectId:string,childVersionId:string,parentKey:ModuleKey):unknown {
     const row=this.db.connection.prepare(`SELECT parent.output_data FROM lineage_edges edge
       JOIN artifact_versions parent ON parent.id=edge.parent_version_id
@@ -545,8 +691,8 @@ export class ModuleService {
   private assertActivationContext(projectId:string,key:ModuleKey,parentIds:readonly string[],expectedActiveVersionId:string|null,expectedResearchFocus:string|null):void {
     const current=this.db.connection.prepare("SELECT active_version_id FROM artifacts WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1").get(projectId,key) as {active_version_id:string|null}|undefined;
     if((current?.active_version_id??null)!==expectedActiveVersionId)throw new Error("La versión activa cambió durante la generación; vuelve a ejecutar el módulo.");
-    if(key==="problems"&&(this.settings.researchFocus(projectId)?.value??null)!==expectedResearchFocus){
-      throw new Error("El Research Focus cambió durante la generación; vuelve a ejecutar Problemas.");
+    if((key==="problems"||key==="research")&&(this.settings.researchFocus(projectId)?.value??null)!==expectedResearchFocus){
+      throw new Error(`El Research Focus cambió durante la generación; vuelve a ejecutar ${key==="research"?"Investigación":"Problemas"}.`);
     }
     for(const parentId of parentIds){
       const parent=this.db.connection.prepare(`SELECT version.freshness,artifact.active_version_id activeVersionId
@@ -556,12 +702,55 @@ export class ModuleService {
     }
   }
 
-  private isInvalidApprovedProduct(version:ArtifactVersion):boolean {
-    return version.artifactType==="product"&&version.status==="approved"&&!this.validatePersistedProduct(version).audit.ok;
+  private isInvalidApprovedStrategyOutput(version:ArtifactVersion):boolean {
+    return version.status==="approved"&&((version.artifactType==="product"&&!this.validatePersistedProduct(version).audit.ok)||(version.artifactType==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version.artifactType==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version.artifactType==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version.artifactType==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version.artifactType==="landing"&&!this.validatePersistedLanding(version).audit.ok));
+  }
+
+  private avatarEvidence(version:ArtifactVersion):Array<{id:string;quoteText:string}>{
+    const ids=asRecord(version.inputSnapshot).evidenceIds;
+    const allowed=new Set(Array.isArray(ids)?ids.filter((id):id is string=>typeof id==="string"):[]);
+    const rows=this.db.connection.prepare("SELECT e.id,e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND c.analysis_eligible=1 AND s.include_in_analysis=1 AND s.status IN ('ready','completed')").all(version.projectId) as unknown as Array<{id:string;quoteText:string}>;
+    return rows.filter(item=>allowed.has(item.id));
+  }
+
+  private validatePersistedLanding(version:ArtifactVersion){
+    const validation=validateLandingOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).landingValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere revisión explícita o regeneración."]}};
+    return validation;
+  }
+
+  private validatePersistedOffer(version:ArtifactVersion){
+    const validation=validateOfferOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).offerValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere revisión explícita o regeneración."]}};
+    return validation;
+  }
+
+  private validatePersistedBeliefs(version:ArtifactVersion){
+    const validation=validateBeliefsOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).beliefsValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere revisión explícita o regeneración."]}};
+    return validation;
+  }
+
+  private validatePersistedMechanism(version:ArtifactVersion){
+    const validation=validateMechanismOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).mechanismValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere revisión explícita o regeneración."]}};
+    return validation;
+  }
+
+  private validatePersistedAvatar(version:ArtifactVersion){
+    const validation=validateAvatarOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).avatarValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere una revisión explícita o regeneración."]}};
+    return validation;
   }
 
   private validatePersistedProduct(version:ArtifactVersion) {
-    return validateProductOutput(version.outputData,this.persistedProductContext(version));
+    const validation=validateProductOutput(version.outputData,this.persistedProductContext(version));
+    const originalAudit=asRecord(asRecord(version.outputData).productValidationAudit);
+    if(asRecord(version.inputSnapshot).source!=="user"&&originalAudit.ok===false){
+      const errors=Array.isArray(originalAudit.errors)?originalAudit.errors.filter((value):value is string=>typeof value==="string"):[];
+      return {...validation,audit:{...validation.audit,ok:false,grounded:validation.audit.grounded&&originalAudit.grounded!==false,complete:validation.audit.complete&&originalAudit.complete!==false,errors:[...new Set([...validation.audit.errors,...errors,"La generación original no pasó la validación; guarda una revisión explícita o regenera antes de aprobar."]) ]}};
+    }
+    return validation;
   }
 
   private persistedProductContext(version:ArtifactVersion):ProductValidationContext {
@@ -596,7 +785,7 @@ export class ModuleService {
       versionNumber: version.versionNumber,
       freshness: invalidProduct?"stale":version.freshness,
       status: invalidProduct?"draft":version.status,
-      outputData: version.outputData,
+      outputData: version.artifactType==="landing"?{...asRecord(version.outputData),landingValidationAudit:this.validatePersistedLanding(version).audit}:version.artifactType==="offer"?{...asRecord(version.outputData),offerValidationAudit:this.validatePersistedOffer(version).audit}:version.artifactType==="beliefs"?{...asRecord(version.outputData),beliefsValidationAudit:this.validatePersistedBeliefs(version).audit}:version.artifactType==="mechanism"?{...asRecord(version.outputData),mechanismValidationAudit:this.validatePersistedMechanism(version).audit}:version.artifactType==="avatar"?{...asRecord(version.outputData),avatarValidationAudit:this.validatePersistedAvatar(version).audit}:version.artifactType==="product"&&(asRecord(version.inputSnapshot).source==="user"||!asRecord(version.outputData).productValidationAudit)?{...asRecord(version.outputData),productValidationAudit:this.validatePersistedProduct(version).audit}:version.outputData,
       createdAt: version.createdAt,
     };
   }
@@ -697,7 +886,7 @@ function applyOpportunityScoring(output:Record<string,unknown>):Record<string,un
     const item=raw as Record<string,unknown>;
     const scores=item.scores as Record<string,number>|undefined;
     const total=Math.round(Object.entries(OPPORTUNITY_SCORE_WEIGHTS).reduce((sum,[name,weight])=>sum+(scores?.[name]??0)*weight,0));
-    return {...item,total,scoreFormula:{version:"1.0",weights:OPPORTUNITY_SCORE_WEIGHTS},rationale:`Puntuación determinista ${total}/100 calculada con pesos versionados.`};
+    return {...item,total,scoreFormula:{version:"1.0",weights:OPPORTUNITY_SCORE_WEIGHTS},rationale:typeof item.rationale==="string"&&item.rationale.trim()?item.rationale:`Puntuación determinista ${total}/100 calculada con pesos versionados.`};
   });
   return {...output,items};
 }
@@ -759,6 +948,26 @@ function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,
   }
   if(key==="problems"){
     contextual.items=evidence.slice(0,Math.min(5,evidence.length)).map((item,index)=>({id:`problem-${index+1}`,name:`${niche}: patrón observado ${index+1}`,category:"pain",summary:item.quoteText,frequency:Math.round(100/(index+1)),confidence:Math.min(95,55+evidence.length*4),evidenceIds:[item.id],quotes:[item.quoteText]}));
+  }
+  if(key==="beliefs"){
+    for(const field of ["currentBeliefs","limitingBeliefs","requiredBeliefs","objections","arguments"]){
+      contextual[field]=(Array.isArray(contextual[field])?contextual[field]:[]).map(item=>typeof item==="string"?item:asRecord(item).text).filter(item=>typeof item==="string"&&item.trim());
+    }
+  }
+  if(key==="mechanism"||key==="offer"||key==="landing"){
+    const allowed=new Set(evidence.map(item=>item.id));
+    contextual.evidenceIds=Array.isArray(contextual.evidenceIds)?contextual.evidenceIds.filter(id=>typeof id==="string"&&allowed.has(id)):[];
+  }
+  if(key==="avatar"){
+    const allowed=new Set(evidence.map(item=>item.id));
+    for(const [field] of AVATAR_FIELDS){
+      contextual[field]=(Array.isArray(contextual[field])?contextual[field]:[]).map((raw:unknown)=>{
+        const item=typeof raw==="string"?{text:raw,provenance:"AI_INFERENCE",evidenceIds:[]}:asRecord(raw);
+        const ids=Array.isArray(item.evidenceIds)?item.evidenceIds.filter(id=>typeof id==="string"&&allowed.has(id)):[];
+        return {...item,provenance:ids.length?item.provenance:"AI_INFERENCE",evidenceIds:ids};
+      });
+    }
+    contextual.language=evidence.slice(0,3).map(item=>({text:item.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[item.id]}));
   }
   if(key==="opportunities"){
     contextual=applyOpportunityScoring(contextual);

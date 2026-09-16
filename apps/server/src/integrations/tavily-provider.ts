@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
   httpIntegrationError,
@@ -60,36 +61,38 @@ export class TavilyProvider {
   async search(query: string, options: { readonly maxResults?: number } = {}): Promise<TavilySearchMetadata> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Tavily no está configurado.");
     const maxResults = Math.min(3, Math.max(1, Math.floor(options.maxResults ?? 3)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          api_key: this.apiKey,
-          query,
-          search_depth: "basic",
-          max_results: maxResults,
-          include_answer: false,
-          include_raw_content: false,
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Tavily");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Tavily", response.status, await readErrorType(response));
+    const { response, body } = await withIntegrationTimeout("Tavily", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            api_key: this.apiKey,
+            query,
+            search_depth: "basic",
+            max_results: maxResults,
+            include_answer: false,
+            include_raw_content: false,
+          }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Tavily");
+      }
+      if (!response.ok) throw httpIntegrationError("Tavily", response.status, await readErrorType(response));
 
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const usage = record(body.usage);
     const rateLimit = record(body.rate_limit);
     const responseUsage = numeric(body.usage);
@@ -111,35 +114,37 @@ export class TavilyProvider {
   async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Tavily no está configurado.");
     const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          api_key: this.apiKey,
-          query,
-          search_depth: "basic",
-          max_results: maxResults,
-          include_answer: false,
-          include_raw_content: false,
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Tavily");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Tavily", response.status, await readErrorType(response));
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta que no es JSON.", { cause: error });
-    }
+    const { response, body } = await withIntegrationTimeout("Tavily", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            api_key: this.apiKey,
+            query,
+            search_depth: "basic",
+            max_results: maxResults,
+            include_answer: false,
+            include_raw_content: false,
+          }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Tavily");
+      }
+      if (!response.ok) throw httpIntegrationError("Tavily", response.status, await readErrorType(response));
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Tavily devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const usage = record(body.usage);
     const rateLimit = record(body.rate_limit);
     const rawResults = Array.isArray(body.results) ? body.results : [];

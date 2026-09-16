@@ -9,6 +9,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    resolve: { dedupe: ["react", "react-dom"] },
+    optimizeDeps: { entries: ["index.html"], include: ["@puckeditor/core"] },
     server: {
       host: "127.0.0.1",
       port: 5173,

@@ -30,7 +30,7 @@ export class ArtifactRepository {
       if(ownsTransaction)db.exec("COMMIT"); return this.getVersion(id)!;
     } catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
-  approveVersion(projectId:string,id:string):ArtifactVersion|undefined {
+  approveVersion(projectId:string,id:string,beforeApprove?:()=>void):ArtifactVersion|undefined {
     const db=this.database.connection,now=new Date().toISOString();db.exec("BEGIN IMMEDIATE");
     try{
       const version=db.prepare(`SELECT v.id,v.artifact_id,v.status,v.freshness,a.active_version_id,a.artifact_type FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.id=? AND v.project_id=?`).get(id,projectId) as {id:string;artifact_id:string;status:string;freshness:string;active_version_id:string|null;artifact_type:string}|undefined;
@@ -45,6 +45,7 @@ export class ArtifactRepository {
           AND (parent.freshness<>'fresh' OR artifact.active_version_id IS NULL OR artifact.active_version_id<>parent.id)
         LIMIT 1`).get(projectId,id) as {id:string}|undefined;
       if(invalidParent)throw new Error("La versión padre ya no está vigente; regenera el borrador antes de aprobarlo.");
+      beforeApprove?.();
       if(version.active_version_id){db.prepare("UPDATE artifact_versions SET status='superseded' WHERE id=? AND status='approved'").run(version.active_version_id);}
       db.prepare("UPDATE artifact_versions SET status='approved' WHERE id=? AND status='draft'").run(id);
       db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=? AND project_id=?").run(id,version.artifact_id,projectId);

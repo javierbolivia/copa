@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import type {
   LlmGenerateRequest,
   LlmGenerateResult,
@@ -74,7 +75,8 @@ export class OpenAIProvider implements LlmProvider {
     try {
       return await this.requestOnce<TOutput>(request);
     } catch (error) {
-      if (!(error instanceof IntegrationError) || error.code !== "schema_mismatch" || !request.structuredOutput) throw error;
+      if (!(error instanceof IntegrationError) || error.code !== "schema_mismatch" || !request.structuredOutput
+        || request.structuredOutput.retryOnInvalidSchema === false) throw error;
       return this.requestOnce<TOutput>({
         ...request,
         input: `${request.input}\n\nREPARACION DE FORMATO (unico reintento): la respuesta anterior no cumplio el JSON Schema. Devuelve solamente un objeto JSON valido que cumpla exactamente el schema solicitado. No agregues markdown ni comentarios.`,
@@ -84,8 +86,6 @@ export class OpenAIProvider implements LlmProvider {
 
   private async requestOnce<TOutput>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "OpenAI no está configurado.");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const text = request.structuredOutput ? {
       format: {
         type: "json_schema",
@@ -97,37 +97,41 @@ export class OpenAIProvider implements LlmProvider {
       },
     } : undefined;
 
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: request.model,
-          instructions: request.systemInstructions,
-          input: request.input,
-          ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
-          ...(text === undefined ? {} : { text }),
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "OpenAI");
-    } finally {
-      clearTimeout(timer);
-    }
+    const { body } = await withIntegrationTimeout("OpenAI", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model: request.model,
+            instructions: request.systemInstructions,
+            input: request.input,
+            ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
+            ...(text === undefined ? {} : { text }),
+          }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "OpenAI");
+      }
 
-    if (!response.ok) throw httpIntegrationError("OpenAI", response.status, await readErrorType(response));
+      if (!response.ok) throw httpIntegrationError("OpenAI", response.status, await readErrorType(response));
 
-    let body: OpenAIResponse;
-    try {
-      body = await response.json() as OpenAIResponse;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "OpenAI devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: OpenAIResponse;
+      try {
+        body = await response.json() as OpenAIResponse;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "OpenAI devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "OpenAI devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const outputText = extractOutputText(body.output);
     if (outputText === undefined) {
       throw new IntegrationError("invalid_response", "OpenAI no devolvió texto de salida.");

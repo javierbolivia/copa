@@ -1,8 +1,9 @@
 export interface EditorCommonProps<T> {
   value: T;
-  onSave: (value: T) => void | Promise<void>;
+  onSave: (value: T) => void | boolean | Promise<void | boolean>;
   saving?: boolean | undefined;
   readOnly?: boolean | undefined;
+  onEditingChange?: ((editing:boolean)=>void) | undefined;
   onOpenTraceability?: ((field: string) => void) | undefined;
 }
 
@@ -13,35 +14,34 @@ export interface ProductModule {
 }
 
 export interface ProductEditorValue {
+  proposalId: string;
   name: string;
+  concept: string;
+  problem: string;
+  outcome: string;
   promise: string;
   format: string;
   modules: ProductModule[];
   deliverables: string[];
+  checklists: string[];
+  templates: string[];
+  resources: string[];
   bonuses: string[];
 }
 
-export interface AvatarEditorValue {
-  situation: string;
-  pains: string[];
-  desires: string[];
-  objections: string[];
-  language: string[];
-  evidence: string[];
-}
+export type AvatarEditorValue=import("@our-platform/shared").AvatarProfile;
 
 export interface MechanismEditorValue {
-  name: string;
-  problem: string;
-  oldWay: string;
-  uniqueMechanism: string;
-  whyItWorks: string;
-  steps: string[];
-  proof: string[];
+  perceivedProblem:string; apparentCause:string; rootCauseHypothesis:string;
+  mechanism:string; solutionMechanism:string; differentiation:string;
+  simpleExplanation:string; detailedExplanation:string;
+  steps:string[]; alternatives:string[]; limitations:string[]; validationPlan:string[]; evidenceIds:string[];
 }
 
 export interface BeliefsEditorValue {
   bigIdea: string;
+  limitingBeliefs: string[];
+  arguments: string[];
   currentBeliefs: string[];
   bridgeBeliefs: string[];
   requiredBeliefs: string[];
@@ -49,6 +49,7 @@ export interface BeliefsEditorValue {
 }
 
 export interface OfferPrice {
+  rationale: string;
   amount: string;
   currency: string;
   terms: string;
@@ -60,6 +61,7 @@ export interface OfferComponent {
 }
 
 export interface OfferEditorValue {
+  name:string; benefits:string[]; deliverables:string[]; cta:string;
   mainOffer: string;
   pricing: OfferPrice;
   bonuses: OfferComponent[];
@@ -76,15 +78,10 @@ export interface LandingSection {
 }
 
 export interface LandingEditorValue {
-  pageName: string;
-  hero: LandingSection;
-  problem: LandingSection;
-  solution: LandingSection;
-  benefits: string[];
-  offer: LandingSection;
-  guarantee: string;
-  ctaLabel: string;
-  footerNote: string;
+  pageName:string;
+  footerNote:string;
+  sections:import("@our-platform/shared").LandingContentSection[];
+  designTokens:import("@our-platform/shared").LandingDesignTokens;
 }
 
 export interface LandingVersion {

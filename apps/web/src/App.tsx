@@ -1,3 +1,4 @@
+import {TechnicalReviewStamp} from "./components/TechnicalReviewStamp";
 import type { ArtifactVersion, BackupInfo, CreateProjectInput, Health, Project, ProjectSettings, Workflow } from "@our-platform/shared";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, type ProviderStatus } from "./api/client";
@@ -19,7 +20,7 @@ export function App() {
 
   const systemRequests=useRequestGuard(selected?.id??""),projectRequests=useRequestGuard("projects");
   const loadProjects=async()=>{const current=projectRequests.begin();const response=await api.projects();if(current())setProjects(response.projects);};
-  const loadProjectSystem=async(projectId:string)=>{const alive=systemRequests.capture();if(!alive())return;const current=systemRequests.begin();try{const [nextWorkflow,nextSettings,nextArtifacts,nextProviderStatus]=await Promise.all([api.workflow(projectId),api.settings(projectId),api.artifacts(projectId),api.providerStatus(projectId)]);if(!current())return;setWorkflow(nextWorkflow);setSettings(nextSettings);setArtifacts(nextArtifacts.versions);setProviderStatus(nextProviderStatus);}catch(reason){if(current())setError(messageOf(reason));}};
+  const loadProjectSystem=async(projectId:string)=>{const alive=systemRequests.capture();if(!alive())return;const current=systemRequests.begin();setError(null);try{const [nextWorkflow,nextSettings,nextArtifacts,nextProviderStatus]=await Promise.all([api.workflow(projectId),api.settings(projectId),api.artifacts(projectId),api.providerStatus(projectId)]);if(!current())return;setWorkflow(nextWorkflow);setSettings(nextSettings);setArtifacts(nextArtifacts.versions);setProviderStatus(nextProviderStatus);}catch(reason){if(current())setError(messageOf(reason));}};
   useEffect(()=>{Promise.all([loadProjects(),api.health().then(setHealth),api.backups().then((response)=>setBackups(response.backups))]).catch((reason)=>setError(messageOf(reason)));},[]);
   useEffect(()=>{setWorkflow(null);setSettings(null);setArtifacts([]);setProviderStatus(null);setError(null);if(selected)void loadProjectSystem(selected.id);},[selected?.id]);
 
@@ -34,9 +35,10 @@ export function App() {
   const refresh=()=>{if(selected&&systemRequests.capture()())void Promise.all([loadProjectSystem(selected.id),loadProjects()]).catch((reason)=>setError(messageOf(reason)));};
 
   return <AppShell project={selected} active={active} workflow={workflow} health={health} onNavigate={setActive} onProjects={()=>{setSelected(null);setActive("overview");}}>
+    {selected&&<TechnicalReviewStamp key={active} section={active}/>}
     {error&&<div className="error-banner global" role="alert"><div><strong>La operación no se completó</strong><span>{error}</span></div><button aria-label="Cerrar error" onClick={()=>setError(null)}>×</button></div>}
     {!selected?<ProjectsView projects={projects} onOpen={(project)=>{setSelected(project);setActive("overview");}} onSave={saveProject} onArchive={archive} onRestore={restore} onDelete={remove} onCreateDemo={createDemo} busy={busy}/>
-    :active==="overview"?<OverviewView project={selected} workflow={workflow} artifacts={artifacts} onEdit={()=>setActive("settings")} onNavigate={(key)=>{if(isNavigationKey(key))setActive(key);}}/>
+    :active==="overview"?<OverviewView project={selected} workflow={workflow?.steps.some(step=>step.projectId!==selected.id)?null:workflow} artifacts={artifacts} loadError={error} onRetry={()=>void loadProjectSystem(selected.id)} onEdit={()=>setActive("settings")} onNavigate={(key)=>{if(isNavigationKey(key))setActive(key);}}/>
     :active==="settings"?<SettingsView settings={settings} providerStatus={providerStatus} setSettings={setSettings} onSave={saveSettings} backups={backups} onBackup={()=>void createBackup()} onRestore={(filename)=>void restoreBackup(filename)}/>
     :active==="history"?<HistoryView projectId={selected.id}/>
     :active==="knowledge"?<KnowledgeView projectId={selected.id}/>

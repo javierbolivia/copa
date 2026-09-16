@@ -20,7 +20,7 @@ const ParamsSchema = Type.Object({
   key: ModuleKeySchema,
 });
 const VersionParamsSchema=Type.Object({id:Type.String({format:"uuid"}),key:ModuleKeySchema,versionId:Type.String({format:"uuid"})});
-const EditModuleSchema=Type.Object({outputData:Type.Unknown()},{additionalProperties:false});
+const EditModuleSchema=Type.Object({outputData:Type.Unknown(),expectedBaseVersionId:Type.Optional(Type.String({format:"uuid"})),sourceVersionId:Type.Optional(Type.String({format:"uuid"}))},{additionalProperties:false});
 
 interface Params { id: string; key: ModuleKey }
 
@@ -75,12 +75,12 @@ export function registerModuleRoutes(
     },
   );
 
-  app.post<{Params:Params;Body:{outputData:unknown};Reply:ModuleResult|ApiError}>(
+  app.post<{Params:Params;Body:{outputData:unknown;expectedBaseVersionId?:string;sourceVersionId?:string};Reply:ModuleResult|ApiError}>(
     "/api/projects/:id/modules/:key/drafts",
     {schema:{params:ParamsSchema,body:EditModuleSchema,response:{201:ModuleResultSchema,404:ApiErrorSchema,409:ApiErrorSchema}}},
     async(request,reply)=>{
       if(!projects.get(request.params.id))return reply.code(404).send({error:"not_found",message:"El proyecto no existe."});
-      try{return reply.code(201).send(modules.saveDraft(request.params.id,request.params.key,request.body.outputData));}
+      try{return reply.code(201).send(modules.saveDraft(request.params.id,request.params.key,request.body.outputData,request.body.expectedBaseVersionId,request.body.sourceVersionId));}
       catch(error){return reply.code(409).send({error:"edit_blocked",message:error instanceof Error?error.message:"No se pudo guardar el borrador."});}
     },
   );

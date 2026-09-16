@@ -1,3 +1,4 @@
+import {renderLandingHtml} from "@our-platform/shared";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -8,8 +9,7 @@ const escapeHtml=(value:unknown)=>String(value??"").replace(/[&<>"']/g,c=>({"&":
 export class FileExporterService{
  constructor(private readonly database:AppDatabase,private readonly dataRoot:string){}
  exportLanding(projectId:string,versionId:string,output:any):string{
-  const sections=(output.sections??[]).map((s:any)=>`<section class="${escapeHtml(s.type)}"><h2>${escapeHtml(s.headline??"")}</h2>${s.subheadline?`<p class="lead">${escapeHtml(s.subheadline)}</p>`:""}${s.body?`<p>${escapeHtml(s.body)}</p>`:""}${Array.isArray(s.items)?`<ul>${s.items.map((i:any)=>typeof i==="string"?`<li>${escapeHtml(i)}</li>`:`<li><strong>${escapeHtml(i.q)}</strong><br>${escapeHtml(i.a)}</li>`).join("")}</ul>`:""}${s.cta?`<a href="#offer" class="cta">${escapeHtml(s.cta)}</a>`:""}</section>`).join("");
-  const html=`<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(output.title)}</title><style>body{margin:0;font:16px system-ui;color:#17221e;background:#f7f9f5}main{max-width:900px;margin:auto}section{padding:64px 28px;border-bottom:1px solid #dfe6dc}h1,h2{line-height:1.1}h2{font-size:clamp(2rem,5vw,4rem)}.hero{background:#14231c;color:white}.lead{font-size:1.25rem}.cta{display:inline-block;padding:14px 20px;border-radius:9px;background:#b7ee68;color:#17221e;text-decoration:none;font-weight:700}li{margin:10px 0}@media(max-width:600px){section{padding:40px 20px}}</style></head><body><main>${sections}</main></body></html>`;
+  const html=renderLandingHtml(output);
   return this.write(projectId,versionId,"landing","landing.html",html);
  }
  exportFinalProduct(projectId:string,versionId:string,output:any):string[]{

@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-platform/shared";
 import {
   IntegrationError,
@@ -190,42 +191,44 @@ export class DeepSeekProvider implements LlmProvider {
     retryIssues?: readonly JsonSchemaValidationIssue[],
   ): Promise<LlmGenerateResult<TOutput>> {
     const systemInstructions = structuredInstructions(request, retryIssues);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: systemInstructions },
-            { role: "user", content: request.input },
-          ],
-          stream: false,
-          ...(this.thinking === undefined ? {} : { thinking: { type: this.thinking } }),
-          ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),
-          ...(request.structuredOutput ? { response_format: { type: "json_object" } } : {}),
-        }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw deepSeekTransportError(error);
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw deepSeekHttpError(response.status, await readErrorType(response));
+    const { body } = await withIntegrationTimeout("DeepSeek", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: systemInstructions },
+              { role: "user", content: request.input },
+            ],
+            stream: false,
+            ...(this.thinking === undefined ? {} : { thinking: { type: this.thinking } }),
+            ...(request.maxOutputTokens === undefined ? {} : { max_tokens: request.maxOutputTokens }),
+            ...(request.structuredOutput ? { response_format: { type: "json_object" } } : {}),
+          }),
+          signal,
+        });
+      } catch (error) {
+        throw deepSeekTransportError(error);
+      }
+      if (!response.ok) throw deepSeekHttpError(response.status, await readErrorType(response));
 
-    let body: DeepSeekResponse;
-    try {
-      body = await response.json() as DeepSeekResponse;
-    } catch (error) {
-      throw new IntegrationError("non_json_response", "DeepSeek devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: DeepSeekResponse;
+      try {
+        body = await response.json() as DeepSeekResponse;
+      } catch (error) {
+        throw new IntegrationError("non_json_response", "DeepSeek devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_schema", "DeepSeek devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     if (!Array.isArray(body.choices) || !isRecord(body.choices[0])) {
       throw new IntegrationError("invalid_schema", "DeepSeek no devolvió el arreglo de choices documentado.");
     }

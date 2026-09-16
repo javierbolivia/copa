@@ -265,6 +265,7 @@ function restorePersistedMarketResearchRun(
  */
 export class MarketResearchService {
   private readonly now: () => Date;
+  private readonly pendingRuns = new Map<string, Promise<MarketResearchRun>>();
 
   constructor(
     private readonly database: AppDatabase,
@@ -309,6 +310,21 @@ export class MarketResearchService {
   async run(projectId: string, options: Readonly<RunMarketResearchOptions>): Promise<MarketResearchRun> {
     const topic = options.topic.trim();
     if (topic.length === 0) throw new Error("El tema a investigar es obligatorio.");
+    const youtubeMinimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(options.youtubeMinimumDurationSeconds);
+    const providers = [...new Set(options.providers ?? MARKET_RESEARCH_PROVIDERS)].sort();
+    const key = JSON.stringify([projectId, topic, providers, youtubeMinimumDurationSeconds]);
+    let pending = this.pendingRuns.get(key);
+    if (!pending) {
+      pending = this.runOnce(projectId, { topic, providers, youtubeMinimumDurationSeconds })
+        .finally(() => { this.pendingRuns.delete(key); });
+      this.pendingRuns.set(key, pending);
+    }
+    // Share only in-flight work; each caller receives independently mutable data.
+    return structuredClone(await pending);
+  }
+
+  private async runOnce(projectId: string, options: Readonly<RunMarketResearchOptions>): Promise<MarketResearchRun> {
+    const topic = options.topic;
     const youtubeMinimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(options.youtubeMinimumDurationSeconds);
     const startedAtDate = this.now();
     const startedAt = startedAtDate.toISOString();

@@ -14,9 +14,10 @@ interface EditorScaffoldProps<T> {
   sections: readonly EditorSection[];
   cloneValue: (value: T) => T;
   renderSection: (sectionId: string, value: T, setValue: (value: T) => void, editing: boolean) => ReactNode;
-  onSave: (value: T) => void | Promise<void>;
+  onSave: (value: T) => void | boolean | Promise<void | boolean>;
   saving?: boolean | undefined;
   readOnly?: boolean | undefined;
+  onEditingChange?: ((editing:boolean)=>void) | undefined;
 }
 
 export function EditorScaffold<T>({
@@ -29,24 +30,32 @@ export function EditorScaffold<T>({
   onSave,
   saving = false,
   readOnly = false,
+  onEditingChange,
 }: EditorScaffoldProps<T>) {
   const firstSection = sections[0]?.id ?? "";
   const [activeSection, setActiveSection] = useState(firstSection);
   const [editing, setEditing] = useState(false);
+  const [saveError,setSaveError]=useState<string|null>(null);
   const [draft, setDraft] = useState(() => cloneValue(value));
+  useEffect(()=>{onEditingChange?.(editing);},[editing,onEditingChange]);
 
   useEffect(() => {
     if (!editing) setDraft(cloneValue(value));
   }, [value, editing, cloneValue]);
 
   const cancel = () => {
+    setSaveError(null);
     setDraft(cloneValue(value));
     setEditing(false);
   };
 
   const save = async () => {
-    await onSave(cloneValue(draft));
-    setEditing(false);
+    setSaveError(null);
+    try{
+      const saved=await onSave(cloneValue(draft));
+      if(saved===false){setSaveError("No se guardó el borrador. Tus cambios permanecen en el editor.");return;}
+      setEditing(false);
+    }catch(reason){setSaveError(reason instanceof Error?reason.message:"No se pudo guardar. Tus cambios permanecen en el editor.");}
   };
 
   return (
@@ -70,6 +79,7 @@ export function EditorScaffold<T>({
           )}
         </div>
       </header>
+      {saveError&&<p className="refinement-feedback" role="alert">{saveError}</p>}
 
       <div className="rf-editor__body">
         <nav className="rf-section-nav" aria-label={`Secciones de ${title}`}>
@@ -110,8 +120,8 @@ export function Field({label, value, editing, multiline = false, placeholder, on
       </div>
       {editing ? (
         multiline
-          ? <textarea rows={5} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
-          : <input value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+          ? <textarea aria-label={label} rows={5} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+          : <input aria-label={label} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
       ) : <p className={value.trim() ? "rf-field__value" : "rf-field__value is-empty"}>{value.trim() || "Sin completar"}</p>}
     </div>
   );

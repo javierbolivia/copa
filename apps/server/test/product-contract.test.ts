@@ -162,6 +162,8 @@ describe("strict Product contract, grounding and downstream safety", () => {
       } },
     });
     expect(providerContexts[0]!.productGrounding.allowedEvidence).toEqual(providerContexts[1]!.productGrounding.allowedEvidence);
+    const approval=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/product/versions/${invalid.json<ModuleResult>().versionId}/approve`});
+    expect(approval.statusCode).toBe(409);
   });
 
   it("does not approve an incomplete user draft", async () => {
@@ -240,7 +242,7 @@ describe("strict Product contract, grounding and downstream safety", () => {
       const history = (await app.inject({
         method: "GET", url: `/api/projects/${demo.project.id}/modules/product`,
       })).json<{ results: ModuleResult[] }>().results;
-      expect(history[0]).toMatchObject({ status: "draft", freshness: "stale" });
+      expect(history[0]).toMatchObject({ status: "draft", freshness: "stale", outputData: { productValidationAudit: { ok: false, errors: expect.any(Array) } } });
       const versions = (await app.inject({
         method: "GET", url: `/api/projects/${demo.project.id}/artifacts`,
       })).json<{ versions: ArtifactVersion[] }>().versions;

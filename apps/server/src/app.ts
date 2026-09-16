@@ -1,3 +1,4 @@
+import {TechnicalReviewService} from "./services/technical-review-service.js";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { existsSync } from "node:fs";
@@ -161,16 +162,19 @@ export async function createApp(
     ...(options.marketResearch?.now ? { now: options.marketResearch.now } : {}),
   });
 
+  const youtubeImports = new YouTubeImportService(sources, jobs);
   app.addHook("onClose", async () => {
+    youtubeImports.close();
     database.close();
   });
 
+  const technicalReviews=new TechnicalReviewService(resolve(dataRoot,"technical-reviews.json"));
+  app.get("/api/technical-reviews",async(_request,reply)=>{reply.header("Cache-Control","no-store");return technicalReviews.read();});
   registerHealthRoute(app, database);
   registerProjectRoutes(app, projects);
   registerProjectSystemRoutes(app, settings, workflow, backups, modules);
   registerResearchFocusRoutes(app, settings, database);
-  const youtubeImports = new YouTubeImportService(sources, jobs);
-  registerSourceRoutes(app, sources, jobs, youtubeImports);
+  registerSourceRoutes(app, sources, jobs, youtubeImports, productStudio);
   registerModuleRoutes(app, projects, modules);
   registerMarketResearchRoutes(app, projects, marketResearch);
   registerDemoRoutes(app, projects, sources, modules);

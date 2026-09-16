@@ -90,6 +90,18 @@ describe("OpenAIProvider", () => {
     await expect(provider.generate({ ...request, structuredOutput: { name: "demo", jsonSchema: {} } }))
       .rejects.toMatchObject({ code: "schema_mismatch" });
   });
+
+  it("respeta los flujos de un solo intento sin gastar una llamada de reparación", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      output: [{ type: "message", content: [{ type: "output_text", text: "{}" }] }],
+    })));
+    const provider = new OpenAIProvider({ apiKey: "fake", fetch: fetchMock });
+    await expect(provider.generate({ ...request, structuredOutput: {
+      name: "single_attempt", retryOnInvalidSchema: false,
+      jsonSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
+    } })).rejects.toMatchObject({ code: "schema_mismatch" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("YouTubeAdapter", () => {

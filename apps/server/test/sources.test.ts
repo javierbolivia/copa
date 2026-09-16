@@ -65,6 +65,17 @@ describe("Sources API",()=>{
     expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",text:"  "}})).statusCode).toBe(400);
   });
 
+  it("rechaza búsquedas vacías y proyectos inexistentes antes de consultar YouTube",async()=>{
+    for(const q of ["  ", " x "]){
+      const response=await app.inject({method:"GET",url:`/api/projects/${project.id}/youtube/search?q=${encodeURIComponent(q)}`});
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toBe("invalid_youtube_query");
+    }
+    const response=await app.inject({method:"POST",url:`/api/projects/${crypto.randomUUID()}/youtube/import`,payload:{videoId:"dQw4w9WgXcQ",title:"Video",topLevelLimit:10}});
+    expect(response.statusCode).toBe(404);
+    expect(response.json().error).toBe("not_found");
+  });
+
   it("limita a 500 hilos top-level y conserva las replies de esos hilos",async()=>{
     const top=(page:number,index:number):YouTubeComment=>({commentId:`top-${page}-${index}`,parentCommentId:null,author:"Autor",text:"Top",likes:0,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:false});
     const reply=(parent:string):YouTubeComment=>({commentId:`reply-${parent}`,parentCommentId:parent,author:"Reply",text:"Respuesta",likes:0,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:true});
@@ -84,6 +95,35 @@ describe("Sources API",()=>{
 });
 
 describe("constraints Sources",()=>{
+  it("excludes incomplete and failed sources from the analysis set without hiding raw comments",()=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const projects=new ProjectRepository(db),sources=new SourceRepository(db);
+      const project=projects.create({name:"Readiness",niche:"N"});
+      const bundle=sources.createManual(project.id,{sourceType:"manual",text:"Una experiencia suficientemente detallada para analizar."});
+      const source=bundle.sources[0]!;
+      for(const status of ["pending","importing","failed","cancelled"]){
+        db.connection.prepare("UPDATE sources SET status=? WHERE id=?").run(status,source.id);
+        expect(sources.analysisSet(project.id),status).toEqual([]);
+        expect(sources.listComments(project.id)).toHaveLength(1);
+      }
+      for(const status of ["ready"]){
+        db.connection.prepare("UPDATE sources SET status=? WHERE id=?").run(status,source.id);
+        expect(sources.analysisSet(project.id),status).toHaveLength(1);
+      }
+    }finally{db.close();}
+  });
+  it("preserves manual noise but excludes it from analysis using the same rules as YouTube",()=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const project=new ProjectRepository(db).create({name:"Manual quality",niche:"N"});
+      const sources=new SourceRepository(db);
+      const bundle=sources.createManual(project.id,{sourceType:"manual",text:"😀😀\n\nhttps://example.test\n\nUna experiencia relevante y detallada del problema."});
+      expect(bundle.comments).toHaveLength(3);
+      expect(sources.analysisSet(project.id).map(comment=>comment.text)).toEqual(["Una experiencia relevante y detallada del problema."]);
+      expect(bundle.comments.filter(comment=>!comment.analysisEligible)).toHaveLength(2);
+    }finally{db.close();}
+  });
   it("crea evidence por comentario, deduplica IDs de plataforma y bloquea relaciones cruzadas",()=>{
     const db=new AppDatabase(":memory:"),projects=new ProjectRepository(db),sources=new SourceRepository(db);const a=projects.create({name:"A",niche:"N"}),b=projects.create({name:"B",niche:"N"});const bundle=sources.createDemo(a.id);
     expect(db.connection.prepare("SELECT count(*) count FROM evidence_snippets WHERE project_id=?").get(a.id)).toMatchObject({count:10});

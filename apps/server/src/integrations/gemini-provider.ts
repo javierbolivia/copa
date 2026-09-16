@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-platform/shared";
 import { IntegrationError, normalizeFetchError } from "./integration-error.js";
 import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
@@ -59,21 +60,26 @@ export class GeminiProvider implements LlmProvider {
 
   async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Gemini no está configurado.");
-    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), this.timeoutMs);
     const generationConfig: Record<string, unknown> = { ...(request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens }) };
     if (request.structuredOutput) Object.assign(generationConfig, { responseMimeType: "application/json", responseSchema: toGeminiResponseSchema(request.structuredOutput.jsonSchema) });
-    let response: Response;
-    try {
-      response = await this.fetchFn(`${this.endpoint}/${encodeURIComponent(request.model)}:generateContent`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey! },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: request.systemInstructions }] }, contents: [{ role: "user", parts: [{ text: request.input }] }], generationConfig }),
-        signal: controller.signal,
-      });
-    } catch (error) { throw normalizeFetchError(error, "Gemini"); } finally { clearTimeout(timer); }
-    if (!response.ok) throw await geminiHttpError(response);
-    let body: Record<string, unknown>;
-    try { body = await response.json() as Record<string, unknown>; } catch (error) { throw new IntegrationError("invalid_response", "Gemini devolvió una respuesta que no es JSON.", { cause: error }); }
+    const { body } = await withIntegrationTimeout("Gemini", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(`${this.endpoint}/${encodeURIComponent(request.model)}:generateContent`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey! },
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: request.systemInstructions }] }, contents: [{ role: "user", parts: [{ text: request.input }] }], generationConfig }),
+          signal,
+        });
+      } catch (error) { throw normalizeFetchError(error, "Gemini"); }
+      if (!response.ok) throw await geminiHttpError(response);
+      let body: Record<string, unknown>;
+      try { body = await response.json() as Record<string, unknown>; } catch (error) { throw new IntegrationError("invalid_response", "Gemini devolvió una respuesta que no es JSON.", { cause: error }); }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Gemini devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const candidates = body.candidates;
     if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== "object") throw new IntegrationError("invalid_response", "Gemini no devolvió candidatos.");
     const parts = (candidates[0] as { content?: { parts?: Array<{ text?: unknown }> } }).content?.parts;

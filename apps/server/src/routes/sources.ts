@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import type { JobRepository } from "../repositories/job-repository.js";
 import type { SourceRepository } from "../repositories/source-repository.js";
 import { YouTubeImportError, type YouTubeImportService } from "../services/youtube-import-service.js";
+import { ProductStudioConflictError, type ProductStudioService } from "../services/product-studio-service.js";
 
 const ProjectParams=Type.Object({id:Type.String({format:"uuid"})});
 const SourceParams=Type.Object({id:Type.String({format:"uuid"}),sourceId:Type.String({format:"uuid"})});
@@ -22,14 +23,16 @@ type SourceListQueryType={query?:string;sourceType?:"youtube"|"manual"|"demo"};
 type CommentListQueryType={query?:string;sourceId?:string;replies?:boolean;minLikes?:number;limit?:number;offset?:number};
 const missing=(message:string):ApiError=>({error:"not_found",message});
 
-export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepository,jobs:JobRepository,youtube:YouTubeImportService):void {
+export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepository,jobs:JobRepository,youtube:YouTubeImportService,studio:ProductStudioService):void {
   app.get<{Reply:{configured:boolean}}>('/api/integrations/youtube/status',{schema:{response:{200:Type.Object({configured:Type.Boolean()})}}},async()=>({configured:youtube.isConfigured()}));
   app.get<{Params:{id:string};Querystring:{q:string;pageToken?:string};Reply:unknown|ApiError}>("/api/projects/:id/youtube/search",{schema:{params:ProjectParams,querystring:YouTubeSearchQuery}},async(req,reply)=>{
     if(!sources.projectExists(req.params.id))return reply.code(404).send(missing("El proyecto no existe."));
+    if(req.query.q.trim().length<2)return reply.code(400).send({error:"invalid_youtube_query",message:"La búsqueda debe tener al menos dos caracteres."});
     try{const result=await youtube.search(req.query.q.trim(),req.query.pageToken);return {...result,items:result.items.map(item=>({...item,alreadyImported:sources.findYouTubeByVideoId(req.params.id,item.videoId)!==undefined}))};}
     catch(error){if(error instanceof YouTubeImportError)return reply.code(503).send({error:error.code,message:error.message});throw error;}
   });
   app.post<{Params:{id:string};Body:{videoId:string;title:string;topLevelLimit:number};Reply:{source:Source;job:Job}|ApiError}>("/api/projects/:id/youtube/import",{schema:{params:ProjectParams,body:YouTubeImportBody}},async(req,reply)=>{
+    if(!sources.projectExists(req.params.id))return reply.code(404).send(missing("El proyecto no existe."));
     try{return reply.code(202).send(youtube.queue(req.params.id,`https://www.youtube.com/watch?v=${req.body.videoId}`,req.body.title,req.body.topLevelLimit));}
     catch(error){if(error instanceof YouTubeImportError)return reply.code(error.code==="youtube_not_configured"?503:400).send({error:error.code,message:error.message});throw error;}
   });
@@ -55,7 +58,19 @@ export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepositor
   app.get<{Params:{id:string};Reply:{jobs:Job[]}}>("/api/projects/:id/jobs",{schema:{params:ProjectParams,response:{200:JobsResponse}}},async(req)=>({jobs:jobs.list(req.params.id)}));
   app.get<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>jobs.get(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));
   app.post<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId/cancel",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>youtube.cancel(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));
-  app.post<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId/retry",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>youtube.retry(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));
+  app.post<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId/retry",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema,409:ApiErrorSchema,422:ApiErrorSchema}}},async(req,reply)=>{
+    const job=jobs.get(req.params.id,req.params.jobId);
+    if(!job)return reply.code(404).send(missing("El trabajo no existe en este proyecto."));
+    if(job.jobType==="youtube_import")return youtube.retry(req.params.id,req.params.jobId)!;
+    if(job.jobType!=="product_chapters")return reply.code(409).send({error:"unsupported_job_type",message:"Este trabajo no admite reintentos."});
+    try{
+      await studio.resumeBatch(req.params.id,req.params.jobId);
+      return jobs.get(req.params.id,req.params.jobId)!;
+    }catch(error){
+      const conflict=error instanceof ProductStudioConflictError;
+      return reply.code(conflict?409:422).send({error:conflict?"version_conflict":"product_studio_error",message:error instanceof Error?error.message:"No se pudo reanudar el trabajo."});
+    }
+  });
   app.get<{Params:{id:string};Reply:{generations:Generation[]}}>("/api/projects/:id/generations",{schema:{params:ProjectParams,response:{200:GenerationsResponse}}},async(req)=>({generations:jobs.listGenerations(req.params.id)}));
   app.get<{Params:{id:string;evidenceId:string};Reply:EvidenceSnippet|ApiError}>("/api/projects/:id/evidence/:evidenceId",{schema:{params:EvidenceParams,response:{200:EvidenceSnippetSchema,404:ApiErrorSchema}}},async(req,reply)=>sources.getEvidence(req.params.id,req.params.evidenceId)??reply.code(404).send(missing("La evidencia no existe en este proyecto.")));
 }

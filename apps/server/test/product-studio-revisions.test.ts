@@ -257,6 +257,56 @@ describe("Product Studio revision integrity", () => {
     expect((await app.inject({ method: "GET", url: `/api/projects/${document.projectId}/jobs/${job.id}` })).json().status).toBe("FAILED");
   });
 
+  it.each(["resume", "new batch", "generic retry"])("rejects %s while a cancelled batch is still settling", async operation => {
+    await action("outline/generate");
+    const document = await action("outline/approve");
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+    const pendingChapter = new Promise<void>(resolve => { release = resolve; });
+    const generate = ProductStudioService.prototype.generateChapter;
+    const calls = vi.spyOn(ProductStudioService.prototype, "generateChapter");
+    calls.mockImplementationOnce(async function (this: ProductStudioService, projectId, documentId, chapterId) {
+      const saved = await generate.call(this, projectId, documentId, chapterId);
+      entered();
+      await pendingChapter;
+      return saved;
+    });
+    const first = app.inject({ method: "POST", url: `${base}/chapters/generate-pending`, payload: {} }).then(result => result);
+    await enteredPromise;
+    const jobsUrl = `/api/projects/${document.projectId}/jobs`;
+    const job = (await app.inject({ method: "GET", url: jobsUrl })).json().jobs[0];
+    await app.inject({ method: "POST", url: `${jobsUrl}/${job.id}/cancel` });
+    const resumeUrl = `/api/projects/${document.projectId}/product-document-jobs/${job.id}/resume`;
+    const overlapping = await app.inject({ method: "POST", payload: {},
+      url: operation === "resume" ? resumeUrl : operation === "generic retry" ? `${jobsUrl}/${job.id}/retry` : `${base}/chapters/generate-pending`,
+    });
+    release();
+    const completedRequest = await first;
+    expect(completedRequest.statusCode, completedRequest.body).toBe(200);
+    expect(overlapping.statusCode, overlapping.body).toBe(409);
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect((await app.inject({ method: "GET", url: jobsUrl })).json().jobs).toHaveLength(1);
+    expect((await app.inject({ method: "GET", url: `${jobsUrl}/${job.id}` })).json().status).toBe("CANCELLED");
+    const resumed = await app.inject({ method: "POST", url: resumeUrl, payload: {} });
+    expect(resumed.statusCode, resumed.body).toBe(200);
+    expect(calls).toHaveBeenCalledTimes(document.version.outline.length);
+  });
+
+  it("resumes chapter work through the generic retry endpoint instead of leaving an unowned queue", async () => {
+    await action("outline/generate");
+    const document = await action("outline/approve");
+    vi.spyOn(ProductStudioService.prototype, "generateChapter").mockRejectedValueOnce(new Error("Controlled failure"));
+    const failed = await app.inject({ method: "POST", url: `${base}/chapters/generate-pending`, payload: {} });
+    expect(failed.statusCode).toBe(422);
+    const jobsUrl = `/api/projects/${document.projectId}/jobs`;
+    const job = (await app.inject({ method: "GET", url: jobsUrl })).json().jobs[0];
+    const retried = await app.inject({ method: "POST", url: `${jobsUrl}/${job.id}/retry` });
+    expect(retried.statusCode, retried.body).toBe(200);
+    expect(retried.json().status).toBe("COMPLETED");
+    expect((await app.inject({ method: "GET", url: base })).json<ProductDocument>().version.outline.every(chapter => chapter.status === "DRAFT")).toBe(true);
+  });
+
   it("rejects a second resume while the batch is running", async () => {
     await action("outline/generate");
     const document = await action("outline/approve");

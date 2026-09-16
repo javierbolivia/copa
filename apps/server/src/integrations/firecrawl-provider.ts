@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
   httpIntegrationError,
@@ -67,32 +68,34 @@ export class FirecrawlProvider {
   async search(query: string, options: { readonly maxResults?: number } = {}): Promise<FirecrawlSearchMetadata> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Firecrawl no está configurado.");
     const maxResults = Math.min(3, Math.max(1, Math.floor(options.maxResults ?? 3)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ query, limit: maxResults, sources: ["web"] }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Firecrawl");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
+    const { response, body } = await withIntegrationTimeout("Firecrawl", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ query, limit: maxResults, sources: ["web"] }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Firecrawl");
+      }
+      if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
 
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const rateLimit = record(body.rateLimit) ?? record(body.rate_limit);
     const usage = numeric(body.usage) ?? numeric(body.creditsUsed);
     const credits = numeric(body.credits);
@@ -113,28 +116,30 @@ export class FirecrawlProvider {
   async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Firecrawl no está configurado.");
     const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ query, limit: maxResults, sources: ["web"] }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Firecrawl");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
-    }
+    const { response, body } = await withIntegrationTimeout("Firecrawl", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({ query, limit: maxResults, sources: ["web"] }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Firecrawl");
+      }
+      if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const data = record(body.data);
     const rawResults = Array.isArray(data?.web) ? data.web : Array.isArray(body.data) ? body.data : Array.isArray(body.results) ? body.results : [];
     const rateLimit = record(body.rateLimit) ?? record(body.rate_limit);
@@ -173,28 +178,30 @@ export class FirecrawlProvider {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       throw new IntegrationError("invalid_response", "Firecrawl scrape requiere una URL HTTP(S) explícita.");
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn("https://api.firecrawl.dev/v2/scrape", {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
-        body: JSON.stringify({ url: parsed.toString(), formats: ["markdown"] }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Firecrawl");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
-    }
+    const { response, body } = await withIntegrationTimeout("Firecrawl", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn("https://api.firecrawl.dev/v2/scrape", {
+          method: "POST",
+          headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({ url: parsed.toString(), formats: ["markdown"] }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Firecrawl");
+      }
+      if (!response.ok) throw httpIntegrationError("Firecrawl", response.status, await readErrorType(response));
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Firecrawl devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const data = record(body.data) ?? body;
     const usage = numeric(body.usage) ?? numeric(body.creditsUsed);
     return {

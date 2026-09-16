@@ -1,4 +1,4 @@
-import type { ModuleKey, Project } from "@our-platform/shared";
+import {AVATAR_FIELDS,type ModuleKey,type Project} from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +24,9 @@ function canonicalOutput(key:Exclude<ModuleKey,"sources">,input:Record<string,un
     output.items=output.items.map((item)=>({...item as Record<string,unknown>,problemId:problem?.id,evidenceIds:Array.isArray(problem?.evidenceIds)?problem.evidenceIds:[]}));
   }
   if(key==="product"&&Array.isArray(output.proposals))output.proposals=output.proposals.map((proposal:unknown)=>({...proposal as Record<string,unknown>,evidenceIds:[]}));
+  if(key==="avatar"){
+    for(const [field] of AVATAR_FIELDS)output[field]=field==="language"?[]:(output[field] as Array<Record<string,unknown>>).map(item=>({...item,provenance:"AI_INFERENCE",evidenceIds:[]}));
+  }
   return output;
 }
 
@@ -60,6 +63,7 @@ describe("matriz compartida de proveedores de módulos",()=>{
       const response=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/run`,payload:{provider:"deepseek"}});
       expect(response.statusCode,`${key}: ${response.body}`).toBe(200);
       expect(response.json()).toMatchObject({moduleKey:key});
+      if(key==="avatar")expect(response.json()).toMatchObject({status:"approved",outputData:{avatarValidationAudit:{ok:true}}});
     }
 
     const generations=(await app.inject({method:"GET",url:`/api/projects/${demo.project.id}/generations`})).json<{generations:Array<{provider:string;model:string;status:string;artifactVersionId:string|null;versionNumber:number|null}>}>().generations.filter(generation=>generation.provider==="deepseek"&&generation.artifactVersionId!==null);
@@ -87,6 +91,7 @@ describe("matriz compartida de proveedores de módulos",()=>{
       const response=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/run`,payload:{provider:"gemini"}});
       expect(response.statusCode,`${key}: ${response.body}`).toBe(200);
       expect(response.json()).toMatchObject({moduleKey:key});
+      if(key==="avatar")expect(response.json()).toMatchObject({status:"approved",outputData:{avatarValidationAudit:{ok:true}}});
     }
 
     const generations=(await app.inject({method:"GET",url:`/api/projects/${demo.project.id}/generations`})).json<{generations:Array<{provider:string;model:string;status:string;artifactVersionId:string|null;versionNumber:number|null}>}>().generations.filter(generation=>generation.provider==="gemini"&&generation.artifactVersionId!==null);

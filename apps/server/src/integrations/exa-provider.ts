@@ -1,3 +1,4 @@
+import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
   httpIntegrationError,
@@ -60,32 +61,34 @@ export class ExaProvider {
     const apiKey = this.apiKey;
     if (!apiKey?.trim()) throw new IntegrationError("missing_api_key", "Exa no está configurado.");
     const maxResults = Math.min(3, Math.max(1, Math.floor(options.maxResults ?? 3)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
-        body: JSON.stringify({ query, type: "auto", numResults: maxResults }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Exa");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Exa", response.status, await readErrorType(response));
+    const { response, body } = await withIntegrationTimeout("Exa", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": apiKey,
+          },
+          body: JSON.stringify({ query, type: "auto", numResults: maxResults }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Exa");
+      }
+      if (!response.ok) throw httpIntegrationError("Exa", response.status, await readErrorType(response));
 
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Exa devolvió una respuesta que no es JSON.", { cause: error });
-    }
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Exa devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Exa devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const rateLimit = record(body.rateLimit) ?? record(body.rate_limit);
     const usage = numeric(body.costDollars) ?? numeric(body.usage);
     const rateLimitRemaining = numeric(rateLimit?.remaining)
@@ -105,28 +108,30 @@ export class ExaProvider {
     const apiKey = this.apiKey;
     if (!apiKey?.trim()) throw new IntegrationError("missing_api_key", "Exa no está configurado.");
     const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify({ query, type: "auto", numResults: maxResults, contents: { text: true } }),
-        signal: controller.signal,
-      });
-    } catch (error) {
-      throw normalizeFetchError(error, "Exa");
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) throw httpIntegrationError("Exa", response.status, await readErrorType(response));
-    let body: Record<string, unknown>;
-    try {
-      body = await response.json() as Record<string, unknown>;
-    } catch (error) {
-      throw new IntegrationError("invalid_response", "Exa devolvió una respuesta que no es JSON.", { cause: error });
-    }
+    const { response, body } = await withIntegrationTimeout("Exa", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-api-key": apiKey },
+          body: JSON.stringify({ query, type: "auto", numResults: maxResults, contents: { text: true } }),
+          signal,
+        });
+      } catch (error) {
+        throw normalizeFetchError(error, "Exa");
+      }
+      if (!response.ok) throw httpIntegrationError("Exa", response.status, await readErrorType(response));
+      let body: Record<string, unknown>;
+      try {
+        body = await response.json() as Record<string, unknown>;
+      } catch (error) {
+        throw new IntegrationError("invalid_response", "Exa devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        throw new IntegrationError("invalid_response", "Exa devolvió una respuesta JSON que no es un objeto.");
+      }
+      return { response, body };
+    });
     const rateLimit = record(body.rateLimit) ?? record(body.rate_limit);
     const rawResults = Array.isArray(body.results) ? body.results : [];
     const usage = numeric(body.usage);

@@ -742,8 +742,8 @@ function Wizard({
   return (
     <form className="ps-wizard detail-card" onSubmit={submit}>
       <span>PRODUCT STUDIO</span>
-      <h2>Empieza por la estructura</h2>
-      <p>El contenido se genera después, capítulo por capítulo.</p>
+      <h2>Empieza por la estructura del Ebook</h2>
+      <p>El contenido se genera después, capítulo por capítulo con sustancia práctica y rigor.</p>
       {error && <div className="error-banner inline">{error}</div>}
       <label>
         Tipo

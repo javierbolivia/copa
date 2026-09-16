@@ -6,7 +6,7 @@ const stateLabel:Record<string,string>={PENDING:"Pendiente",READY:"Lista",IN_PRO
 const workflowGroups=[
   {label:"Descubrimiento",description:"Señales, evidencia y problemas",keys:["research","sources","problems","opportunities"]},
   {label:"Estrategia",description:"Decisiones y arquitectura",keys:["product","avatar","mechanism","beliefs","offer"]},
-  {label:"Activación",description:"Sistemas de adquisición",keys:["landing","funnel","emails","content"]},
+  {label:"Activación",description:"Sistemas de adquisición",keys:["landing","funnel","content"]},
   {label:"Entrega",description:"Output final trazable",keys:["final_product"]},
 ] as const;
 

@@ -19,10 +19,10 @@ This is the current sequential review, superseding earlier broad visual visits a
 8. Mechanism — **SECTION PASS**, 2026-09-16.
 9. Beliefs — **SECTION PASS**, 2026-09-16.
 10. Offer — **SECTION PASS**, 2026-09-16.
-11. Landing — **IN PROGRESS**, structured strategy/sections/copy/tokens/preview/HTML-CSS export required.
-12. Funnel — pending.
-13. Emails — pending, assess value; copy sequences only, no sending platform.
-14. Content — pending, grounded in strategy and research.
+11. Landing — **SECTION PASS**, 2026-09-16.
+12. Funnel — **SECTION PASS**, 2026-09-16.
+13. Emails — **ELIMINATED / DEPRECATED BY ARCHITECTURAL DECISION**, 2026-09-16.
+14. Content — in progress.
 15. Final Product — pending.
 16. Library — pending.
 17. History — pending.
@@ -186,11 +186,152 @@ Validation: eight focused tests GREEN (3 adapter, 5 API including null/zero/25.5
 Browser: real 5173 Offer remains honestly empty and shows new preparation panel; actual editor fixture verified price abc error retains input, zero stays zero, rationale/terms separate, descriptions shown, complementary offer saved as null. Tool fill("") did not clear the field; keyboard select-all/backspace did, so no product defect inferred from that tool no-op. Fixture console empty, fixture removed. Screenshot API temporarily failed while browser hidden; visibility capability restored real screenshot. No real writes, dates/regeneration, paid APIs, commits/push/deploy. Technical-review timestamps for the previously requested eight sections persist separately; normal reload preserved exact timestamp.
 
 
-## Landing — ampliación de arquitectura visual (16/09/2026, en curso)
+## Landing — **SECTION PASS**, 2026-09-16
 
-- Evaluación de Puck, GrapesJS, Craft.js, Onlook, Webstudio y editor propio en `docs/LANDING_VISUAL_ARCHITECTURE.md`. Puck 0.23.0 elegido tras prototipo aislado real con 15 bloques, edición, activación, drag/drop, árbol, móvil, tema y persistencia local sintética. Webstudio solo referencia AGPL; Figma no es dependencia.
-- Se conserva LandingBuilder anterior. Nuevo constructor lazy `LandingVisualEditor.tsx`, adaptador canónico `landing-puck-adapter.ts`, laboratorio explícito dentro de Landing vacía sin escritura de proyecto. Datos y backend siguen siendo Hallazia.
-- Se corrigió resolución Vite que retenía Puck del node_modules aislado: dedupe React y entrada de optimización solo index.html. Vite recargó automáticamente su configuración; no se detuvo ni relanzó npm dev. Portal al body corrigió clipping/estilos heredados del contenedor. Constructor real 5173 montado y viewport móvil comprobado.
-- 6 pruebas Landing enfocadas verdes; typecheck web/server verdes antes de las últimas modificaciones de portal. Shared build verde. Dos fallos backend reproducidos y corregidos: documentos vacíos/FAQ incompleta y aprobación de borrador con base superada.
-- PENDIENTE antes de SECTION PASS: unificar paridad visual renderer React/canvas y HTML (ahora comparten contenido pero estilos difieren); export React independiente; validación IDs/activación/tokens; roundtrip save→approve→reload/export; accesibilidad/error boundary y prueba visual integrada completa; medición bundle/build; suite de cierre y diff. No marcar PASS ni pasar a Funnel todavía.
-- No se generaron proyectos ni versiones reales; proyecto original sigue con 19 versiones históricas. Servidor sigue activo; no commit/push/deploy.
+Purpose: transform upstream project intelligence (Research, Problems, Opportunities, Product, Avatar, Mechanism, Beliefs, Offer) plus an optional concise user prompt into a high-converting, 15-block landing page, editable visually in Puck, previewable responsively, and exportable to clean HTML and standalone React code.
+
+Architecture & Implementation:
+- **Primary flow: PROMPT → LANDING COMPLETA AUTOMÁTICA**. Upstream modules are aggregated automatically via `parentOutputs` (`offer`, `product`, `avatar`, `mechanism`, `beliefs`, `problem`, `research`, `opportunities`) and injected into the LLM system prompt along with user instructions.
+- **15 Canonical Blocks**: Complete structured generation across `hero`, `problem`, `agitation`, `mechanism`, `benefits`, `product`, `deliverables`, `bonuses`, `proof`, `objections`, `faq`, `offer`, `guarantee`, `cta`, `footer`.
+- **Visual Parity**: Full styling alignment across the Puck visual editor, the responsive React preview (`LandingPreview`), the static HTML export (`renderLandingHtml`), and the standalone React component export (`renderLandingReactCode`).
+- **Puck Visual Editor**: Configured as a post-generation refinement tool (drag-and-drop, block reordering, visibility toggle, inline text editing, and theme customization) rather than a mandatory block-by-block construction hurdle.
+- **Standalone React Export**: Single-file `.tsx` component with embedded types and inline CSS variables, containing zero `@measured/puck` or third-party dependencies, ready for production Vite/Next.js/Remix.
+- **Theme Presets**: 5 curated themes (`modern`, `warm`, `dark`, `editorial`, `minimal`) selectable with 1 click without losing copy or block configuration.
+- **Regeneration Capabilities**: Full-page AI regeneration with custom user prompt, plus contextual single-block regeneration dialog.
+- **Model routing**: Gemini (`gemini-3.5-flash-lite`, Free Tier) configured as the primary LLM provider; DeepSeek retained as alternative/fallback; Mock provider used in automated tests. Zero live paid API calls during development/tests.
+- **Lifecycle & Safety**: Validated draft save → approval flow with strict base-version checking to prevent overwriting newer versions. Automatic file export of both `landing.html` and `landing.tsx` to `generated_files` on generation and approval.
+- **Preservation of Real Data**: Seed QA project (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`) remained completely untouched; all live verifications performed via synthetic test fixtures and in-memory databases.
+
+Validation:
+- 9/9 focused landing tests GREEN across `landing-canvas.test.mjs`, `landing-contract.test.ts`, and `landing-editor.test.mjs`.
+- Typechecks across `apps/server`, `apps/web`, and `packages/shared` pass cleanly with zero errors (`tsc -p tsconfig.json --noEmit`, `tsc -b`, `npx tsc`).
+- `git diff --check` passes with zero whitespace or line-ending errors.
+- Verified live on running local servers (port 5173 for Vite frontend, port 4310 for Fastify backend). Both responding HTTP 200.
+
+
+## Funnel — **SECTION PASS**, 2026-09-16
+
+Purpose: model, generate, and visualize the complete commercial conversion journey connecting the approved Landing page and the Offer structure into a strictly directed, acyclic graph (DAG) with safe simulated checkout (no real payments).
+
+Architecture & Implementation:
+- **Shared Contract & Document (`packages/shared/src/funnel-document.ts`)**:
+  - Defined `FunnelNode`, `FunnelEdge`, `FunnelValidationAudit`, and `FunnelDocument` with strict `exactOptionalPropertyTypes` compatibility (`| undefined` unions).
+  - Implemented `renderFunnelMarkdown(input: unknown): string` generating clean Markdown documentation with node step breakdown, prices, linked artifacts, and an edge transition table.
+  - Exported in `packages/shared/src/index.ts`.
+- **DAG & Cycle Detection Validator (`apps/server/src/services/funnel-output-validator.ts`)**:
+  - Enforces 2 to 30 nodes, uniqueness of IDs, required non-empty label/type.
+  - Validates edge connections: `from` and `to` nodes must exist in the node set.
+  - Forbids self-loops (`from === to` rejected immediately).
+  - Detects graph cycles via depth-first search (DFS) with node visitation and recursion stack states, guaranteeing a true DAG.
+  - Enforces Hallazia's safe simulation policy: `paymentsEnabled: false` is strictly mandatory (`paymentsEnabled: true` rejected with 409).
+- **Server Module Service (`apps/server/src/services/module-service.ts`)**:
+  - Registered funnel in `get`, `saveDraft`, `approve`, `canPromoteToMemory`, and `modules.run`.
+  - Added `validatePersistedFunnel` ensuring historical or newly created versions adhere to the DAG contract.
+  - Enriched `createContextOutput` and `createDemoOutput` for `funnel` with grounded prices from Offer, canonical nodes, and structured edge events.
+  - Integrated `fileExporter.exportFunnel(projectId, versionId, output)` automatically generating `funnel.md` in `generated_files` on run and approval.
+  - Protected drafts against concurrent overwrites using `expectedBaseVersionId`.
+- **UI Workspace & Refinement (`apps/web`)**:
+  - Created empty state `<FunnelPreparation>` (`apps/web/src/features/refinement/FunnelPreparation.tsx`) with user prompt input, provider selector, safe simulation disclaimer, and canonical journey cards.
+  - Upgraded `<FunnelWorkspace>` (`apps/web/src/features/refinement/CampaignWorkspaces.tsx`) with dynamic transition map badges (`continue`, `accept`, `decline`), active status toggle, drag-and-drop reordering, and "Exportar Funnel (.md)" action.
+  - Updated `<RefinedModuleOutput>` with `FunnelAdapter` passing edges, export trigger, version strip, and audit warning banners.
+  - Updated `<ModuleView>` to render `<FunnelPreparation>` on empty state and pass custom instructions to `api.runModule`.
+- **Prompt 1.1.0 (`prompts/funnel-builder.md`)**:
+  - Strict DAG specification, canonical 6-node catalog (`landing`, `checkout`, `order_bump`, `upsell`, `downsell`, `thank_you`), event definitions (`continue`, `accept`, `decline`, `complete`), price grounding against Offer, and zero external payment credentials.
+- **Preservation of Real Data & Safety**:
+  - Real Seed QA project (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`) remained completely untouched; all tests and runs executed via isolated in-memory instances and synthetic mocks.
+  - No git commits, no git push, no deployment.
+
+Validation:
+- 3/3 tests in `apps/server/test/funnel-contract.test.ts` GREEN (self-loop/cycle/payment rejection, draft base version protection, contextual run with file export and approval).
+- 11/11 contract tests passing across `landing-contract.test.ts`, `funnel-contract.test.ts`, and `offer-contract.test.ts`.
+- Typechecks across `apps/server` (`tsc -p tsconfig.json --noEmit`), `apps/web` (`tsc -b`), and `packages/shared` pass cleanly with zero errors.
+- `git diff --check` passes with zero errors.
+- Dev servers on port 5173 and port 4310 healthy (HTTP 200).
+
+
+
+
+## Emails — **ELIMINATED / DEPRECATED BY ARCHITECTURAL DECISION**, 2026-09-16
+
+Status: **ELIMINATED / DEPRECATED BY ARCHITECTURAL DECISION**.
+
+Context & Decision:
+- The core commercial conversion flow of Hallazia is streamlined to:
+  `Meta Ads → Landing de Hallazia → Meta Pixel / tracking de conversiones → Checkout externo en Hotmart o Skool → Compra`.
+- Consequently, `Emails` as a module and workflow section is removed from the product scope.
+- Historical data preservation: Existing database rows and historical artifacts are preserved without destructive wipes or schema drops. The `ModuleKey` schema union retains `"emails"` compatibility for read-only historical deserialization.
+- Clean removal executed across:
+  - Sidebar and navigation (`apps/web/src/components/AppShell.tsx`, `apps/web/src/App.tsx`, `apps/web/src/config/modules.ts`, `apps/web/src/features/overview/OverviewView.tsx`, `apps/web/src/features/modules/ModuleView.tsx`).
+  - Workspaces and adapters: Removed `EmailsWorkspace`, `EmailsAdapter`, and `toEmails` from `apps/web/src/features/refinement/CampaignWorkspaces.tsx` and `RefinedModuleOutput.tsx`. Kept `ContentWorkspace` intact.
+  - Active module registry & knowledge policies: Removed `emails` from `apps/server/src/domain/module-registry.ts` and `agent-knowledge-policies.ts`.
+  - Workflow steps: Removed `emails` from `apps/server/src/repositories/project-repository.ts` workflow initialization (13 active workflow steps remain).
+  - Prompts: Archived/deleted `prompts/email-agent.md`, removed from `prompt-registry.ts`.
+  - Content module dependencies: Updated `content` parents in `module-registry.ts` to `["offer", "avatar", "mechanism", "beliefs"]` with optional parents `["landing", "funnel"]`.
+- Architecture readiness for tracking & external checkouts:
+  - `LandingDocument` and `FunnelDocument` prepared with optional `MetaPixelConfig` (`pixelId`, `events: ViewContent, Lead, InitiateCheckout, Purchase`) and `ExternalCheckoutConfig` (`platform: "hotmart" | "skool" | "custom" | "none"`, `checkoutUrl`).
+  - Landing HTML/React exporters inject Meta Pixel script and CTA button `onclick="if(window.fbq)fbq('track','InitiateCheckout');"`.
+  - Safe simulation: payments remain external or simulated (`paymentsEnabled: false` strictly enforced).
+- Validation:
+  - All 97 test suites (817 tests) passing GREEN across `apps/server`.
+  - Server, web, and shared TypeScript checks pass with 0 errors.
+
+
+## Architectural Pivot: Universal Research-to-Ebook Platform (EBOOK_ONLY), 2026-09-16
+
+Status: **PIVOT IMPLEMENTED & VALIDATED**.
+
+Context & Scope:
+- **Core Purpose**: Hallazia is a universal platform to research *any topic* (pets, gardening, photography, parenting, cooking, business, hobbies, education, etc.) and convert that research into a complete, saleable, grounded **EBOOK** (`PRODUCT_FORMAT = EBOOK_ONLY`, `TOPIC_SCOPE = ANY_TOPIC`, `CONTEXT_SCOPE = PROJECT_ISOLATED`).
+- Hallazia is **not** a platform for online courses, video academies, memberships, coaching, mentoring, communities, live sessions, or consulting services.
+- Test case note: The "Perros Reactivos – Seed QA" project is strictly an isolated test fixture; no dog-specific logic or hardcoding is permitted.
+
+Architectural Adjustments across the 10 System Areas:
+1. **Prompts (`prompts/`)**:
+   - `product-builder.md`: Enforces `PRODUCT_FORMAT = EBOOK_ONLY`. Modules represent chapters/parts of the Ebook; deliverables are the digital book (PDF/EPUB) and direct companion materials (Checklists, Workbooks, Quick Guides). Explicitly forbids courses, memberships, coaching, communities, or live sessions.
+   - `opportunity-scorer.md`: Evaluates solving validated market problems through a complete, saleable Ebook and companion resources.
+   - `offer-builder.md`: Structures the core commercial offer around the Ebook ($17–$47 book pricing range, digital bumps/upsells like Workbooks/Checklists, zero live/human delivery overhead).
+   - `landing-builder.md`: Tailors the 15 canonical blocks for selling the Ebook (covers, table of contents/chapters, PDF/EPUB deliverables, bonuses, proof, guarantee, checkout CTA).
+   - `funnel-builder.md`: Aligns the funnel graph to digital publication checkout (Meta Ads → Landing → External Checkout Hotmart/Skool → Ebook Delivery).
+   - `content-engine.md`: Aligns organic and paid angles to drive targeted readers to the Ebook Landing page.
+   - `product-generator.md`: Instructs generation of the complete, grounded, substantive Ebook with practical chapters and real depth.
+
+2. **Module Registry (`module-registry.ts`)**:
+   - Registered `final_product` with optional parents covering the entire upstream pipeline (`research`, `sources`, `problems`, `opportunities`, `product`, `avatar`, `mechanism`, `beliefs`, `offer`, `landing`, `funnel`, `content`).
+
+3. **Dependencies & Upstream Flow**:
+   - Upstream context feeds forward into the Ebook generation: Research, Market Problems, Selected Opportunity, Product Concept & Chapters, Target Avatar, Unique Mechanism, Belief Bridges, and Commercial Offer.
+
+4. **Contracts & Capability Policy**:
+   - Product capability contract in `product-output-validator.ts` maintains FAIL_CLOSED semantics on non-ebook capabilities (`COACHING_OR_SESSIONS`, `COMMUNITY_ACCESS`, `LIVE_SESSIONS`, `HUMAN_SUPPORT`, `CERTIFICATION`).
+
+5. **Validators (`product-output-validator.ts`)**:
+   - Integrated `FORBIDDEN_PRODUCT_FORMAT` regex and `isForbiddenProductFormat(value)` detector checking for `curso`, `course`, `membresia`, `membership`, `comunidad`, `community`, `coaching`, `mentoria`, `sesiones en vivo`, `talleres en vivo`, `masterclass`, `bootcamp`.
+   - Populates `invalidFormatFields` and reports structural error if any forbidden format is proposed.
+
+6. **Demo Outputs (`demo-outputs.ts` & `module-service.ts`)**:
+   - Updated mock and contextual fallbacks across `product`, `offer`, `landing`, and `final_product` to `"Ebook digital"`, chapter breakdowns, PDF/EPUB deliverables, and Ebook purchase CTAs.
+
+7. **UI / Texts (`apps/web/src/`)**:
+   - `config/modules.ts`: Updated descriptions to highlight Ebook generation, chapters, and reader persona.
+   - `ProductEditor.tsx`: Replaced generic placeholders with "Ebook digital (PDF/EPUB)" and renamed sections to "Capítulos".
+   - `LandingBuilder.tsx`: Fixed FAQ and Offer fallbacks from "programa" to "Ebook".
+   - `ModuleView.tsx`: Updated instructions placeholders and hints for Product and Funnel to Ebook digital goods.
+   - `ProductStudio.tsx`: Updated creation wizard header and subtitle to focus on Ebook structure and substance.
+
+8. **Product Studio / Producto Final (`product-studio-service.ts`)**:
+   - `parentContext`: Automatically loads all 12 approved upstream stages (`research`, `sources`, `problems`, `opportunities`, `product`, `avatar`, `mechanism`, `beliefs`, `offer`, `landing`, `funnel`, `content`) via `resolveParent(projectId, stage)`.
+   - `generateOutline`: Prompts generation of a complete, saleable, grounded Ebook table of contents with practical chapters.
+   - `generateChapter`: Enforces substantive, practical chapter content with real depth.
+
+9. **Memory / Context**:
+   - Strict project isolation (`CONTEXT_SCOPE = PROJECT_ISOLATED`) with automatic upstream context retrieval. No cross-project leakage.
+
+10. **Documentation**:
+    - Updated `docs/SECTION_REVIEW_CHECKPOINT.md` and codebase references to reflect the universal Ebook architecture.
+
+Validation:
+- All product validator tests passing (67/67 GREEN, including dedicated tests rejecting courses, memberships, and coaching).
+- All Product Studio tests passing (32/32 GREEN across `product-studio.test.ts`, `product-studio-revisions.test.ts`, `product-decisions.test.ts`, `product-studio-ui-wiring.test.ts`, `product-export.test.ts`).
+- `product-contract.test.ts` passing (4/4 GREEN).
+- TypeScript checks across `apps/server`, `apps/web`, and `packages/shared` pass with 0 errors.
+- `git diff --check` passes with zero whitespace/merge errors.

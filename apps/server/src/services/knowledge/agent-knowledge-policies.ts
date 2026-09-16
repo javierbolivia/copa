@@ -112,7 +112,6 @@ export const AGENT_KNOWLEDGE_POLICIES: Readonly<Record<string, AgentKnowledgePol
       maxContextTokens: 2_300,
     }),
     funnel: policy("funnel", { knowledgeInfluence: "high", kindWeights: HIGH_KNOWLEDGE_WEIGHTS }),
-    emails: policy("emails", { knowledgeInfluence: "high", kindWeights: HIGH_KNOWLEDGE_WEIGHTS }),
     content: policy("content", { knowledgeInfluence: "high", kindWeights: HIGH_KNOWLEDGE_WEIGHTS }),
     final_product: policy("final_product", {
       knowledgeInfluence: "high",

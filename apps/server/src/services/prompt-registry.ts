@@ -29,7 +29,6 @@ const PROMPT_FILES: Partial<Record<ModuleKey, string>> = {
   offer: "offer-builder.md",
   landing: "landing-builder.md",
   funnel: "funnel-builder.md",
-  emails: "email-agent.md",
   content: "content-engine.md",
   final_product: "product-generator.md",
 };

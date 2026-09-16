@@ -125,11 +125,11 @@ describe("Product completeness and grounding validator", () => {
   it("derives a zero-capability provider contract that keeps base Product structure usable", () => {
     const snapshot = buildProductGroundingSnapshot({
       evidence: [],
-      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
     });
     const schema = buildProductStructuredOutputSchema(snapshot);
     const output = complete({
-      format: "Curso digital organizado progresivamente",
+      format: "Ebook digital organizado progresivamente",
       deliverables: ["Contenido principal"],
       modules: ["Comprensión", "Aplicación", "Revisión"],
     });
@@ -213,14 +213,14 @@ describe("Product completeness and grounding validator", () => {
   it("allows proposed design arrays in the provider schema without treating them as grounded facts", () => {
     const snapshot = buildProductGroundingSnapshot({
       evidence: [],
-      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
     });
     const schema = buildProductStructuredOutputSchema(snapshot);
 
     expect(validateJsonSchema(schema, complete({ templates: ["Plantilla de seguimiento"] }))).toEqual([]);
     for (const [field, output] of [
       ["resources", complete({ resources: ["Workbook de seguimiento"] })],
-      ["format", complete({ format: "Curso con plantillas y herramientas" })],
+      ["format", complete({ format: "Ebook con plantillas y herramientas" })],
     ] as const) {
       expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit).toMatchObject({
         ok: true,
@@ -340,12 +340,12 @@ describe("Product completeness and grounding validator", () => {
   it("opens only explicitly authorized capabilities in both provider contract and validator", () => {
     const snapshot = buildProductGroundingSnapshot({
       evidence: [],
-      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso práctico" }] },
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Guía práctica" }] },
       productConfiguration: { generalNotes: "El producto incluye plantillas y una estructura de 4 módulos" },
     });
     const schema = buildProductStructuredOutputSchema(snapshot);
     const output = complete({
-      format: "Curso digital de 4 módulos con plantillas",
+      format: "Ebook digital de 4 módulos con plantillas",
       deliverables: ["Contenido principal", "Plantillas"],
       modules: ["Módulo 1", "Módulo 2", "Módulo 3", "Módulo 4"],
       templates: ["Plantilla de seguimiento"],
@@ -383,9 +383,9 @@ describe("Product completeness and grounding validator", () => {
   });
 
   it("reclassifies the exact Product v6 design while retaining its real lifetime-access violation", () => {
-    const format = "Curso 100% online con videolecciones, guías en PDF y ejercicios prácticos. Incluye módulos progresivos, demostraciones en video y planes de acción descargables.";
+    const format = "Ebook digital con guías en PDF y ejercicios prácticos. Incluye módulos progresivos y planes de acción descargables.";
     const deliverables = [
-      "Videolecciones grabadas (acceso de por vida)",
+      "Guía descargable (acceso de por vida)",
       "Guías en PDF descargables por módulo",
       "Ejercicios prácticos con instrucciones paso a paso",
       "Plan de paseo estructurado para evitar situaciones estresantes",
@@ -407,7 +407,7 @@ describe("Product completeness and grounding validator", () => {
 
     const withoutLifetimeAccess = validateProductOutput(complete({
       format,
-      deliverables: ["Videolecciones grabadas", ...deliverables.slice(1)],
+      deliverables: ["Guía principal descargable", ...deliverables.slice(1)],
     }));
     expect(withoutLifetimeAccess.audit).toMatchObject({ ok: true, grounded: true, unsupportedClaims: [] });
   });
@@ -423,27 +423,27 @@ describe("Product completeness and grounding validator", () => {
     ];
     const snapshot = buildProductGroundingSnapshot({
       evidence: evidenceIds.map((id) => ({ id, quoteText: `Evidencia ${id}` })),
-      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Curso online para perros reactivos" }] },
+      opportunities: { selectedId: "selected", items: [{ id: "selected", name: "Ebook digital para perros reactivos" }] },
     });
     const output = complete({
-      id: "curso-online-reactividad-canina",
-      name: "Curso online completo para perros reactivos",
-      concept: "Un curso online estructurado que guía a los dueños de perros reactivos paso a paso para comprender y manejar la reactividad de sus mascotas, a través de lecciones en video, materiales de apoyo y ejercicios prácticos.",
+      id: "ebook-reactividad-canina",
+      name: "Ebook digital completo para perros reactivos",
+      concept: "Un libro digital estructurado que guía a los dueños de perros reactivos paso a paso para comprender y manejar la reactividad de sus mascotas, a través de capítulos claros, materiales de apoyo y ejercicios prácticos.",
       problem: "Muchos dueños de perros reactivos no saben cómo abordar el problema: carecen de conocimientos sobre las causas de la reactividad, las técnicas de manejo seguro y cómo educar a su perro sin recurrir a métodos inadecuados. Esto genera estrés, frustración y situaciones peligrosas en los paseos.",
       outcome: "Los participantes obtendrán una comprensión clara de la reactividad canina, aprenderán a manejar situaciones cotidianas con técnicas seguras y efectivas, y podrán comenzar a trabajar en la modificación de conducta con su perro, mejorando la calidad de vida de ambos.",
       promise: "Aprenderás las bases para entender a tu perro reactivo y empezar a aplicar pautas de manejo y educación en tu día a día, con un enfoque práctico y seguro.",
-      format: "Curso online con módulos en video, guías descargables, ejercicios prácticos y un plan de acción semanal.",
-      deliverables: ["Videos de las lecciones", "Guías descargables en PDF", "Ejercicios prácticos", "Plan de acción semanal"],
+      format: "Ebook digital en PDF/EPUB con guías descargables, ejercicios prácticos y un plan de acción semanal.",
+      deliverables: ["Ebook en PDF y EPUB", "Guías descargables en PDF", "Ejercicios prácticos", "Plan de acción semanal"],
       modules: [
-        "Modulo 1: Comprendiendo la reactividad canina",
-        "Modulo 2: Identificando los desencadenantes",
-        "Modulo 3: Técnicas de manejo y seguridad",
-        "Modulo 4: Ejercicios de modificación de conducta",
-        "Modulo 5: Avanzando en entornos reales",
+        "Capítulo 1: Comprendiendo la reactividad canina",
+        "Capítulo 2: Identificando los desencadenantes",
+        "Capítulo 3: Técnicas de manejo y seguridad",
+        "Capítulo 4: Ejercicios de modificación de conducta",
+        "Capítulo 5: Avanzando en entornos reales",
       ],
       evidenceIds,
     });
-    output.selectedId = "curso-online-reactividad-canina";
+    output.selectedId = "ebook-reactividad-canina";
 
     expect(snapshot.authorizedCapabilities).toEqual([]);
     expect(validateProductOutput(output, { groundingSnapshot: snapshot }).audit).toMatchObject({
@@ -455,10 +455,10 @@ describe("Product completeness and grounding validator", () => {
   });
 
   it("reclassifies the exact Product v7 promise without hiding its separate permanent-access violation", () => {
-    const promise = "Obtendrás una guía clara, paso a paso, que te permitirá identificar las señales de tu perro y aplicar estrategias de manejo efectivas. El curso te ofrece una hoja de ruta completa para trabajar la reactividad desde casa, sin necesidad de depender únicamente de un profesional.";
+    const promise = "Obtendrás una guía clara, paso a paso, que te permitirá identificar las señales de tu perro y aplicar estrategias de manejo efectivas. El libro te ofrece una hoja de ruta completa para trabajar la reactividad desde casa, sin necesidad de depender únicamente de un profesional.";
     const result = validateProductOutput(complete({
       promise,
-      format: "Curso online con videolecciones y acceso a los materiales de forma permanente.",
+      format: "Ebook digital con acceso a los materiales de forma permanente.",
     }));
 
     expect(result.audit.unsupportedClaims).not.toEqual(expect.arrayContaining([
@@ -470,9 +470,26 @@ describe("Product completeness and grounding validator", () => {
 
     const withoutPermanentAccess = validateProductOutput(complete({
       promise,
-      format: "Curso online con videolecciones y materiales descargables.",
+      format: "Ebook digital con materiales descargables.",
     }));
     expect(withoutPermanentAccess.audit).toMatchObject({ ok: true, grounded: true, unsupportedClaims: [] });
+  });
+
+  it("rejects forbidden product formats like courses, memberships, coaching or communities", () => {
+    for (const forbiddenFormat of [
+      "Curso online completo",
+      "Membresía mensual con acceso a comunidad",
+      "Programa de coaching 1 a 1",
+      "Masterclass en vivo",
+      "Bootcamp intensivo",
+    ]) {
+      const result = validateProductOutput(complete({ format: forbiddenFormat }));
+      expect(result.audit.ok).toBe(false);
+      expect(result.audit.invalidFormatFields).toContain("proposals[0].format");
+      expect(result.audit.errors).toContain(
+        "Product format must be an Ebook or digital publication, not a course, membership, coaching or community",
+      );
+    }
   });
 
   it("rejects missing, blank and placeholder formats", () => {

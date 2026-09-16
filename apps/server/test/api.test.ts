@@ -101,7 +101,7 @@ describe("API local", () => {
   it("expone settings, workflow, restore y eliminación permanente sólo para archivados", async()=>{
     const created=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Gestionable",niche:"Nicho"}})).json<Project>();
     const settings=await app.inject({method:"PUT",url:`/api/projects/${created.id}/settings`,payload:{language:"es",targetMarket:"Bolivia",currency:"BOB",generalNotes:"Notas",preferredLlmProvider:null,economyModel:null,powerfulModel:null,maxBudget:10,contentLanguage:"es"}});expect(settings.statusCode).toBe(200);expect(settings.json()).toMatchObject({currency:"BOB",targetMarket:"Bolivia"});
-    const workflow=await app.inject({method:"GET",url:`/api/projects/${created.id}/workflow`});expect(workflow.json().steps).toHaveLength(14);
+    const workflow=await app.inject({method:"GET",url:`/api/projects/${created.id}/workflow`});expect(workflow.json().steps).toHaveLength(13);
     expect((await app.inject({method:"DELETE",url:`/api/projects/${created.id}/permanent`})).statusCode).toBe(409);
     expect((await app.inject({method:"DELETE",url:`/api/projects/${created.id}`})).json<Project>().status).toBe("archived");
     expect((await app.inject({method:"GET",url:"/api/projects?includeArchived=true"})).json<ProjectList>().projects.some(project=>project.id===created.id)).toBe(true);

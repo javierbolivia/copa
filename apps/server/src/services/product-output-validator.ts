@@ -87,6 +87,7 @@ export interface ProductValidationAudit {
   readonly missingFields: string[];
   readonly emptyFields: string[];
   readonly placeholderFields: string[];
+  readonly invalidFormatFields: string[];
   unresolvedEvidenceIds: string[];
   readonly unsupportedClaims: UnsupportedProductClaim[];
   readonly proposedDesignDecisions: ProposedProductDesignDecision[];
@@ -149,6 +150,11 @@ export const PRODUCT_CLAIM_POLICY = {
   },
 } as const;
 const PLACEHOLDER = /^(?:sin completar|incomplet[oa]|not completed|incomplete|pending|pendiente|por definir|to be defined|tbd|n a|none|null|undefined|-+)$/u;
+const FORBIDDEN_PRODUCT_FORMAT = /\b(?:curso|cursos|course|courses|membresia|membresias|membership|memberships|comunidad|community|coaching|mentoria|mentoring|sesiones? en vivo|live sessions?|talleres? en vivo|live workshops?|masterclass|bootcamp)\b/u;
+
+export function isForbiddenProductFormat(value: string): boolean {
+  return FORBIDDEN_PRODUCT_FORMAT.test(normalize(value));
+}
 
 /**
  * Canonical capability detectors. Every protected category identifies concrete
@@ -292,6 +298,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
   const missingFields: string[] = [];
   const emptyFields: string[] = [];
   const placeholderFields: string[] = [];
+  const invalidFormatFields: string[] = [];
   const unresolvedEvidenceIds = new Set<string>();
   const unsupportedClaims: UnsupportedProductClaim[] = [];
   const proposedDesignDecisions: ProposedProductDesignDecision[] = [];
@@ -302,6 +309,7 @@ export function validateProductOutput(input: unknown, context: ProductValidation
     missingFields,
     emptyFields,
     placeholderFields,
+    invalidFormatFields,
     unresolvedEvidenceIds: [],
     unsupportedClaims,
     proposedDesignDecisions,
@@ -342,7 +350,13 @@ export function validateProductOutput(input: unknown, context: ProductValidation
       const value = proposal[field].trim();
       cleaned[field] = value;
       if (value === "") emptyFields.push(`${path}.${field}`);
-      if (field === "format" && isPlaceholder(value)) placeholderFields.push(`${path}.${field}`);
+      if (field === "format") {
+        if (isPlaceholder(value)) {
+          placeholderFields.push(`${path}.${field}`);
+        } else if (isForbiddenProductFormat(value)) {
+          invalidFormatFields.push(`${path}.${field}`);
+        }
+      }
     }
     for (const field of REQUIRED_ARRAY_FIELDS) {
       if (!Array.isArray(proposal[field])) {
@@ -412,14 +426,15 @@ export function validateProductOutput(input: unknown, context: ProductValidation
   if (missingFields.length > 0) errors.push("required Product fields are missing");
   if (emptyFields.length > 0) errors.push("required Product fields are empty");
   if (placeholderFields.length > 0) errors.push("Product format is a placeholder");
+  if (invalidFormatFields.length > 0) errors.push("Product format must be an Ebook or digital publication, not a course, membership, coaching or community");
   if (unresolvedEvidenceIds.size > 0) errors.push("Product references evidence outside the generation snapshot");
   if (unsupportedClaims.length > 0) errors.push("Product contains unsupported commercial or operational claims");
-  for (const path of [...missingFields, ...emptyFields, ...placeholderFields]) {
+  for (const path of [...missingFields, ...emptyFields, ...placeholderFields, ...invalidFormatFields]) {
     issues.push({ code: "STRUCTURAL_INVALID", path: path.startsWith("$") ? path : `$.${path}` });
   }
   if (audit.invalidSelection) issues.push({ code: "STRUCTURAL_INVALID", path: "$.selectedId" });
   audit.unresolvedEvidenceIds = [...unresolvedEvidenceIds].sort();
-  audit.complete = missingFields.length === 0 && emptyFields.length === 0 && placeholderFields.length === 0 && !audit.invalidSelection;
+  audit.complete = missingFields.length === 0 && emptyFields.length === 0 && placeholderFields.length === 0 && invalidFormatFields.length === 0 && !audit.invalidSelection;
   audit.grounded = unresolvedEvidenceIds.size === 0 && unsupportedClaims.length === 0;
   audit.ok = audit.complete && audit.grounded;
   return {

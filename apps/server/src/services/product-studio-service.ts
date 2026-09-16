@@ -250,7 +250,7 @@ export class ProductStudioService {
           provider: "openai",
           model,
           systemInstructions:
-            "Diseña el outline de un producto digital útil. Usa sólo el contexto entregado, no inventes fuentes y devuelve JSON estructurado.",
+            "Diseña el índice y la estructura de un Ebook completo, vendible y fundamentado. Usa la investigación y contexto aprobado del proyecto, organizando la obra en introducción, capítulos temáticos prácticos, accionables y con sustancia, y conclusión. No inventes fuentes y devuelve JSON estructurado.",
           input: JSON.stringify(input),
           structuredOutput: {
             name: "product_outline",
@@ -510,7 +510,7 @@ export class ProductStudioService {
             provider: "openai",
             model,
             systemInstructions:
-              "Escribe un capítulo práctico como bloques. No inventes fuentes. Las afirmaciones sustentadas deben referir evidenceId o referenceId entregados; lo demás es AI_INFERENCE. Nunca incluyas HTML ejecutable.",
+              "Escribe un capítulo práctico y desarrollado de este Ebook como bloques de contenido real y sustancia profunda. No inventes fuentes. Las afirmaciones sustentadas deben referir evidenceId o referenceId entregados; lo demás es AI_INFERENCE. Nunca incluyas HTML ejecutable.",
             input: JSON.stringify(input),
             structuredOutput: {
               name: "product_chapter",
@@ -1029,8 +1029,26 @@ export class ProductStudioService {
         return [item?.artifactType ?? id, item?.outputData ?? null];
       }),
     );
-    const avatar = this.resolveParent(projectId, "avatar");
-    if (avatar) parents.avatar = avatar.outputData;
+    const upstreamStages = [
+      "research",
+      "sources",
+      "problems",
+      "opportunities",
+      "product",
+      "avatar",
+      "mechanism",
+      "beliefs",
+      "offer",
+      "landing",
+      "funnel",
+      "content",
+    ];
+    for (const stage of upstreamStages) {
+      if (!parents[stage]) {
+        const resolved = this.resolveParent(projectId, stage);
+        if (resolved) parents[stage] = resolved.outputData;
+      }
+    }
     return parents;
   }
   private recordMockGeneration(

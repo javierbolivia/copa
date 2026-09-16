@@ -11,17 +11,39 @@ const txt=(v:unknown)=>typeof v==='string'?v:'';
 export function LandingReactBlock({section,editing=false}:{section:LandingContentSection;editing?:boolean}){
   if(section.enabled===false&&!editing)return null;
   const title=txt(section.headline),hero=section.type==='hero';
-  return <section className={`hl-block hl-block--${section.type} hl-block--${section.variant==='centered'?'centered':'editorial'}`} style={{opacity:section.enabled===false?.4:1}}>
+  const centered=section.variant==='centered'||['hero','offer','guarantee','cta','footer'].includes(section.type);
+  return <section className={`hl-block hl-block--${section.type} hl-block--${centered?'centered':'editorial'}`} style={{opacity:section.enabled===false?.4:1}}>
     {section.enabled===false&&<small className="hl-disabled">DESACTIVADO · Conservado en la versión</small>}
     {section.eyebrow&&<p className="hl-eyebrow">{section.eyebrow}</p>}
-    {title&&(hero?<h1>{title}</h1>:<h2>{title}</h2>)}{section.subheadline&&<p className="hl-lead">{section.subheadline}</p>}{section.body&&<p className="hl-body">{section.body}</p>}
-    {section.items?.length?<div className="hl-items">{section.items.map((item,index)=><article key={index}>{typeof item==='string'?<p>{item}</p>:item.q!==undefined?<><h3>{txt(item.q)}</h3><p>{txt(item.a)}</p></>:<><h3>{txt(item.name??item.title)}</h3><p>{txt(item.description??item.text)}</p></>}</article>)}</div>:null}
-    {section.cta&&<span className="hl-cta">{section.cta}</span>}
+    {title&&(hero?<h1>{title}</h1>:<h2>{title}</h2>)}{section.subheadline&&<p className="hl-lead">{section.subheadline}</p>}{section.body&&<div className="hl-body"><p>{section.body}</p></div>}
+    {section.items?.length?<div className={`hl-items hl-items--${section.type}`}>{section.items.map((raw,index)=>{
+      const item=typeof raw==='object'&&raw!==null?(raw as Record<string,unknown>):{};
+      return <article key={index} className="hl-item">{typeof raw==='string'?<p>{raw}</p>:item.q!==undefined?<>
+        <div className="hl-q-badge">{section.type==='objections'?'Objeción':'Pregunta'}</div>
+        <h3>{txt(item.q)}</h3><p>{txt(item.a)}</p>
+      </>:<>
+        {section.type==='mechanism'&&<div className="hl-step-num">PASO {String(index+1).padStart(2,'0')}</div>}
+        {section.type==='bonuses'&&<div className="hl-bonus-badge">BONO EXCLUSIVO</div>}
+        {section.type==='benefits'&&<div className="hl-check-badge">✓</div>}
+        <h3>{txt(item.name??item.title)}</h3><p>{txt(item.description??item.text)}</p>
+      </>}</article>;
+    })}</div>:null}
+    {section.cta&&<div className="hl-cta-wrap"><span className="hl-cta">{section.cta}</span></div>}
   </section>;
 }
 function ItemsField({value,onChange}:{value:unknown;onChange:(v:unknown)=>void}){const items=Array.isArray(value)?value:[];return <div className="hl-items-field">{items.map((item,index)=><div key={index}>{typeof item==='string'?<textarea aria-label={`Elemento ${index+1}`} value={item} onChange={e=>onChange(items.map((v,i)=>i===index?e.target.value:v))}/>:Object.entries(item??{}).filter(([key])=>['q','a','name','title','description','text'].includes(key)).map(([key,v])=><label key={key}>{key==='q'?'Pregunta':key==='a'?'Respuesta':key}<textarea value={txt(v)} onChange={e=>onChange(items.map((v,i)=>i===index?{...v,[key]:e.target.value}:v))}/></label>)}<button onClick={()=>onChange(items.filter((_,i)=>i!==index))}>Retirar elemento {index+1}</button></div>)}<button onClick={()=>onChange([...items,''])}>Añadir elemento</button><button onClick={()=>onChange([...items,{q:'',a:''}])}>Añadir pregunta</button></div>}
 const config:Config<{components:Record<string,Props>;root:Props}>={
-  root:{fields:{title:{type:'text',label:'Nombre de la página'},footerNote:{type:'textarea',label:'Nota al pie'},accent:{type:'text',label:'Acento · #RRGGBB'},background:{type:'text',label:'Fondo · #RRGGBB'},text:{type:'text',label:'Texto · #RRGGBB'},font:{type:'select',label:'Tipografía',options:[{label:'Sans serif',value:'sans'},{label:'Serif editorial',value:'serif'}]},width:{type:'select',label:'Ancho',options:[{label:'Lectura compacta',value:'compact'},{label:'Amplio',value:'wide'}]},spacing:{type:'select',label:'Espaciado',options:[{label:'Compacto',value:'compact'},{label:'Amplio',value:'relaxed'}]}},render:({children,...root})=>{const t=landingDesignTokens(root);return <div className="hl-page" style={{background:t.background,color:t.text,fontFamily:t.font==='serif'?'Georgia,serif':'system-ui,sans-serif','--hl-accent':t.accent,'--hl-width':t.width==='wide'?'1160px':'880px','--hl-space':t.spacing==='compact'?'32px':'64px'} as React.CSSProperties}>{children}{txt(root.footerNote)&&<footer>{txt(root.footerNote)}</footer>}</div>;}},
+  root:{fields:{
+    title:{type:'text',label:'Nombre de la página'},
+    theme:{type:'select',label:'Tema de diseño',options:[{label:'Moderno (Azul cobalto)',value:'modern'},{label:'Cálido (Ámbar / Serif)',value:'warm'},{label:'Oscuro / Tech (Cian)',value:'dark'},{label:'Editorial (Esmeralda / Serif)',value:'editorial'},{label:'Minimal (Negro / Blanco)',value:'minimal'}]},
+    footerNote:{type:'textarea',label:'Nota al pie'},
+    accent:{type:'text',label:'Acento · #RRGGBB'},
+    background:{type:'text',label:'Fondo · #RRGGBB'},
+    text:{type:'text',label:'Texto · #RRGGBB'},
+    font:{type:'select',label:'Tipografía',options:[{label:'Sans serif',value:'sans'},{label:'Serif editorial',value:'serif'}]},
+    width:{type:'select',label:'Ancho',options:[{label:'Lectura compacta',value:'compact'},{label:'Amplio',value:'wide'}]},
+    spacing:{type:'select',label:'Espaciado',options:[{label:'Compacto',value:'compact'},{label:'Amplio',value:'relaxed'}]}
+  },render:({children,...root})=>{const t=landingDesignTokens(root);return <div className="hl-page" style={{background:t.background,color:t.text,fontFamily:t.font==='serif'?'Georgia,serif':'system-ui,sans-serif','--hl-accent':t.accent,'--hl-width':t.width==='wide'?'1160px':'880px','--hl-space':t.spacing==='compact'?'36px':'64px'} as React.CSSProperties}>{children}{txt(root.footerNote)&&<footer>{txt(root.footerNote)}</footer>}</div>;}},
   categories:{strategy:{title:'Narrativa',components:['hero','problem','agitation','mechanism','benefits','product','deliverables']},conversion:{title:'Decisión y cierre',components:['bonuses','proof','objections','faq','offer','guarantee','cta','footer']}},
   components:Object.fromEntries(Object.entries({...LANDING_BLOCKS,custom:'Bloque conservado'}).map(([type,label])=>[type,{label,fields:{enabled:{type:'radio',label:'Visible en página',options:[{label:'Activo',value:true},{label:'Desactivado',value:false}]},eyebrow:{type:'text',label:'Antetítulo'},headline:{type:'text',label:'Título'},subheadline:{type:'textarea',label:'Subtítulo'},body:{type:'textarea',label:'Contenido'},cta:{type:'text',label:'Texto del botón'},variant:{type:'select',label:'Composición',options:[{label:'Editorial',value:'editorial'},{label:'Centrada',value:'centered'}]},items:{type:'custom',label:'Elementos / preguntas',render:({value,onChange}: {value:unknown;onChange:(v:unknown)=>void})=><ItemsField value={value} onChange={onChange}/>}},defaultProps:{headline:'',enabled:true,variant:'editorial'},render:({puck,...section}:Props&{puck:{isEditing:boolean}})=><LandingReactBlock section={{...section,type:type==='custom'?txt(section.originalType):type}} editing={puck.isEditing}/>}]))
 };

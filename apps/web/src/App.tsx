@@ -48,4 +48,4 @@ export function App() {
 }
 
 function messageOf(reason:unknown){return reason instanceof Error?reason.message:"Ocurrió un error inesperado.";}
-function isNavigationKey(value:string):value is NavigationKey{return ["overview","research","sources","problems","opportunities","product","avatar","mechanism","beliefs","offer","landing","funnel","emails","content","final_product","knowledge","history","settings"].includes(value);}
+function isNavigationKey(value:string):value is NavigationKey{return ["overview","research","sources","problems","opportunities","product","avatar","mechanism","beliefs","offer","landing","funnel","content","final_product","knowledge","history","settings"].includes(value);}

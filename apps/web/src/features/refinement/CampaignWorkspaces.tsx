@@ -1,4 +1,5 @@
 import { useMemo, useState, type DragEvent } from "react";
+import type { FunnelEdge } from "@our-platform/shared";
 import "./campaign.css";
 
 export interface FunnelNode {
@@ -7,19 +8,24 @@ export interface FunnelNode {
   stage: string;
   description: string;
   active: boolean;
-  metricLabel?: string;
-  metricValue?: string;
-  linkedArtifact?: string;
+  metricLabel?: string | undefined;
+  metricValue?: string | undefined;
+  linkedArtifact?: string | undefined;
+  externalPlatform?: "hotmart" | "skool" | "custom" | "none" | undefined;
+  externalCheckoutUrl?: string | undefined;
+  trackingEvent?: "ViewContent" | "Lead" | "InitiateCheckout" | "Purchase" | string | undefined;
 }
 
 export interface FunnelWorkspaceProps {
   nodes: readonly FunnelNode[];
+  edges?: readonly FunnelEdge[];
   onUpdate: (node: FunnelNode) => void;
   onReorder: (orderedIds: string[]) => void;
   onToggleActive?: (nodeId: string, active: boolean) => void;
+  onExport?: () => void;
 }
 
-export function FunnelWorkspace({ nodes, onUpdate, onReorder, onToggleActive }: FunnelWorkspaceProps) {
+export function FunnelWorkspace({ nodes, edges, onUpdate, onReorder, onToggleActive, onExport }: FunnelWorkspaceProps) {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const reorder = (nodeId: string, direction: -1 | 1) => {
     const ids = nodes.map((node) => node.id);
@@ -39,7 +45,43 @@ export function FunnelWorkspace({ nodes, onUpdate, onReorder, onToggleActive }: 
   };
 
   return <section className="refinement-workspace" aria-labelledby="funnel-heading">
-    <WorkspaceHeading eyebrow="FUNNEL FLOW WORKSPACE" title="Recorrido de campaña" description="Conecta, activa y ordena cada decisión del recorrido." id="funnel-heading" />
+    <WorkspaceHeading
+      eyebrow="FUNNEL FLOW WORKSPACE"
+      title="Recorrido comercial y conversión (Meta Ads → Landing → Hotmart / Skool)"
+      description="Conecta, activa y ordena cada decisión del recorrido comercial. Integra checkout externo (Hotmart/Skool) y eventos de Meta Pixel (ViewContent, InitiateCheckout, Purchase)."
+      id="funnel-heading"
+      action={onExport ? <button className="button secondary" onClick={onExport} type="button">Exportar Funnel (.md)</button> : undefined}
+    />
+
+    {edges && edges.length > 0 && (
+      <div className="refinement-funnel-graph" style={{ marginBottom: 20, padding: 16, background: "rgba(255,255,255,0.025)", borderRadius: 12, border: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <span style={{ fontSize: 10, fontWeight: 800, color: "var(--module-accent)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+            Mapa de Transiciones ({edges.length} conexiones)
+          </span>
+          <small style={{ color: "var(--text-muted)", fontSize: 10 }}>Checkout externo (Hotmart/Skool) · Pagos propios deshabilitados</small>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {edges.map((edge, idx) => {
+            const fromNode = nodes.find(n => n.id === edge.from);
+            const toNode = nodes.find(n => n.id === edge.to);
+            const isAccept = edge.event === "accept";
+            const isDecline = edge.event === "decline";
+            const badgeClass = isAccept ? "is-ready" : isDecline ? "is-failed" : "is-generating";
+            const badgeText = edge.label || (isAccept ? "Acepta" : isDecline ? "Declina" : "Continúa");
+            return (
+              <div key={idx} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "5px 10px", borderRadius: 8, background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", fontSize: 11 }}>
+                <span style={{ fontWeight: 700, color: "var(--text)" }}>{fromNode?.name || edge.from}</span>
+                <span className={`refinement-status ${badgeClass}`} style={{ fontSize: 8, padding: "2px 6px" }}>{badgeText}</span>
+                <span style={{ opacity: 0.6 }}>→</span>
+                <span style={{ fontWeight: 700, color: "var(--text-secondary)" }}>{toNode?.name || edge.to}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}
+
     {nodes.length === 0 ? <Empty message="Todavía no hay nodos en el funnel." /> : <div className="refinement-funnel">
       {nodes.map((node, index) => <article
         className={`refinement-funnel-node${node.active ? " is-active" : ""}`}
@@ -56,7 +98,41 @@ export function FunnelWorkspace({ nodes, onUpdate, onReorder, onToggleActive }: 
             <input aria-label={`Nombre del paso ${index + 1}`} className="refinement-title-input" value={node.name} onChange={(event) => onUpdate({ ...node, name: event.target.value })} />
             <label className="refinement-switch"><input checked={node.active} type="checkbox" onChange={(event) => onToggleActive ? onToggleActive(node.id, event.target.checked) : onUpdate({ ...node, active: event.target.checked })} /><span>{node.active ? "Activo" : "Inactivo"}</span></label>
           </div>
-          <input aria-label="Etapa" value={node.stage} onChange={(event) => onUpdate({ ...node, stage: event.target.value })} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "6px 0" }}>
+            <input style={{ flex: 1, minWidth: 120 }} aria-label="Etapa" value={node.stage} onChange={(event) => onUpdate({ ...node, stage: event.target.value })} />
+            <select
+              aria-label="Plataforma de checkout"
+              style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border)", color: "inherit" }}
+              value={node.externalPlatform ?? "none"}
+              onChange={(e) => onUpdate({ ...node, externalPlatform: e.target.value as any })}
+            >
+              <option value="none">Sin checkout externo</option>
+              <option value="hotmart">Hotmart</option>
+              <option value="skool">Skool</option>
+              <option value="custom">URL personalizada</option>
+            </select>
+            <select
+              aria-label="Evento Meta Pixel"
+              style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, background: "rgba(0,0,0,0.3)", border: "1px solid var(--border)", color: "inherit" }}
+              value={node.trackingEvent ?? ""}
+              onChange={(e) => onUpdate({ ...node, trackingEvent: e.target.value || undefined })}
+            >
+              <option value="">Sin evento Pixel</option>
+              <option value="ViewContent">Pixel: ViewContent</option>
+              <option value="Lead">Pixel: Lead</option>
+              <option value="InitiateCheckout">Pixel: InitiateCheckout</option>
+              <option value="Purchase">Pixel: Purchase</option>
+            </select>
+          </div>
+          {node.externalPlatform && node.externalPlatform !== "none" && (
+            <input
+              aria-label="URL checkout externo"
+              placeholder={`URL de pago en ${node.externalPlatform === "hotmart" ? "Hotmart" : node.externalPlatform === "skool" ? "Skool" : "pasarela externa"}`}
+              value={node.externalCheckoutUrl ?? ""}
+              onChange={(e) => onUpdate({ ...node, externalCheckoutUrl: e.target.value })}
+              style={{ marginBottom: 6 }}
+            />
+          )}
           <textarea aria-label="Descripción" rows={3} value={node.description} onChange={(event) => onUpdate({ ...node, description: event.target.value })} />
           <input aria-label="Artefacto vinculado" placeholder="Oferta o landing vinculada" value={node.linkedArtifact??""} onChange={(event)=>onUpdate({...node,linkedArtifact:event.target.value})}/>
           {(node.metricLabel || node.metricValue) && <div className="refinement-metric"><span>{node.metricLabel ?? "Métrica"}</span><strong>{node.metricValue ?? "—"}</strong></div>}
@@ -67,64 +143,6 @@ export function FunnelWorkspace({ nodes, onUpdate, onReorder, onToggleActive }: 
           </div>
         </div>
       </article>)}
-    </div>}
-  </section>;
-}
-
-export interface CampaignEmail {
-  id: string;
-  name: string;
-  subject: string;
-  previewText: string;
-  body: string;
-  cta: string;
-  delay: string;
-  status: "DRAFT" | "READY" | "APPROVED";
-}
-
-export interface EmailsWorkspaceProps {
-  emails: readonly CampaignEmail[];
-  onUpdate: (email: CampaignEmail) => void;
-  onReorder: (orderedIds: string[]) => void;
-  onExport: (emailIds: string[]) => void;
-}
-
-export function EmailsWorkspace({ emails, onUpdate, onReorder, onExport }: EmailsWorkspaceProps) {
-  const [expandedId, setExpandedId] = useState<string | null>(emails[0]?.id ?? null);
-  const move = (emailId: string, direction: -1 | 1) => {
-    const ids = emails.map((email) => email.id);
-    const from = ids.indexOf(emailId);
-    const to = from + direction;
-    if (from < 0 || to < 0 || to >= ids.length) return;
-    [ids[from], ids[to]] = [ids[to]!, ids[from]!];
-    onReorder(ids);
-  };
-  return <section className="refinement-workspace" aria-labelledby="emails-heading">
-    <WorkspaceHeading eyebrow="EMAIL SEQUENCE WORKSPACE" title="Emails de campaña" description="Revisa ritmo, estado y mensaje sin salir de la secuencia." id="emails-heading" action={<button className="button secondary" disabled={emails.length === 0} onClick={() => onExport(emails.map((email) => email.id))} type="button">Exportar secuencia</button>} />
-    {emails.length === 0 ? <Empty message="Todavía no hay emails en la secuencia." /> : <div className="refinement-email-list">
-      {emails.map((email, index) => {
-        const expanded = expandedId === email.id;
-        return <article className="refinement-email-card" key={email.id}>
-          <header>
-            <button className="refinement-expand" aria-expanded={expanded} onClick={() => setExpandedId(expanded ? null : email.id)} type="button"><span>{String(index + 1).padStart(2, "0")}</span><strong>{email.name || "Email sin nombre"}</strong><small>{email.subject || "Sin asunto"}</small></button>
-            <span className={`refinement-status is-${email.status.toLowerCase()}`}>{statusLabel(email.status)}</span>
-          </header>
-          {expanded && <div className="refinement-editor-grid">
-            <Field label="Nombre"><input value={email.name} onChange={(event) => onUpdate({ ...email, name: event.target.value })} /></Field>
-            <Field label="Estado"><select value={email.status} onChange={(event) => onUpdate({ ...email, status: event.target.value as CampaignEmail["status"] })}><option value="DRAFT">Borrador</option><option value="READY">Listo</option><option value="APPROVED">Aprobado</option></select></Field>
-            <Field label="Asunto" wide><input value={email.subject} onChange={(event) => onUpdate({ ...email, subject: event.target.value })} /></Field>
-            <Field label="Preencabezado" wide><input value={email.previewText} onChange={(event) => onUpdate({ ...email, previewText: event.target.value })} /></Field>
-            <Field label="CTA"><input value={email.cta} onChange={(event)=>onUpdate({...email,cta:event.target.value})}/></Field>
-            <Field label="Delay"><input placeholder="Inmediato / +1 día" value={email.delay} onChange={(event)=>onUpdate({...email,delay:event.target.value})}/></Field>
-            <Field label="Cuerpo" wide><textarea rows={8} value={email.body} onChange={(event) => onUpdate({ ...email, body: event.target.value })} /></Field>
-          </div>}
-          <footer className="refinement-card-actions">
-            <button disabled={index === 0} onClick={() => move(email.id, -1)} type="button">Subir</button>
-            <button disabled={index === emails.length - 1} onClick={() => move(email.id, 1)} type="button">Bajar</button>
-            <button onClick={() => onExport([email.id])} type="button">Exportar</button>
-          </footer>
-        </article>;
-      })}
     </div>}
   </section>;
 }

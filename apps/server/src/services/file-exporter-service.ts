@@ -1,4 +1,4 @@
-import {renderLandingHtml} from "@our-platform/shared";
+import {renderLandingHtml, renderLandingReactCode, renderFunnelMarkdown} from "@our-platform/shared";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -8,9 +8,19 @@ import type { AppDatabase } from "../database/database.js";
 const escapeHtml=(value:unknown)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 export class FileExporterService{
  constructor(private readonly database:AppDatabase,private readonly dataRoot:string){}
- exportLanding(projectId:string,versionId:string,output:any):string{
+ exportLanding(projectId:string,versionId:string,output:any):string[]{
   const html=renderLandingHtml(output);
-  return this.write(projectId,versionId,"landing","landing.html",html);
+  const react=renderLandingReactCode(output);
+  return [
+    this.write(projectId,versionId,"landing","landing.html",html),
+    this.write(projectId,versionId,"landing_react","landing.tsx",react),
+  ];
+ }
+ exportFunnel(projectId:string,versionId:string,output:any):string[]{
+  const md=renderFunnelMarkdown(output);
+  return [
+    this.write(projectId,versionId,"funnel","funnel.md",md),
+  ];
  }
  exportFinalProduct(projectId:string,versionId:string,output:any):string[]{
   const guide=`# ${output.guide?.title??"Producto final"}\n\n${(output.guide?.chapters??[]).map((c:string,i:number)=>`## ${i+1}. ${c}\n\nContenido de trabajo para completar y editar.`).join("\n\n")}`;

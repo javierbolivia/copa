@@ -1,3 +1,4 @@
+import {validateFunnelOutput} from "./funnel-output-validator.js";
 import {validateLandingOutput} from "./landing-output-validator.js";
 import {validateOfferOutput} from "./offer-output-validator.js";
 import {validateBeliefsOutput} from "./beliefs-output-validator.js";
@@ -96,13 +97,13 @@ export class ModuleService {
       },
       gemini:{configured:this.options.gemini.configured,economyModel:GEMINI_ANALYSIS_MODEL,powerfulModel:GEMINI_ANALYSIS_MODEL},
       deepseek:{configured:this.options.deepSeek?.configured??false,model:this.options.deepSeek?.effectiveModel??DEEPSEEK_DEFAULT_MODEL},
-      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider==="deepseek"?"deepseek":projectSettings?.preferredLlmProvider === "openai" ? "openai" : "mock",
+      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider==="deepseek"?"deepseek":projectSettings?.preferredLlmProvider === "openai" ? "openai" : this.options.gemini.configured ? "gemini" : "mock",
     };
   }
 
   get(projectId: string, key: ModuleKey): ModuleResult | undefined {
     const version = this.activeVersion(projectId, key);
-    if (!version || (key === "product" && !this.validatePersistedProduct(version).audit.ok) || (version&&key==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version&&key==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version&&key==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version&&key==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version&&key==="landing"&&!this.validatePersistedLanding(version).audit.ok)) return undefined;
+    if (!version || (key === "product" && !this.validatePersistedProduct(version).audit.ok) || (version&&key==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version&&key==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version&&key==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version&&key==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version&&key==="landing"&&!this.validatePersistedLanding(version).audit.ok)||(version&&key==="funnel"&&!this.validatePersistedFunnel(version).audit.ok)) return undefined;
     return this.toResult(version);
   }
 
@@ -139,7 +140,7 @@ export class ModuleService {
       throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
     }
     const activePointer=this.activeVersion(projectId,key);
-    if(sourceVersionId&&key!=="product"&&key!=="avatar"&&key!=="mechanism"&&key!=="beliefs"&&key!=="offer"&&key!=="landing")throw new Error("La edición desde una versión concreta solo está disponible para Producto, Avatar, Mecanismo, Creencias, Oferta y Landing.");
+    if(sourceVersionId&&key!=="product"&&key!=="avatar"&&key!=="mechanism"&&key!=="beliefs"&&key!=="offer"&&key!=="landing"&&key!=="funnel")throw new Error("La edición desde una versión concreta solo está disponible para Producto, Avatar, Mecanismo, Creencias, Oferta, Landing y Funnel.");
     const active=sourceVersionId?this.artifacts.getVersion(sourceVersionId):activePointer;
     if(!active||active.projectId!==projectId||active.artifactType!==key)throw new Error("La versión de origen no existe en este módulo.");
     if(sourceVersionId){
@@ -159,6 +160,7 @@ export class ModuleService {
       if(!validation.audit.ok)throw new Error(`Investigación incompleta o sin evidencia válida: ${validation.audit.errors.join("; ")}`);
       normalizedOutput=validation.output;
     }
+    if(key==="funnel"){const validation=validateFunnelOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
     if(key==="landing"){const validation=validateLandingOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
     if(key==="offer"){const validation=validateOfferOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
     if(key==="beliefs"){const validation=validateBeliefsOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
@@ -205,6 +207,12 @@ export class ModuleService {
       if(typeof expected!=="string"||this.activeVersion(projectId,key)?.id!==expected)throw new Error("Hay una decisión de Oportunidades más reciente; revisa la selección activa antes de aprobar el borrador.");
       assertOpportunityReferences(version.outputData,this.parentOutput(projectId,version.id,"problems"));
       assertOpportunityScoring(version.outputData);
+    }:key==="funnel"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Funnel más reciente; revisa la versión activa antes de aprobar.");
+      const validation=this.validatePersistedFunnel(version);
+      if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
     }:key==="landing"?()=>{
       const snapshot=asRecord(version.inputSnapshot);
       const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
@@ -243,6 +251,7 @@ export class ModuleService {
       if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
     }:undefined);if(!approved)return undefined;
     if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
+    if(key==="funnel")this.exporter.exportFunnel(projectId,approved.id,approved.outputData);
     if(key==="final_product")this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData);
     this.knowledge.saveMemoryDecision({originProjectId:projectId,artifactVersionId:approved.id,disposition:"APPROVED",visibility:"PROJECT",reusable:false,preferred:false});
     return this.toResult(approved);
@@ -251,6 +260,7 @@ export class ModuleService {
   canPromoteToMemory(projectId:string,versionId:string):boolean {
     const version=this.artifacts.getVersion(versionId);
     if(!version||version.projectId!==projectId)return false;
+    if(version.artifactType==="funnel")return version.status==="approved"&&this.validatePersistedFunnel(version).audit.ok;
     if(version.artifactType==="landing")return version.status==="approved"&&this.validatePersistedLanding(version).audit.ok;
     if(version.artifactType==="offer")return version.status==="approved"&&this.validatePersistedOffer(version).audit.ok;
     if(version.artifactType==="beliefs")return version.status==="approved"&&this.validatePersistedBeliefs(version).audit.ok;
@@ -537,6 +547,7 @@ export class ModuleService {
       output = validation.output;
       artifactStatus = validation.audit.ok ? "approved" : "draft";
     }
+    if(key==="funnel"){const validation=validateFunnelOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
     if(key==="landing"){const validation=validateLandingOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
     if(key==="offer"){const validation=validateOfferOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
     if(key==="beliefs"){const validation=validateBeliefsOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
@@ -552,7 +563,7 @@ export class ModuleService {
     }
     const inputSnapshot = {
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
-      ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing")?{activeVersionIdAtStart}:{}),
+      ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel")?{activeVersionIdAtStart}:{}),
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerInput ? { context: providerInput } : {}),
@@ -623,6 +634,7 @@ export class ModuleService {
 
     this.workflow.update(projectId, key, artifactStatus === "draft" ? "IN_PROGRESS" : "COMPLETED");
     if (key === "landing") this.exporter.exportLanding(projectId, version.id, output);
+    if (key === "funnel") this.exporter.exportFunnel(projectId, version.id, output);
     if (key === "final_product") this.exporter.exportFinalProduct(projectId, version.id, output);
     db.exec("COMMIT");
     return this.toResult(version);
@@ -703,7 +715,7 @@ export class ModuleService {
   }
 
   private isInvalidApprovedStrategyOutput(version:ArtifactVersion):boolean {
-    return version.status==="approved"&&((version.artifactType==="product"&&!this.validatePersistedProduct(version).audit.ok)||(version.artifactType==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version.artifactType==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version.artifactType==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version.artifactType==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version.artifactType==="landing"&&!this.validatePersistedLanding(version).audit.ok));
+    return version.status==="approved"&&((version.artifactType==="product"&&!this.validatePersistedProduct(version).audit.ok)||(version.artifactType==="avatar"&&!this.validatePersistedAvatar(version).audit.ok)||(version.artifactType==="mechanism"&&!this.validatePersistedMechanism(version).audit.ok)||(version.artifactType==="beliefs"&&!this.validatePersistedBeliefs(version).audit.ok)||(version.artifactType==="offer"&&!this.validatePersistedOffer(version).audit.ok)||(version.artifactType==="landing"&&!this.validatePersistedLanding(version).audit.ok)||(version.artifactType==="funnel"&&!this.validatePersistedFunnel(version).audit.ok));
   }
 
   private avatarEvidence(version:ArtifactVersion):Array<{id:string;quoteText:string}>{
@@ -711,6 +723,12 @@ export class ModuleService {
     const allowed=new Set(Array.isArray(ids)?ids.filter((id):id is string=>typeof id==="string"):[]);
     const rows=this.db.connection.prepare("SELECT e.id,e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND c.analysis_eligible=1 AND s.include_in_analysis=1 AND s.status IN ('ready','completed')").all(version.projectId) as unknown as Array<{id:string;quoteText:string}>;
     return rows.filter(item=>allowed.has(item.id));
+  }
+
+  private validatePersistedFunnel(version:ArtifactVersion){
+    const validation=validateFunnelOutput(version.outputData,this.avatarEvidence(version));
+    if(asRecord(version.inputSnapshot).source!=="user"&&asRecord(asRecord(version.outputData).funnelValidationAudit).ok===false)return {...validation,audit:{...validation.audit,ok:false,errors:[...validation.audit.errors,"La generación original requiere revisión explícita o regeneración."]}};
+    return validation;
   }
 
   private validatePersistedLanding(version:ArtifactVersion){
@@ -785,7 +803,7 @@ export class ModuleService {
       versionNumber: version.versionNumber,
       freshness: invalidProduct?"stale":version.freshness,
       status: invalidProduct?"draft":version.status,
-      outputData: version.artifactType==="landing"?{...asRecord(version.outputData),landingValidationAudit:this.validatePersistedLanding(version).audit}:version.artifactType==="offer"?{...asRecord(version.outputData),offerValidationAudit:this.validatePersistedOffer(version).audit}:version.artifactType==="beliefs"?{...asRecord(version.outputData),beliefsValidationAudit:this.validatePersistedBeliefs(version).audit}:version.artifactType==="mechanism"?{...asRecord(version.outputData),mechanismValidationAudit:this.validatePersistedMechanism(version).audit}:version.artifactType==="avatar"?{...asRecord(version.outputData),avatarValidationAudit:this.validatePersistedAvatar(version).audit}:version.artifactType==="product"&&(asRecord(version.inputSnapshot).source==="user"||!asRecord(version.outputData).productValidationAudit)?{...asRecord(version.outputData),productValidationAudit:this.validatePersistedProduct(version).audit}:version.outputData,
+      outputData: version.artifactType==="funnel"?{...asRecord(version.outputData),funnelValidationAudit:this.validatePersistedFunnel(version).audit}:version.artifactType==="landing"?{...asRecord(version.outputData),landingValidationAudit:this.validatePersistedLanding(version).audit}:version.artifactType==="offer"?{...asRecord(version.outputData),offerValidationAudit:this.validatePersistedOffer(version).audit}:version.artifactType==="beliefs"?{...asRecord(version.outputData),beliefsValidationAudit:this.validatePersistedBeliefs(version).audit}:version.artifactType==="mechanism"?{...asRecord(version.outputData),mechanismValidationAudit:this.validatePersistedMechanism(version).audit}:version.artifactType==="avatar"?{...asRecord(version.outputData),avatarValidationAudit:this.validatePersistedAvatar(version).audit}:version.artifactType==="product"&&(asRecord(version.inputSnapshot).source==="user"||!asRecord(version.outputData).productValidationAudit)?{...asRecord(version.outputData),productValidationAudit:this.validatePersistedProduct(version).audit}:version.outputData,
       createdAt: version.createdAt,
     };
   }
@@ -980,24 +998,63 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
  const parent=(key:ModuleKey)=>parents[key] as Record<string,any>|undefined;
  const selectedProduct=parent("product")?.proposals?.find((item:any)=>item.id===parent("product")?.selectedId)??parent("product")?.proposals?.[0];
  const opportunity=parent("opportunities")?.items?.find((item:any)=>item.id===parent("opportunities")?.selectedId)??parent("opportunities")?.items?.[0];
- const problem=parent("problems")?.items?.[0],avatar=parent("avatar"),mechanism=parent("mechanism"),beliefs=parent("beliefs"),landing=parent("landing"),offer=parent("offer");
- const outputs:Record<ModuleKey,Record<string,unknown>>={
+  const problem=parent("problems")?.items?.[0],avatar=parent("avatar"),mechanism=parent("mechanism"),beliefs=parent("beliefs"),landing=parent("landing"),offer=parent("offer");
+  const painBody=(typeof avatar?.pains?.[0]==="string"?avatar.pains[0]:(typeof avatar?.pains?.[0]?.text==="string"?avatar.pains[0].text:undefined))??`Intentar resolver ${niche} sin una secuencia probada genera frustración, pérdidas de tiempo y resultados inconsistentes.`;
+  const outputs:Partial<Record<ModuleKey,Record<string,unknown>>>={
   research:{schemaVersion:1,summary:`Mapa inicial para ${niche}`,subniches:[`Usuarios de ${niche}`],hypotheses:[{text:`Existe una necesidad resoluble en ${niche}.`,provenance:"AI_INFERENCE",evidenceIds:[]}],questions:["¿Qué resultado buscan y qué les impide lograrlo?"],searchSuggestions:[`${niche} problemas`,`${niche} soluciones`],insights:[]},
   sources:{schemaVersion:1,summary:`Corpus local para ${niche}`,sourceCount:0,commentCount:0,isDemo:false},
   problems:{schemaVersion:1,items:[]},
   opportunities:{schemaVersion:1,items:[{id:"opportunity-1",name:`Solución práctica para ${niche}`,problemId:problem?.id??"",scores:{frequency:60,urgency:55,emotionalIntensity:50,willingnessToPay:40,solutionFeasibility:70,competition:50,differentiation:55,commercialPotential:55,evidenceConfidence:Array.isArray(problem?.evidenceIds)&&problem.evidenceIds.length?65:20},evidenceIds:Array.isArray(problem?.evidenceIds)?problem.evidenceIds:[]}],selectedId:"opportunity-1"},
-  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Plan práctico: ${niche}`,concept:`Sistema guiado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Guía digital",deliverables:["Guía paso a paso"],modules:["Diagnóstico","Plan","Implementación","Revisión"],checklists:[],templates:[],resources:[],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
+  product:{schemaVersion:1,proposals:[{id:"product-1",name:`Ebook práctico: ${niche}`,concept:`Ebook estructurado para ${opportunity?.name??niche}`,problem:opportunity?.rationale??problem?.summary??quote,outcome:"Un proceso claro y repetible",promise:"Avanza con una secuencia práctica y verificable",format:"Ebook digital",deliverables:["Ebook digital completo (PDF/EPUB)","Workbook de ejercicios prácticos","Checklist de implementación"],modules:["Capítulo 1: Diagnóstico","Capítulo 2: Plan","Capítulo 3: Implementación","Capítulo 4: Casos Prácticos"],checklists:[],templates:[],resources:[],bonuses:[],evidenceIds:opportunity?.evidenceIds??ids}],selectedId:"product-1"},
   avatar:{schemaVersion:1,name:`Usuario objetivo de ${selectedProduct?.name??niche}`,productContext:selectedProduct?.concept,currentSituation:[{text:problem?.summary??quote,provenance:evidence.length?"EVIDENCE_BACKED":"AI_INFERENCE",evidenceIds:problem?.evidenceIds??(evidence[0]?[evidence[0].id]:[])}],desiredOutcome:[{text:selectedProduct?.outcome??`Lograr un resultado claro en ${niche}`,provenance:"AI_INFERENCE",evidenceIds:[]}],pains:problem?[problem.summary]:[],frustrations:[],desires:[],objections:["Necesita validar que el proceso sea realizable"],motivations:[selectedProduct?.promise].filter(Boolean),language:evidence.slice(0,3).map(item=>({text:item.quoteText,provenance:"EVIDENCE_BACKED",evidenceIds:[item.id]})),purchaseConcerns:[]},
   mechanism:{schemaVersion:1,perceivedProblem:problem?.summary??quote,apparentCause:"Falta de un proceso claro",rootCauseHypothesis:"Las decisiones no están organizadas en una secuencia repetible",mechanism:"Método de diagnóstico, plan, acción y revisión",solutionMechanism:selectedProduct?.concept??"Pasos pequeños con criterios verificables",differentiation:"Trazabilidad entre evidencia y decisión",simpleExplanation:"Convertir un problema amplio en pasos comprobables",detailedExplanation:`El método ordena el trabajo de ${niche} y conserva el origen de cada decisión.`,provenance:"AI_INFERENCE",evidenceIds:problem?.evidenceIds??ids},
   beliefs:{schemaVersion:1,product:selectedProduct?.name,avatar:avatar?.name,mechanism:mechanism?.mechanism,currentBeliefs:(avatar?.currentSituation??[]).map((item:any)=>item.text??item),limitingBeliefs:avatar?.objections??[],requiredBeliefs:[`El mecanismo ${mechanism?.mechanism??"propuesto"} puede aplicarse paso a paso`],objections:avatar?.purchaseConcerns??avatar?.objections??[],arguments:[mechanism?.simpleExplanation??"El sistema empieza con una acción acotada"],centralThesis:`${selectedProduct?.promise??`Un proceso claro mejora ${niche}`} mediante ${mechanism?.solutionMechanism??"pasos verificables"}.`},
-  offer:{schemaVersion:1,name:selectedProduct?.name??`Plan práctico: ${niche}`,audience:avatar?.name,mechanism:mechanism?.mechanism,centralThesis:beliefs?.centralThesis,promise:selectedProduct?.promise??`Un sistema guiado para ${niche}`,benefits:[mechanism?.simpleExplanation??"Claridad","Secuencia accionable","Revisión verificable"],deliverables:selectedProduct?.deliverables??["Guía","Workbook","Checklist"],bonuses:selectedProduct?.bonuses??[],guaranteeSuggestion:"Definir por el propietario antes de publicar",pricingSuggestion:{amount:null,currency:"USD",rationale:"Requiere validación humana y de mercado"},orderBump:null,upsell:null,downsell:null,cta:"Comenzar",provenance:"AI_INFERENCE",disclaimer:"Sin testimonios, ventas, estadísticas ni garantías inventadas",evidenceIds:selectedProduct?.evidenceIds??ids},
-  landing:{schemaVersion:1,title:offer?.name??`Plan práctico: ${niche}`,sections:[{type:"hero",headline:offer?.promise??`Una ruta clara para ${niche}`,subheadline:"Del problema a un plan accionable",cta:offer?.cta??"Comenzar"},{type:"problem",headline:"El punto de partida",body:problem?.summary??quote,evidenceIds:problem?.evidenceIds??ids},{type:"mechanism",headline:"Un proceso verificable",body:"Diagnostica, planifica, actúa y revisa."},{type:"benefits",items:offer?.benefits??["Claridad","Acción","Seguimiento"]},{type:"faq",items:[{q:"¿Qué incluye?",a:(offer?.deliverables??["Guía","Workbook","Checklist"]).join(", ")+"."}]},{type:"cta",headline:"Empieza con el primer paso",cta:offer?.cta??"Ver el plan"}],evidenceIds:offer?.evidenceIds??ids},
-  funnel:{schemaVersion:1,landingVersion:landing?.title,offerName:offer?.name,nodes:[{id:"landing",type:"landing",label:landing?.title??"Landing"},{id:"checkout",type:"checkout_placeholder",label:`Checkout simulado · ${offer?.name??"Oferta"}`},{id:"bump",type:"order_bump",label:offer?.orderBump??"Order bump por definir"},{id:"upsell",type:"upsell",label:offer?.upsell??"Upsell por definir"},{id:"downsell",type:"downsell",label:offer?.downsell??"Downsell por definir"},{id:"thanks",type:"thank_you",label:"Thank You"}],edges:[{from:"landing",to:"checkout",event:"continue"},{from:"checkout",to:"bump",event:"continue"},{from:"bump",to:"upsell",event:"accept"},{from:"upsell",to:"thanks",event:"accept"},{from:"upsell",to:"downsell",event:"decline"},{from:"downsell",to:"thanks",event:"complete"}],paymentsEnabled:false},
-  emails:{schemaVersion:1,sequences:[{type:"welcome",emails:[{subject:`Tu primer paso con ${offer?.name??niche}`,preheader:"Empieza con claridad",body:offer?.promise??"Completa el diagnóstico y elige una acción acotada.",cta:offer?.cta??"Abrir la guía"}]},{type:"nurture",emails:[{subject:"Convierte información en una decisión",body:"Usa la evidencia para priorizar el siguiente paso.",cta:"Abrir el workbook"}]}],evidenceIds:offer?.evidenceIds??ids},
+  offer:{schemaVersion:1,name:selectedProduct?.name??`Ebook: ${niche}`,audience:avatar?.name,mechanism:mechanism?.mechanism,centralThesis:beliefs?.centralThesis,promise:selectedProduct?.promise??`El libro definitivo para ${niche}`,benefits:[mechanism?.simpleExplanation??"Claridad","Secuencia accionable","Revisión verificable"],deliverables:selectedProduct?.deliverables??["Ebook digital","Workbook de ejercicios","Checklist"],bonuses:selectedProduct?.bonuses??[],guaranteeSuggestion:"Garantía de satisfacción de 14 días",pricingSuggestion:{amount:27,currency:"USD",rationale:"Precio sugerido para libro digital con materiales complementarios"},orderBump:"Workbook de ejercicios",upsell:"Guía avanzada de implementación rápida",downsell:"Checklist esencial",cta:"Comprar el Ebook ahora",provenance:"AI_INFERENCE",disclaimer:"Sin testimonios, ventas, estadísticas ni garantías inventadas",evidenceIds:selectedProduct?.evidenceIds??ids},
+   landing:{
+     schemaVersion:1,
+     title:offer?.name??selectedProduct?.name??`Ebook: ${niche}`,
+     designTokens:{accent:"#2563eb",background:"#f8fafc",text:"#0f172a",font:"sans",width:"compact",spacing:"relaxed",theme:"modern"},
+     sections:[
+       {id:"hero-1",type:"hero",enabled:true,variant:"centered",eyebrow:offer?.audience??"PROPUESTA EXCLUSIVA",headline:offer?.promise??`Una ruta clara para ${niche}`,subheadline:beliefs?.centralThesis??"Del problema actual a un plan accionable y verificable.",cta:offer?.cta??"Comprar el Ebook ahora",evidenceIds:offer?.evidenceIds??ids},
+       {id:"problem-1",type:"problem",enabled:true,variant:"editorial",eyebrow:"EL PROBLEMA REAL",headline:problem?.name??"La dificultad principal que frena tus resultados",body:problem?.summary??quote,evidenceIds:problem?.evidenceIds??ids},
+       {id:"agitation-1",type:"agitation",enabled:true,variant:"editorial",eyebrow:"EL COSTO DE LA INACCIÓN",headline:"¿Por qué postergar la solución empeora la situación?",body:painBody,items:(avatar?.frustrations?.length?avatar.frustrations.slice(0,3):["Esfuerzo disperso sin saber qué palanca mover.","Incertidumbre constante sobre el siguiente paso.","Desgaste de tiempo y recursos sin avance medible."]).map((f:any)=>typeof f==="string"?f:(f?.text??String(f)))},
+       {id:"mechanism-1",type:"mechanism",enabled:true,variant:"editorial",eyebrow:"EL MECANISMO ÚNICO",headline:mechanism?.mechanism??"Un proceso verificable paso a paso",subheadline:mechanism?.simpleExplanation??"Convierte un problema complejo en pasos concretos y comprobables.",body:mechanism?.detailedExplanation??mechanism?.solutionMechanism??"Diagnóstico preciso, plan de acción, implementación guiada y revisión continua.",items:[{name:"Paso 1: Diagnóstico",description:"Identificación precisa de la situación actual y puntos de fuga."},{name:"Paso 2: Plan de acción",description:"Secuencia priorizada de pasos concretos sin sobrecarga."},{name:"Paso 3: Implementación",description:"Ejecución guiada con plantillas y recursos prácticos."},{name:"Paso 4: Verificación",description:"Medición objetiva y ajustes continuos para sostener resultados."}],evidenceIds:mechanism?.evidenceIds??ids},
+       {id:"benefits-1",type:"benefits",enabled:true,variant:"editorial",eyebrow:"TRANSFORMACIÓN Y BENEFICIOS",headline:"Lo que conseguirás al aplicar este libro",items:(offer?.benefits?.length?offer.benefits:["Claridad total sobre qué hacer cada día.","Secuencia estructurada sin saltarse pasos.","Resultados medibles y repetibles en el tiempo."]).map((b:any)=>typeof b==="string"?{name:b,description:"Beneficio directo y observable en tu rutina diaria."}:b)},
+       {id:"product-1",type:"product",enabled:true,variant:"editorial",eyebrow:"PRESENTACIÓN",headline:selectedProduct?.name??offer?.name??`Ebook: ${niche}`,subheadline:selectedProduct?.concept??selectedProduct?.outcome??"Un libro estructurado para avanzar con seguridad.",body:selectedProduct?.promise??`Diseñado específicamente para ${avatar?.name??"lectores que buscan dominar "+niche}.`,items:(selectedProduct?.modules?.length?selectedProduct.modules:["Capítulo 1: Fundamentos y Diagnóstico","Capítulo 2: Ejecución Paso a Paso","Capítulo 3: Casos y Resultados"]).map((m:any)=>typeof m==="string"?{name:m,description:"Capítulo del libro con ejercicios guiados y plantillas."}:m)},
+       {id:"deliverables-1",type:"deliverables",enabled:true,variant:"editorial",eyebrow:"QUÉ RECIBES",headline:"Todo lo que incluye el Ebook y sus complementos",items:(selectedProduct?.deliverables??offer?.deliverables??["Ebook digital completo (PDF/EPUB)","Hojas de trabajo prácticas (Workbooks)","Checklists de verificación y control"]).map((d:any)=>typeof d==="string"?{name:d,description:"Acceso y descarga inmediata tras la compra."}:d)},
+       {id:"bonuses-1",type:"bonuses",enabled:true,variant:"editorial",eyebrow:"BONOS EXCLUSIVOS",headline:"Recursos complementarios para acelerar tus avances",items:(selectedProduct?.bonuses?.length?selectedProduct.bonuses:[{name:"Plantilla rápida de implementación",description:"Comienza en menos de 15 minutos sin fricción."},{name:"Guía de resolución de dudas frecuentes",description:"Soluciones a los obstáculos más habituales."}]).map((b:any)=>typeof b==="string"?{name:b,description:"Bono incluido para optimizar tu tiempo."}:b)},
+       {id:"proof-1",type:"proof",enabled:true,variant:"editorial",eyebrow:"RESPALDO Y FUNDAMENTOS",headline:"Basado en evidencia observada y validación real",body:mechanism?.differentiation??"Cada decisión, capítulo y entregable proviene directamente del análisis de problemas comprobados en el mercado.",items:(avatar?.language?.slice(0,3)??[]).map((l:any)=>({name:"Observación de campo",description:`"${l.text??l}"`})),evidenceIds:ids},
+       {id:"objections-1",type:"objections",enabled:true,variant:"editorial",eyebrow:"DUDAS COMUNES",headline:"Respuestas a las dudas más frecuentes antes de adquirir el libro",items:(beliefs?.objections?.length?beliefs.objections.slice(0,3):["¿Funcionará en mi situación particular?","¿Cuánto tiempo requiere aplicar las pautas del libro?"]).map((obj:any,i:number)=>({q:typeof obj==="string"?obj:(obj?.text??String(obj)),a:typeof beliefs?.arguments?.[i]==="string"?beliefs.arguments[i]:(beliefs?.arguments?.[i]?.text??"El libro se adapta a diferentes niveles partiendo de una acción mínima viable.")}))},
+       {id:"faq-1",type:"faq",enabled:true,variant:"editorial",eyebrow:"PREGUNTAS FRECUENTES",headline:"Todo lo que necesitas saber antes de comprar",items:[{q:"¿Cómo accedo al libro?",a:"Recibirás enlace de descarga inmediata en PDF y EPUB tras completar tu compra."},{q:"¿Qué formato tienen los materiales?",a:"Ebook digital navegable, plantillas de trabajo y listas de verificación imprimibles."},{q:"¿Requiere conocimientos previos?",a:"No, el libro comienza desde los fundamentos y avanza progresivamente."}]},
+       {id:"offer-1",type:"offer",enabled:true,variant:"centered",eyebrow:"OFERTA",headline:offer?.name??"Acceso completo al Ebook",subheadline:offer?.promise??"Adquiere el libro completo con todos los entregables y bonos digitales.",body:offer?.pricingSuggestion?.amount?`Inversión propuesta: ${offer.pricingSuggestion.amount} ${offer.pricingSuggestion.currency??"USD"}.`:"Acceso con condiciones especiales por lanzamiento.",cta:offer?.cta??"Comprar ahora"},
+       {id:"guarantee-1",type:"guarantee",enabled:true,variant:"centered",eyebrow:"TRANQUILIDAD TOTAL",headline:"Garantía de satisfacción",body:offer?.guaranteeSuggestion??"Si tras revisar los primeros capítulos consideras que el libro no es para ti, dispones de una garantía de satisfacción total según las condiciones indicadas."},
+       {id:"cta-1",type:"cta",enabled:true,variant:"centered",eyebrow:"DA EL SIGUIENTE PASO",headline:"Comienza hoy mismo con una lectura clara y aplicable",subheadline:"No dejes que la falta de claridad te siga costando tiempo y oportunidades.",cta:offer?.cta??"Quiero el Ebook completo"},
+       {id:"footer-1",type:"footer",enabled:true,variant:"centered",body:`© ${new Date().getFullYear()} ${niche}. Todos los derechos reservados. Este sitio no forma parte de ninguna plataforma publicitaria externa.`}
+     ],
+     evidenceIds:offer?.evidenceIds??ids
+   },
+   funnel:{schemaVersion:1,landingVersion:landing?.title??"Landing principal",offerName:offer?.name??"Oferta principal",
+     tracking:{metaPixelId:"982341058201",events:[{stepId:"landing",event:"ViewContent"},{stepId:"checkout",event:"InitiateCheckout"},{stepId:"thanks",event:"Purchase"}]},
+     externalCheckout:{platform:"hotmart",url:"https://pay.hotmart.com/example"},
+     nodes:[
+     {id:"landing",type:"landing",label:landing?.title??"Página de ventas",description:"Página principal de ventas del Ebook con los 15 bloques canónicos.",active:true,linkedArtifact:"landing",trackingEvent:"ViewContent"},
+     {id:"checkout",type:"checkout_placeholder",label:`Checkout externo (Hotmart) · ${offer?.name??"Oferta"}`,description:`Pasarela de pago externa en Hotmart. Precio base: ${offer?.pricingSuggestion?.amount??27} ${offer?.pricingSuggestion?.currency??"USD"}.`,active:true,linkedArtifact:"offer",price:offer?.pricingSuggestion?.amount?`${offer.pricingSuggestion.amount} ${offer.pricingSuggestion.currency??"USD"}`:null,externalPlatform:"hotmart",externalCheckoutUrl:"https://pay.hotmart.com/example",trackingEvent:"InitiateCheckout"},
+     {id:"bump",type:"order_bump",label:offer?.orderBump??"Workbook complementario",description:"Workbook de ejercicios prácticos añadido en el checkout con un clic.",active:Boolean(offer?.orderBump),linkedArtifact:"offer",externalPlatform:"hotmart"},
+     {id:"upsell",type:"upsell",label:offer?.upsell??"Guía avanzada de implementación",description:"Guía complementaria digital ofrecida inmediatamente tras el pago.",active:Boolean(offer?.upsell),linkedArtifact:"offer",externalPlatform:"hotmart"},
+     {id:"downsell",type:"downsell",label:offer?.downsell??"Checklist esencial",description:"Checklist de acción rápida ofrecida si se declina el upsell.",active:Boolean(offer?.downsell),linkedArtifact:"offer",externalPlatform:"hotmart"},
+     {id:"thanks",type:"thank_you",label:"Página de confirmación y entrega",description:"Instrucciones de descarga inmediata del Ebook y bienvenida.",active:true,trackingEvent:"Purchase"}
+   ],edges:[
+     {from:"landing",to:"checkout",event:"continue",label:"Clic en botón de compra"},
+     {from:"checkout",to:"bump",event:"continue",label:"Selección de complementos"},
+     {from:"bump",to:"upsell",event:"accept",label:"Transacción inicial aprobada"},
+     {from:"upsell",to:"thanks",event:"accept",label:"Upsell aceptado"},
+     {from:"upsell",to:"downsell",event:"decline",label:"Upsell declinado"},
+     {from:"downsell",to:"thanks",event:"complete",label:"Recorrido finalizado"}
+   ],paymentsEnabled:false,evidenceIds:offer?.evidenceIds??ids},
   content:{schemaVersion:1,offerName:offer?.name,audience:avatar?.name,mechanism:mechanism?.mechanism,centralThesis:beliefs?.centralThesis,calendar:[{day:1,type:"educational",hook:`El primer paso para ${offer?.promise??niche}`,body:mechanism?.simpleExplanation??"Empieza por definir un resultado observable."},{day:3,type:"objection",hook:(beliefs?.objections??[])[0]??"No necesitas resolver todo hoy",body:(beliefs?.arguments??[])[0]??"Elige una acción acotada y revísala."}],hooks:[beliefs?.centralThesis??`Una forma más clara de abordar ${niche}`],channels:["Facebook"],evidenceIds:offer?.evidenceIds??ids},
-  final_product:{schemaVersion:1,files:[],guide:{title:selectedProduct?.name??offer?.name??`Plan práctico: ${niche}`,chapters:selectedProduct?.modules??["Diagnóstico","Plan","Implementación","Revisión"]},checklist:["Definir resultado","Revisar evidencia","Elegir acción","Registrar avance"],workbook:["Situación actual","Objetivo","Plan semanal"],miniTool:{title:`Planificador: ${niche}`,fields:["Objetivo","Próxima acción","Fecha de revisión"]},evidenceIds:selectedProduct?.evidenceIds??offer?.evidenceIds??ids},
+  final_product:{schemaVersion:1,files:[],guide:{title:selectedProduct?.name??offer?.name??`Ebook: ${niche}`,chapters:selectedProduct?.modules??["Capítulo 1: Diagnóstico","Capítulo 2: Plan","Capítulo 3: Implementación","Capítulo 4: Casos Prácticos"]},checklist:["Definir resultado","Revisar evidencia","Elegir acción","Registrar avance"],workbook:["Situación actual","Objetivo","Plan de acción del libro"],miniTool:{title:`Planificador del Ebook: ${niche}`,fields:["Objetivo","Próxima acción","Fecha de revisión"]},evidenceIds:selectedProduct?.evidenceIds??offer?.evidenceIds??ids},
  };
- return outputs[key];
+ return outputs[key] ?? {};
 }
 function referencedEvidenceIds(output:unknown,allowed:string[]):string[]{const allowedSet=new Set(allowed),found=new Set<string>();const visit=(value:unknown)=>{if(typeof value==="string"&&allowedSet.has(value))found.add(value);else if(Array.isArray(value))value.forEach(visit);else if(value&&typeof value==="object")Object.values(value).forEach(visit);};visit(output);return [...found];}
 

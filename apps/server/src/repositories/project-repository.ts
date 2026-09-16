@@ -96,7 +96,6 @@ export class ProjectRepository {
         ["offer", "Oferta"],
         ["landing", "Landing"],
         ["funnel", "Funnel"],
-        ["emails", "Emails"],
         ["content", "Contenido"],
         ["final_product", "Producto final"],
       ];

@@ -10,14 +10,14 @@ import { moduleInfo, modules, type NavigationKey } from "../config/modules";
 const NAV_ICONS: Record<string, LucideIcon> = {
   overview: LayoutDashboard, research: Search, sources: Database, problems: CircleAlert,
   opportunities: Rocket, product: Package, avatar: UserRound, mechanism: Cog, beliefs: Lightbulb,
-  offer: BadgeDollarSign, landing: PanelsTopLeft, funnel: Filter, emails: Mail, content: FileText,
+  offer: BadgeDollarSign, landing: PanelsTopLeft, funnel: Filter, content: FileText,
   final_product: PackageCheck, knowledge: Library, history: History, settings: Settings,
 };
 
 const GROUPS: { label: string; keys: NavigationKey[] }[] = [
   { label: "Proyecto", keys: ["overview", "research", "sources", "problems", "opportunities"] },
   { label: "Estrategia", keys: ["product", "avatar", "mechanism", "beliefs", "offer"] },
-  { label: "Creación", keys: ["landing", "funnel", "emails", "content", "final_product"] },
+  { label: "Creación", keys: ["landing", "funnel", "content", "final_product"] },
   { label: "Conocimiento", keys: ["knowledge", "history"] },
   { label: "Configuración", keys: ["settings"] },
 ];

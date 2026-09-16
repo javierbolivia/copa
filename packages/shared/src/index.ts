@@ -17,3 +17,4 @@ export * from "./product-module.js";
 export * from "./avatar-module.js";
 
 export * from "./landing-document.js";
+export * from "./funnel-document.js";

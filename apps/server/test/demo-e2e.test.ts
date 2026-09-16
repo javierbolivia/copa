@@ -27,7 +27,7 @@ describe("recorrido E2E del proyecto Demo", () => {
     expect(created.statusCode).toBe(201);
     const body = created.json<{ project: Project; results: ModuleResult[] }>();
     expect(body.project.name).toMatch(/^DEMO/);
-    expect(body.results).toHaveLength(14);
+    expect(body.results).toHaveLength(13);
     expect(body.results.at(-1)?.moduleKey).toBe("final_product");
 
     const workflow = (await app.inject({
@@ -40,8 +40,8 @@ describe("recorrido E2E del proyecto Demo", () => {
       method: "GET",
       url: `/api/projects/${body.project.id}/generations`,
     })).json<{ generations: unknown[] }>();
-    expect(generations.generations).toHaveLength(14);
-    expect(readdirSync(join(directory, "generated", body.project.id))).toHaveLength(2);
+    expect(generations.generations).toHaveLength(13);
+    expect(readdirSync(join(directory, "generated", body.project.id))).toHaveLength(3);
     const backup=(await app.inject({method:"POST",url:"/api/backups"})).json<{filename:string}>();
     const sidecar=join(directory,"backups",`${backup.filename}.files`);expect(existsSync(sidecar)).toBe(true);
     rmSync(sidecar,{recursive:true,force:true});

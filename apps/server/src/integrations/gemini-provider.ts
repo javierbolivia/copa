@@ -29,6 +29,16 @@ function safeGoogleMessage(value: unknown): string | undefined {
   return value.replace(/([?&]key=)[^&\s]+/giu, "$1[redacted]").replace(/AIza[\w-]{20,}/gu, "[redacted]").replace(/\s+/gu, " ").trim().slice(0, 500) || undefined;
 }
 
+function noCandidateDiagnostic(body: Record<string, unknown>): string | undefined {
+  const promptFeedback = isRecord(body.promptFeedback) ? body.promptFeedback : undefined;
+  const blockReason = promptFeedback && typeof promptFeedback.blockReason === "string" ? promptFeedback.blockReason : undefined;
+  if (blockReason) return `Motivo: ${blockReason}.`;
+  const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+  const firstCandidate = isRecord(candidates[0]) ? candidates[0] : undefined;
+  const finishReason = firstCandidate && typeof firstCandidate.finishReason === "string" ? firstCandidate.finishReason : undefined;
+  return finishReason ? `Finalización: ${finishReason}.` : undefined;
+}
+
 async function geminiHttpError(response: Response): Promise<IntegrationError> {
   let status: string | undefined, message: string | undefined;
   try {
@@ -41,14 +51,6 @@ async function geminiHttpError(response: Response): Promise<IntegrationError> {
   const prefix = status ? `Gemini ${status}` : `Gemini respondió con HTTP ${response.status}`;
   return new IntegrationError("http_error", message ? `${prefix}: ${message}` : `${prefix}.`, { status: response.status, retryable: response.status >= 500 });
 }
-
-const GEMINI_SAFETY_SETTINGS = [
-  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
-];
 
 export class GeminiProvider implements LlmProvider {
   readonly name = "gemini";
@@ -80,7 +82,6 @@ export class GeminiProvider implements LlmProvider {
             systemInstruction: { parts: [{ text: request.systemInstructions }] },
             contents: [{ role: "user", parts: [{ text: request.input }] }],
             generationConfig,
-            safetySettings: GEMINI_SAFETY_SETTINGS,
           }),
           signal,
         });
@@ -95,8 +96,7 @@ export class GeminiProvider implements LlmProvider {
     });
     const candidates = body.candidates;
     if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== "object") {
-      const details = JSON.stringify(body).slice(0, 300);
-      throw new IntegrationError("invalid_response", `Gemini no devolvió candidatos. Respuesta: ${details}`);
+      throw new IntegrationError("invalid_response", `Gemini no devolvió candidatos.${noCandidateDiagnostic(body) ? ` ${noCandidateDiagnostic(body)}` : ""}`);
     }
     const parts = (candidates[0] as { content?: { parts?: Array<{ text?: unknown }> } }).content?.parts;
     const text = Array.isArray(parts) ? parts.map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";

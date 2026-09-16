@@ -44,6 +44,7 @@ import {
 } from "./domain-vocabulary-discovery-service.js";
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 import { validateResearchOutput } from "./research-output-validator.js";
+import { projectEvidenceForProvider, type ProviderEvidenceAudit } from "./provider-evidence-projection.js";
 import {
   buildProductGroundingSnapshot,
   buildProductStructuredOutputSchema,
@@ -53,25 +54,6 @@ import {
 } from "./product-output-validator.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
-
-export function sanitizeQuoteForLlm(text: string): string {
-  if (!text) return text;
-  return text
-    .replace(/al morir\s+mi\s+mam[aá]/gi, "al fallecer mi madre")
-    .replace(/hijo\s+de\s+puta/gi, "maltratador")
-    .replace(/hija\s+de\s+puta/gi, "maltratadora")
-    .replace(/cortad[oa]s?\s+las?\s+dos?\s+manos?/gi, "sancionado fuertemente")
-    .replace(/y\s+no\s+te\s+voy\s+a\s+dar/gi, "y no te la daré")
-    .replace(/\bmierda\b/gi, "problema")
-    .replace(/\bimb[eé]ciles?\b/gi, "irresponsables");
-}
-
-export function sanitizeEvidenceForLlm<T extends { id: string; quoteText: string }>(items: T[]): T[] {
-  return items.map((item) => ({
-    ...item,
-    quoteText: sanitizeQuoteForLlm(item.quoteText),
-  }));
-}
 
 export interface ModuleServiceOptions {
   readonly openAI: OpenAIProvider;
@@ -365,6 +347,7 @@ export class ModuleService {
     let reportedModel: string | undefined;
     let structuredOutputDiagnostics: LlmGenerateResult<Record<string, unknown>>["structuredOutputDiagnostics"];
     let providerInput: Record<string, unknown> | undefined;
+    let providerEvidenceAudit: ProviderEvidenceAudit | undefined;
     let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToProvider:number;batchesSentToGemini:number;semanticBatchProvider:string|null;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
@@ -375,6 +358,10 @@ export class ModuleService {
       promptHash = prompt.hash;
       promptPath = prompt.relativePath;
       model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:resolveModel(prompt.modelTier, projectSettings, this.options);
+      // Product uses its own allow-listed grounding snapshot. Other modules
+      // receive a provider-only projection of the evidence below.
+      const evidenceProjection = productGroundingSnapshot ? undefined : projectEvidenceForProvider(evidence);
+      if (evidenceProjection && evidenceProjection.audit.transformedSnippetCount > 0) providerEvidenceAudit = evidenceProjection.audit;
       providerInput = productGroundingSnapshot ? {
         project: { name: project.name, niche: project.niche },
         moduleKey: key,
@@ -387,7 +374,9 @@ export class ModuleService {
       } : {
         project: { name: project.name, niche: project.niche,...(key==="research"?{description:project.description}:{}) }, settings: projectSettings,
         ...(key==="research"?{researchFocus:researchFocusAtStart}:{}),
-        moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence: sanitizeEvidenceForLlm(evidence), knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
+        moduleKey: key, parentOutputs:providerParentOutputs(parentOutputs), evidence: evidenceProjection!.evidence,
+        ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}),
+        knowledge: {advisoryOnly:knowledgePolicy.advisoryOnly,influence:knowledgePolicy.knowledgeInfluence,chunks:knowledgeContext},
         additionalInstructions: instructions?.trim() || null,
       };
       let generated!:LlmGenerateResult<Record<string,unknown>>;
@@ -397,7 +386,8 @@ export class ModuleService {
         if(problemBatches){
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
-            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:sanitizeEvidenceForLlm(batch),batch:{index:index+1,total:problemBatches.length}};
+            const batchProjection=projectEvidenceForProvider(batch);
+            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
             const mappedResult=await providerClient.generate<Record<string,unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;
@@ -408,10 +398,10 @@ export class ModuleService {
           providerInput={...providerInput,stage:"global_reduce",researchFocus:researchFocusAtStart??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
-        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})},maxOutputTokens:8_000});
+        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})},maxOutputTokens:8_000});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
-      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
+      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,...(providerEvidenceAudit?{providerEvidenceProjection:providerEvidenceAudit}:{}),context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
       output = generated.output;
       // The provider is never the source of truth for `total`: recompute it
       // deterministically from the validated `scores` (isCanonicalModuleOutput
@@ -585,6 +575,7 @@ export class ModuleService {
       ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel")?{activeVersionIdAtStart}:{}),
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
+      ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}),
       ...(providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
       ...(key==="problems"?{researchFocus:deriveResearchFocus([],project.niche,researchFocusAtStart)}:{}),

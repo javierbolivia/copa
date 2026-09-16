@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { isSemanticRetrievalEnabled } from "../src/services/semantic-retrieval/config.js";
 import { hybridRank, rerankHybrid } from "../src/services/semantic-retrieval/hybrid-ranking.js";
 import { BoundedEmbeddingCache } from "../src/services/semantic-retrieval/embedding-cache.js";
+import { getLocalSemanticRuntime } from "../src/services/semantic-retrieval/local-transformers.js";
 import type { SemanticEmbeddingProvider, SemanticReranker } from "../src/services/semantic-retrieval/types.js";
 
 const vectors: Record<string, readonly number[]> = {
@@ -44,6 +45,12 @@ const candidates = [
 ] as const;
 
 describe("semantic retrieval prototype", () => {
+  it("creates one process-local lazy runtime without loading either model", () => {
+    const first = getLocalSemanticRuntime({ cacheDir: "test-model-cache", localFilesOnly: true });
+    expect(getLocalSemanticRuntime()).toBe(first);
+    expect(first.state).toEqual({ embeddingLoaded: false, rerankerLoaded: false });
+  });
+
   it("is disabled unless explicitly enabled", () => {
     expect(isSemanticRetrievalEnabled({})).toBe(false);
     expect(isSemanticRetrievalEnabled({ SEMANTIC_ENABLED: "false" })).toBe(false);

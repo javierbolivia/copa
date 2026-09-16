@@ -54,6 +54,8 @@ export type {
   StructuralChunkOptions,
 } from "./extraction-types.js";
 export { isSemanticRetrievalEnabled } from "../semantic-retrieval/config.js";
+export { SemanticEmbeddingStore, semanticTextFingerprint } from "../semantic-retrieval/semantic-embedding-store.js";
+export type { EmbeddingSyncResult, SemanticEmbeddingInput, SemanticModelIdentity, StoredSemanticEmbedding } from "../semantic-retrieval/semantic-embedding-store.js";
 export { hybridRank, lexicalFallback, rerankHybrid } from "../semantic-retrieval/hybrid-ranking.js";
 export {
   LOCAL_EMBEDDING_MODEL,
@@ -61,6 +63,8 @@ export {
   LOCAL_RERANKER_MODEL,
   LocalTransformersEmbeddingProvider,
   LocalTransformersReranker,
+  LocalSemanticRuntime,
+  getLocalSemanticRuntime,
 } from "../semantic-retrieval/local-transformers.js";
 export type {
   RankedSemanticCandidate,

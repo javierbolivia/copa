@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "benchmark:semantic": "tsx src/scripts/semantic-retrieval-benchmark.ts",
+    "benchmark:semantic-hardening": "tsx src/scripts/semantic-retrieval-hardening-benchmark.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "mermaid": "11.16.1",
     "pdfjs-dist": "6.2.108",
     "sharp": "0.35.3",
+    "sqlite-vec": "^0.1.9",
     "uuid": "^13.0.0"
   },
   "devDependencies": {

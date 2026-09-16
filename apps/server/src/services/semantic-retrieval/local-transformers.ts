@@ -163,3 +163,28 @@ export class LocalTransformersReranker implements SemanticReranker {
     return this.#model;
   }
 }
+
+/**
+ * Process-local owner that keeps exactly one lazy embedding provider and one
+ * lazy reranker. Constructing it loads neither model; first use does.
+ */
+export class LocalSemanticRuntime {
+  readonly embedding: LocalTransformersEmbeddingProvider;
+  readonly reranker: LocalTransformersReranker;
+
+  constructor(options: LocalSemanticModelOptions = {}) {
+    this.embedding = new LocalTransformersEmbeddingProvider(options);
+    this.reranker = new LocalTransformersReranker(options);
+  }
+
+  get state(): { readonly embeddingLoaded: boolean; readonly rerankerLoaded: boolean } {
+    return { embeddingLoaded: this.embedding.available, rerankerLoaded: this.reranker.available };
+  }
+}
+
+let sharedRuntime: LocalSemanticRuntime | undefined;
+
+export function getLocalSemanticRuntime(options: LocalSemanticModelOptions = {}): LocalSemanticRuntime {
+  sharedRuntime ??= new LocalSemanticRuntime(options);
+  return sharedRuntime;
+}

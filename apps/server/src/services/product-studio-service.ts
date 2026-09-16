@@ -466,11 +466,10 @@ export class ProductStudioService {
     try {
       const now = new Date().toISOString(),
         query = [current.title, chapter.title, chapter.objective].join(" ");
-      const used = this.retrieveKnowledge(
-        projectId,
-        query,
-        selectedGlobalIds(current),
-      );
+      const used = [
+        ...this.retrieveKnowledge(projectId, query, selectedGlobalIds(current)),
+        ...this.retrieveVideoContext(projectId, query),
+      ];
       const evidence = this.retrieveEvidence(projectId, query);
       let blocks: ProductBlock[], generation: RecordedGeneration;
       if (this.useOpenAI(projectId)) {
@@ -1009,6 +1008,60 @@ export class ProductStudioService {
       quoteText: string;
     }>;
   }
+  /**
+   * Video transcript segments as KNOWLEDGE context only. This is explicitly
+   * NOT a form of evidence: it never touches evidence_snippets/evidence_links
+   * and callers must always attribute it with provenance "KNOWLEDGE", never
+   * "EVIDENCE_BACKED". A transcript describes what a video says, not
+   * independent market-demand evidence. Only READY transcripts on sources
+   * still included in analysis are eligible, matching the Knowledge Index's
+   * own eligibility gate so a stale/removed source cannot leak in here.
+   */
+  private retrieveVideoContext(
+    projectId: string,
+    query: string,
+  ): StudioContextItem[] {
+    const terms = [
+      ...new Set(
+        query
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .match(/[\p{L}\p{N}]{4,}/gu) ?? [],
+      ),
+    ].slice(0, 12);
+    if (!terms.length) return [];
+    const clauses = terms.map(() => "lower(segment.text) LIKE ?").join(" OR ");
+    const rows = this.database.connection
+      .prepare(
+        `SELECT segment.id segmentId, segment.source_id sourceId, segment.video_id videoId,
+                segment.start_seconds startSeconds, segment.end_seconds endSeconds, segment.text text
+         FROM video_transcript_segments segment
+         JOIN video_transcripts transcript ON transcript.id=segment.transcript_id AND transcript.project_id=segment.project_id
+         JOIN sources s ON s.id=segment.source_id AND s.project_id=segment.project_id
+         WHERE segment.project_id=? AND transcript.status='ready'
+           AND s.include_in_analysis=1 AND s.status IN ('ready','completed')
+           AND (${clauses})
+         ORDER BY segment.start_seconds LIMIT 4`,
+      )
+      .all(projectId, ...terms.map((term) => `%${term}%`)) as unknown as Array<{
+      segmentId: string;
+      sourceId: string;
+      videoId: string;
+      startSeconds: number;
+      endSeconds: number;
+      text: string;
+    }>;
+    const timestamp = (seconds: number) =>
+      `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+    return rows.map((row) => ({
+      kind: "PROJECT_KNOWLEDGE" as const,
+      content: row.text,
+      title: `Video ${row.videoId} · ${timestamp(row.startSeconds)}–${timestamp(row.endSeconds)}`,
+      rawScore: 0,
+      chunkId: `video_transcript:${row.segmentId}`,
+    }));
+  }
   private useOpenAI(projectId: string): boolean {
     return (
       this.openAI.configured &&
@@ -1155,7 +1208,17 @@ export class ProductStudioService {
     query: string,
     used: readonly StudioContextItem[],
   ): { retrievalLogId?: string } {
-    if (!used.length) return {};
+    // knowledge_retrieval_items enforces a real FK to knowledge_chunks/
+    // approved_output_memory: only document/memory-backed items can be logged
+    // there. Video transcript segments (synthetic "video_transcript:" chunkId,
+    // no real chunk row) stay out of this relational log; they are still
+    // preserved in the generation's own input_snapshot JSON (knowledgeUsed).
+    const loggable = used.filter(
+      (item) =>
+        (item.chunkId && !item.chunkId.startsWith("video_transcript:")) ||
+        item.memoryId,
+    );
+    if (!loggable.length) return {};
     const policy = getAgentKnowledgePolicy("final_product"),
       retrievalLogId = this.knowledge.createRetrievalLog({
         projectId,
@@ -1165,15 +1228,15 @@ export class ProductStudioService {
         policy: { ...policy, retrieval: "fts5_bm25" },
         selectedLibraryIds: [
           ...new Set(
-            used.flatMap((item) => (item.libraryId ? [item.libraryId] : [])),
+            loggable.flatMap((item) => (item.libraryId ? [item.libraryId] : [])),
           ),
         ],
         maxChunks: policy.maxChunks,
         maxContextTokens: policy.maxContextTokens,
         contextTokenEstimate: Math.ceil(
-          used.reduce((sum, item) => sum + item.content.length, 0) / 4,
+          loggable.reduce((sum, item) => sum + item.content.length, 0) / 4,
         ),
-        items: used.map((item) =>
+        items: loggable.map((item) =>
           item.chunkId
             ? {
                 kind: item.kind as "PROJECT_KNOWLEDGE" | "GLOBAL_KNOWLEDGE",

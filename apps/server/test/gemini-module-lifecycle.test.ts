@@ -135,7 +135,7 @@ describe("Gemini module lifecycle safety", () => {
     } finally { db.close(); }
   });
 
-  it("blocks Problems request seven before it reaches Gemini and persists the terminal budget audit", async () => {
+  it("blocks an over-budget Problems plan before its first Gemini request and persists the terminal budget audit", async () => {
     const path = databasePath();
     const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(JSON.parse(String(init?.body)).contents[0].parts[0].text)) as { evidence?: Array<{ id: string }> };
@@ -148,21 +148,20 @@ describe("Gemini module lifecycle safety", () => {
     expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
     expect(response.statusCode, response.body).toBe(409);
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).not.toHaveBeenCalled();
     await app.close(); app = undefined;
 
     const db = new AppDatabase(path);
     try {
       const row = db.connection.prepare("SELECT input_snapshot,error_code,error_message FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string; error_code: string; error_message: string };
       const snapshot = JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string; outcome: string }>; geminiOperationTotals: Record<string, unknown> };
-      expect(row).toMatchObject({ error_code: "request_budget_exceeded", error_message: expect.stringContaining("used 6") });
-      expect(snapshot.providerAttempts).toHaveLength(7);
-      expect(snapshot.providerAttempts.at(-1)).toMatchObject({ stage: "problems/map", outcome: "budget_exceeded" });
-      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 6, requestsByStage: { "problems/map": 6 }, retries: 0, blockedRequests: 1, failedRequests: 0 });
+      expect(row).toMatchObject({ error_code: "request_budget_exceeded", error_message: expect.stringContaining("requires 9 request(s)") });
+      expect(snapshot.providerAttempts).toEqual([]);
+      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 0, requestsByStage: {}, retries: 0, blockedRequests: 1, failedRequests: 0 });
     } finally { db.close(); }
   });
 
-  it("counts vocabulary discovery against the Problems budget and blocks it as request seven", async () => {
+  it("includes possible vocabulary discovery when blocking an over-budget Problems plan", async () => {
     const path = databasePath();
     const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const rawInput = String(JSON.parse(String(init?.body)).contents[0].parts[0].text);
@@ -176,7 +175,7 @@ describe("Gemini module lifecycle safety", () => {
     expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
     expect(response.statusCode, response.body).toBe(409);
-    expect(fetch).toHaveBeenCalledTimes(6);
+    expect(fetch).not.toHaveBeenCalled();
     await app.close(); app = undefined;
 
     const db = new AppDatabase(path);
@@ -184,8 +183,8 @@ describe("Gemini module lifecycle safety", () => {
       const row = db.connection.prepare("SELECT input_snapshot,error_code FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string; error_code: string };
       const snapshot = JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string; outcome: string }>; geminiOperationTotals: Record<string, unknown> };
       expect(row.error_code).toBe("request_budget_exceeded");
-      expect(snapshot.providerAttempts.at(-1)).toMatchObject({ stage: "vocabulary_discovery", outcome: "budget_exceeded" });
-      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 6, requestsByStage: { "problems/map": 5, "problems/global_reduce": 1 }, retries: 0, blockedRequests: 1, failedRequests: 0 });
+      expect(snapshot.providerAttempts).toEqual([]);
+      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 0, requestsByStage: {}, retries: 0, blockedRequests: 1, failedRequests: 0 });
     } finally { db.close(); }
   });
 

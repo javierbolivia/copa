@@ -107,6 +107,21 @@ export class GeminiOperationRequestBudget {
     if (retry) this.retries += 1;
   }
 
+  /**
+   * Reject an operation whose deterministic request plan cannot fit in the
+   * remaining operation budget. This prevents spending part of a plan that is
+   * known in advance to be impossible to finish.
+   */
+  ensurePlannedCapacity(plannedRequests: number, stage: ProviderStage): void {
+    const available = this.limit - this.totalProviderRequests;
+    if (plannedRequests <= available) return;
+    this.blockedRequests += 1;
+    throw new IntegrationError(
+      "request_budget_exceeded",
+      `REQUEST_BUDGET_EXCEEDED: Gemini request plan requires ${plannedRequests} request(s) but budget ${this.limit} has ${available} remaining; blocked before outbound request at ${stage}.`,
+    );
+  }
+
   recordFailure(): void { this.failedRequests += 1; }
 
   snapshot(): GeminiOperationTotals {
@@ -514,6 +529,22 @@ export class ModuleService {
       try{
         const problemBatches=key==="problems"&&(selectedProvider==="gemini"||selectedProvider==="deepseek")?createProblemBatches(evidence):undefined;
         if(problemBatches){
+          // A Problems run has one MAP request per deterministic batch and one
+          // global reduce. If no exact ACTIVE vocabulary exists, discovery may
+          // add one more request after the reduce. Check the full possible plan
+          // before Gemini can receive a partial sequence of a doomed run.
+          if (selectedProvider === "gemini") {
+            const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusAtStart);
+            const hasExactVocabulary = !!this.vocabulary.loadActiveVocabularySnapshot(
+              projectId,
+              researchFocusHash(effectiveFocus),
+              analysisSnapshotHashFromRows(analysisSetSnapshot(this.db, projectId).rows),
+            );
+            geminiBudget?.ensurePlannedCapacity(
+              problemBatches.length + 1 + (hasExactVocabulary ? 0 : 1),
+              "problems/map",
+            );
+          }
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
             const batchProjection=projectEvidenceForProvider(batch);

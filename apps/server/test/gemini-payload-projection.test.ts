@@ -62,4 +62,24 @@ describe("Gemini provider payload projection", () => {
       "systemInstructions",
     ]));
   });
+
+  it("can retain Research evidence identifiers while omitting every literal quote from the Gemini-only payload", () => {
+    const canonical = {
+      evidence: [
+        { id: "evidence-a", quoteText: "Comentario de usuario no confiable.", sourceId: "source-a" },
+        { id: "evidence-b", quoteText: "Otro comentario de usuario no confiable.", sourceId: "source-b" },
+      ],
+    };
+    const original = structuredClone(canonical);
+
+    const projection = buildGeminiProjection(canonical, "Devuelve JSON.", { omitEvidenceQuoteText: true });
+
+    expect(canonical).toEqual(original);
+    expect(projection.payload.evidence).toEqual([
+      { id: "evidence-a", sourceId: "source-a" },
+      { id: "evidence-b", sourceId: "source-b" },
+    ]);
+    expect(JSON.stringify(projection.payload)).not.toContain("Comentario de usuario no confiable.");
+    expect(projection.audit.transformations.filter((item) => item.kind === "EVIDENCE_TEXT_OMITTED")).toHaveLength(2);
+  });
 });

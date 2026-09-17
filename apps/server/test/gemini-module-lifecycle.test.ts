@@ -35,7 +35,8 @@ describe("Gemini module lifecycle safety", () => {
     const path = databasePath();
     const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const input = JSON.parse(String(JSON.parse(String(init?.body)).contents[0].parts[0].text)) as { evidence: Array<{ id: string; quoteText: string }> };
-      expect(input.evidence[0]?.quoteText).not.toContain("hijo de puta");
+      expect(input.evidence[0]).toEqual({ id: input.evidence[0]?.id });
+      expect(JSON.stringify(input)).not.toContain("hijo de puta");
       return geminiSuccess(createDemoOutput("research", input.evidence.map((item) => item.id)));
     });
     app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch } });

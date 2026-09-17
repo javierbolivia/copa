@@ -5,7 +5,8 @@ export type GeminiPayloadSanitizationKind =
   | "SLUR_REDACTED"
   | "GRAPHIC_VIOLENCE_REDACTED"
   | "SELF_HARM_REDACTED"
-  | "SEXUAL_VIOLENCE_REDACTED";
+  | "SEXUAL_VIOLENCE_REDACTED"
+  | "EVIDENCE_TEXT_OMITTED";
 
 export interface GeminiPayloadTransformation {
   /** JSON path in the provider-only copy; never a canonical database field. */
@@ -27,6 +28,15 @@ export interface GeminiPayloadProjection<T> {
   readonly payload: T;
   readonly systemInstructions: string;
   readonly audit: GeminiPayloadProjectionAudit;
+}
+
+export interface GeminiPayloadProjectionOptions {
+  /**
+   * Research evidence is untrusted user-generated text. Gemini may reject an
+   * aggregate corpus even when individual sensitive spans were redacted, so
+   * Research can retain only its canonical IDs in the provider-only copy.
+   */
+  readonly omitEvidenceQuoteText?: boolean;
 }
 
 interface SensitiveSpan {
@@ -81,6 +91,30 @@ function projectValue(value: unknown, path: string, transformations: GeminiPaylo
   );
 }
 
+function omitEvidenceQuoteText<T extends Record<string, unknown>>(
+  payload: T,
+  transformations: GeminiPayloadTransformation[],
+): T {
+  if (!Array.isArray(payload.evidence)) return payload;
+  return {
+    ...payload,
+    evidence: payload.evidence.map((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const evidence = item as Record<string, unknown>;
+      if (typeof evidence.quoteText !== "string") return evidence;
+      transformations.push({
+        path: `payload.evidence[${index}].quoteText`,
+        kind: "EVIDENCE_TEXT_OMITTED",
+        originalLength: evidence.quoteText.length,
+        projectedLength: 0,
+        originalFingerprint: fingerprint(evidence.quoteText),
+      });
+      const { quoteText: _quoteText, ...identifierOnly } = evidence;
+      return identifierOnly;
+    }),
+  } as T;
+}
+
 /**
  * Canonical SQLite records remain untouched. Apply this only after a module has
  * built its provider input and immediately before Gemini is invoked.
@@ -88,10 +122,14 @@ function projectValue(value: unknown, path: string, transformations: GeminiPaylo
 export function buildGeminiProjection<T extends Record<string, unknown>>(
   payload: T,
   systemInstructions: string,
+  options: GeminiPayloadProjectionOptions = {},
 ): GeminiPayloadProjection<T> {
   const transformations: GeminiPayloadTransformation[] = [];
+  const projectedPayload = projectValue(payload, "payload", transformations) as T;
   return {
-    payload: projectValue(payload, "payload", transformations) as T,
+    payload: options.omitEvidenceQuoteText
+      ? omitEvidenceQuoteText(projectedPayload, transformations)
+      : projectedPayload,
     systemInstructions: sanitizeText(systemInstructions, "systemInstructions", transformations),
     audit: {
       schemaVersion: 1,

@@ -490,7 +490,7 @@ export class ModuleService {
         batch?: { readonly index: number; readonly total: number },
       ): Promise<LlmGenerateResult<Record<string, unknown>>> => {
         const projected = selectedProvider === "gemini"
-          ? buildGeminiProjection(input, systemInstructions)
+          ? buildGeminiProjection(input, systemInstructions, { omitEvidenceQuoteText: key === "research" })
           : { payload: input, systemInstructions, audit: undefined };
         if (projected.audit) geminiProjectionAudits.push(projected.audit);
         lastProviderInput = projected.payload;
@@ -529,7 +529,7 @@ export class ModuleService {
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
         const finalStage: ProviderStage = key === "research" ? "research/direct" : key === "problems" ? "problems/global_reduce" : "direct";
-        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
+        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
       catch(error){

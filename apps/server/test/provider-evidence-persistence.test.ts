@@ -35,11 +35,11 @@ describe("provider evidence projection persistence", () => {
     const run = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "gemini" } });
     expect(run.statusCode, run.body).toBe(200);
     const request = JSON.parse(String((fetchMock.mock.calls[0] as unknown as [unknown, RequestInit])[1].body)) as { contents: Array<{ parts: Array<{ text: string }> }> };
-    const providerInput = JSON.parse(request.contents[0]!.parts[0]!.text) as { evidence: Array<{ id: string; quoteText: string }>; providerEvidenceProjection?: { transformedSnippetCount: number } };
+    const providerInput = JSON.parse(request.contents[0]!.parts[0]!.text) as { evidence: Array<{ id: string; quoteText?: string }>; providerEvidenceProjection?: { transformedSnippetCount: number } };
     expect(providerInput.providerEvidenceProjection).toMatchObject({ transformedSnippetCount: 1 });
     const sourceEvidenceId = providerInput.evidence[0]!.id;
-    expect(providerInput.evidence).toContainEqual(expect.objectContaining({ id: sourceEvidenceId, quoteText: expect.stringContaining("[contenido sensible omitido") }));
-    expect(providerInput.evidence.find((item) => item.id === sourceEvidenceId)!.quoteText).not.toContain("hijo de puta");
+    expect(providerInput.evidence).toEqual([{ id: sourceEvidenceId }]);
+    expect(JSON.stringify(providerInput)).not.toContain("hijo de puta");
 
     await app.close();
     app = undefined;

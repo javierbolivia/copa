@@ -20,7 +20,8 @@ export type IntegrationErrorCode =
   | "non_json_response"
   | "invalid_schema"
   | "empty_completion"
-  | "unsupported_model";
+  | "unsupported_model"
+  | "request_budget_exceeded";
 
 export interface IntegrationErrorOptions {
   readonly status?: number;

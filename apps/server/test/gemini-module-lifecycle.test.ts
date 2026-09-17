@@ -108,6 +108,86 @@ describe("Gemini module lifecycle safety", () => {
     } finally { db.close(); }
   });
 
+  it("records Gemini vocabulary discovery in the same operation telemetry", async () => {
+    const path = databasePath();
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const rawInput = String(JSON.parse(String(init?.body)).contents[0].parts[0].text);
+      if (rawInput.startsWith("researchFocus:")) return geminiSuccess({ concepts: [] });
+      const input = JSON.parse(rawInput) as { stage?: string; evidence?: Array<{ id: string }> };
+      return geminiSuccess(createDemoOutput("problems", input.evidence?.map((item) => item.id) ?? []));
+    });
+    app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch } });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Vocabulary telemetry", niche: "Prueba" } })).json<{ id: string }>();
+    await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text: "Comentario con evidencia suficiente." } });
+    expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
+    const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await app.close(); app = undefined;
+
+    const db = new AppDatabase(path);
+    try {
+      const row = db.connection.prepare("SELECT input_snapshot FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string };
+      const snapshot = JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string }>; geminiOperationTotals: Record<string, unknown> };
+      expect(snapshot.providerAttempts.map((item) => item.stage)).toEqual(["problems/map", "problems/global_reduce", "vocabulary_discovery"]);
+      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 3, requestsByStage: { "problems/map": 1, "problems/global_reduce": 1, vocabulary_discovery: 1 }, retries: 0, blockedRequests: 0, failedRequests: 0 });
+    } finally { db.close(); }
+  });
+
+  it("blocks Problems request seven before it reaches Gemini and persists the terminal budget audit", async () => {
+    const path = databasePath();
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(JSON.parse(String(init?.body)).contents[0].parts[0].text)) as { evidence?: Array<{ id: string }> };
+      return geminiSuccess(createDemoOutput("problems", input.evidence?.map((item) => item.id) ?? []));
+    });
+    app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch } });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Budget terminal", niche: "Prueba" } })).json<{ id: string }>();
+    const text = Array.from({ length: 361 }, (_, index) => `Comentario ${index + 1} para formar el batch ${Math.floor(index / 60) + 1}.`).join("\n\n");
+    await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text } });
+    expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
+    const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(fetch).toHaveBeenCalledTimes(6);
+    await app.close(); app = undefined;
+
+    const db = new AppDatabase(path);
+    try {
+      const row = db.connection.prepare("SELECT input_snapshot,error_code,error_message FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string; error_code: string; error_message: string };
+      const snapshot = JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string; outcome: string }>; geminiOperationTotals: Record<string, unknown> };
+      expect(row).toMatchObject({ error_code: "request_budget_exceeded", error_message: expect.stringContaining("used 6") });
+      expect(snapshot.providerAttempts).toHaveLength(7);
+      expect(snapshot.providerAttempts.at(-1)).toMatchObject({ stage: "problems/map", outcome: "budget_exceeded" });
+      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 6, requestsByStage: { "problems/map": 6 }, retries: 0, blockedRequests: 1, failedRequests: 0 });
+    } finally { db.close(); }
+  });
+
+  it("counts vocabulary discovery against the Problems budget and blocks it as request seven", async () => {
+    const path = databasePath();
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const rawInput = String(JSON.parse(String(init?.body)).contents[0].parts[0].text);
+      const input = JSON.parse(rawInput) as { evidence?: Array<{ id: string }> };
+      return geminiSuccess(createDemoOutput("problems", input.evidence?.map((item) => item.id) ?? []));
+    });
+    app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch } });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Vocabulary budget", niche: "Prueba" } })).json<{ id: string }>();
+    const text = Array.from({ length: 241 }, (_, index) => `Comentario ${index + 1} para formar el batch ${Math.floor(index / 60) + 1}.`).join("\n\n");
+    await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text } });
+    expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
+    const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
+    expect(response.statusCode, response.body).toBe(409);
+    expect(fetch).toHaveBeenCalledTimes(6);
+    await app.close(); app = undefined;
+
+    const db = new AppDatabase(path);
+    try {
+      const row = db.connection.prepare("SELECT input_snapshot,error_code FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string; error_code: string };
+      const snapshot = JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string; outcome: string }>; geminiOperationTotals: Record<string, unknown> };
+      expect(row.error_code).toBe("request_budget_exceeded");
+      expect(snapshot.providerAttempts.at(-1)).toMatchObject({ stage: "vocabulary_discovery", outcome: "budget_exceeded" });
+      expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 6, requestsByStage: { "problems/map": 5, "problems/global_reduce": 1 }, retries: 0, blockedRequests: 1, failedRequests: 0 });
+    } finally { db.close(); }
+  });
+
   it.each([429, 503])("retries Gemini HTTP %s once with a bounded policy", async (status) => {
     const path = databasePath();
     let calls = 0;

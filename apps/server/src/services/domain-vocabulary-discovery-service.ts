@@ -20,6 +20,7 @@ import {
 } from "../services/domain-vocabulary-discovery.js";
 import { SemanticVocabularyRepository } from "../repositories/semantic-vocabulary-repository.js";
 import { canonicalContentHash } from "../services/semantic-vocabulary.js";
+import { IntegrationError } from "../integrations/integration-error.js";
 
 const DISCOVERY_PROMPT_RELATIVE_PATH = "prompts/domain-vocabulary-discovery.md";
 const MAX_OUTPUT_TOKENS = 8_000;
@@ -201,6 +202,10 @@ export class DomainVocabularyDiscoveryService {
         maxOutputTokens: this.options.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
       });
     } catch (error) {
+      // A caller-owned Gemini budget is terminal for the parent operation. It
+      // must be persisted by that lifecycle instead of being converted into a
+      // best-effort vocabulary fallback.
+      if (error instanceof IntegrationError && error.code === "request_budget_exceeded") throw error;
       return {
         status: "PROVIDER_FAILED",
         issues: [{ code: "PROVIDER_ERROR", message: providerErrorDiagnostic(error) }],

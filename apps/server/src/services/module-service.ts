@@ -59,7 +59,7 @@ export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
 const GEMINI_MAX_ATTEMPTS = 2;
 const GEMINI_RETRY_DELAY_MS = 250;
 
-type ProviderStage = "research/direct" | "problems/map" | "problems/global_reduce" | "direct";
+type ProviderStage = "research/direct" | "problems/map" | "problems/global_reduce" | "vocabulary_discovery" | "direct";
 interface ProviderAttemptAudit {
   readonly stage: ProviderStage;
   readonly batch?: { readonly index: number; readonly total: number };
@@ -71,10 +71,53 @@ interface ProviderAttemptAudit {
   readonly responseId?: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
-  readonly outcome: "usable" | "empty" | "error";
+  readonly outcome: "usable" | "empty" | "error" | "budget_exceeded";
   readonly errorCode?: string;
   readonly errorMessage?: string;
   readonly retryable?: boolean;
+}
+
+interface GeminiOperationTotals {
+  readonly totalProviderRequests: number;
+  readonly requestsByStage: Partial<Record<ProviderStage, number>>;
+  readonly retries: number;
+  readonly blockedRequests: number;
+  readonly failedRequests: number;
+}
+
+export class GeminiOperationRequestBudget {
+  private totalProviderRequests = 0;
+  private readonly requestsByStage: Partial<Record<ProviderStage, number>> = {};
+  private retries = 0;
+  private blockedRequests = 0;
+  private failedRequests = 0;
+
+  constructor(private readonly limit: number) {}
+
+  reserve(stage: ProviderStage, retry = false): void {
+    if (this.totalProviderRequests >= this.limit) {
+      this.blockedRequests += 1;
+      throw new IntegrationError(
+        "request_budget_exceeded",
+        `REQUEST_BUDGET_EXCEEDED: Gemini request budget ${this.limit} reached (used ${this.totalProviderRequests}); blocked before outbound request at ${stage}.`,
+      );
+    }
+    this.totalProviderRequests += 1;
+    this.requestsByStage[stage] = (this.requestsByStage[stage] ?? 0) + 1;
+    if (retry) this.retries += 1;
+  }
+
+  recordFailure(): void { this.failedRequests += 1; }
+
+  snapshot(): GeminiOperationTotals {
+    return {
+      totalProviderRequests: this.totalProviderRequests,
+      requestsByStage: { ...this.requestsByStage },
+      retries: this.retries,
+      blockedRequests: this.blockedRequests,
+      failedRequests: this.failedRequests,
+    };
+  }
 }
 
 const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -85,6 +128,7 @@ function isRetryableGeminiFailure(error: unknown): error is IntegrationError {
 
 function providerAttemptFromError(stage: ProviderStage, attempt: number, error: unknown, batch?: { readonly index: number; readonly total: number }): ProviderAttemptAudit {
   const base = { stage, attempt, ...(batch ? { batch } : {}) };
+  if (error instanceof IntegrationError && error.code === "request_budget_exceeded") return { ...base, outcome: "budget_exceeded", errorCode: error.code, errorMessage: error.message, retryable: false };
   if (error instanceof GeminiResponseError) return { ...base, ...error.diagnostics, outcome: "empty", errorCode: error.code, errorMessage: error.message, retryable: false };
   if (error instanceof IntegrationError) return { ...base, ...(error.status === undefined ? {} : { httpStatus: error.status }), outcome: "error", errorCode: error.code, errorMessage: error.message, retryable: error.retryable };
   return { ...base, outcome: "error", errorCode: "generation_error", errorMessage: error instanceof Error ? error.message : "La generación falló.", retryable: false };
@@ -385,9 +429,28 @@ export class ModuleService {
     let providerEvidenceAudit: ProviderEvidenceAudit | undefined;
     let geminiProjectionAudits: GeminiPayloadProjectionAudit[] = [];
     const providerAttempts: ProviderAttemptAudit[] = [];
+    const geminiBudget = selectedProvider === "gemini" && (key === "research" || key === "problems")
+      ? new GeminiOperationRequestBudget(key === "research" ? 2 : 6)
+      : undefined;
     let lastProviderInput: Record<string, unknown> | undefined;
     let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToProvider:number;batchesSentToGemini:number;semanticBatchProvider:string|null;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
+    let failurePersisted = false;
+    const persistFailedGeneration = (error: unknown): void => {
+      if (failurePersisted) return;
+      failurePersisted = true;
+      const now = new Date().toISOString();
+      const message = error instanceof Error ? error.message : `La generación ${selectedProvider} falló.`;
+      const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+        ? error.code
+        : error instanceof Error ? error.name : "generation_error";
+      const failedAttempt = providerAttempts.at(-1);
+      this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?,?)`).run(
+        generationId, projectId, agentKey, selectedProvider, model,
+        JSON.stringify({ parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model, promptHash, promptPath, ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}), ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}), providerAttempts, ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}), context: lastProviderInput ?? providerInput }),
+        promptVersion, failedAttempt?.inputTokens ?? 0, failedAttempt?.outputTokens ?? 0, 0, Date.now() - startedAt, code, message, now, now,
+      );
+    };
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
       const prompt = getModulePrompt(key);
       if (!prompt) throw new Error(`No existe un prompt activo para el modulo ${key}.`);
@@ -434,12 +497,14 @@ export class ModuleService {
         const maxAttempts = selectedProvider === "gemini" ? GEMINI_MAX_ATTEMPTS : 1;
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
+            geminiBudget?.reserve(stage, attempt > 1);
             const result = await providerClient.generate<Record<string, unknown>>({ provider:selectedProvider, model, systemInstructions:projected.systemInstructions, input:JSON.stringify(projected.payload), structuredOutput, maxOutputTokens:8_000 });
             const diagnostics = result.providerDiagnostics ?? {};
             providerAttempts.push({ stage, attempt, ...(batch ? { batch } : {}), ...(typeof diagnostics.httpStatus === "number" ? { httpStatus: diagnostics.httpStatus } : {}), ...(typeof diagnostics.candidateCount === "number" ? { candidateCount: diagnostics.candidateCount } : {}), ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), outcome: "usable" });
             return result;
           } catch (error) {
             providerAttempts.push(providerAttemptFromError(stage, attempt, error, batch));
+            if (selectedProvider === "gemini" && !(error instanceof IntegrationError && error.code === "request_budget_exceeded")) geminiBudget?.recordFailure();
             if (!isRetryableGeminiFailure(error) || attempt === maxAttempts) throw error;
             await sleep(GEMINI_RETRY_DELAY_MS * attempt);
           }
@@ -468,12 +533,7 @@ export class ModuleService {
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
       catch(error){
-        const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error",failedAttempt=providerAttempts.at(-1);
-        this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?,?)`).run(
-          generationId,projectId,agentKey,selectedProvider,model,
-          JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,...(providerEvidenceAudit?{providerEvidenceProjection:providerEvidenceAudit}:{}),...(geminiProjectionAudits.length?{geminiPayloadProjection:geminiProjectionAudits}:{}),providerAttempts,context:lastProviderInput??providerInput}),
-          promptVersion,failedAttempt?.inputTokens??0,failedAttempt?.outputTokens??0,0,Date.now()-startedAt,code,message,now,now,
-        );
+        persistFailedGeneration(error);
         throw error;
       }
       output = generated.output;
@@ -529,8 +589,36 @@ export class ModuleService {
         let candidateSnapshot: SemanticVocabularySnapshot | null = null;
         if (discoveryProvider && sourceItems.length > 0) {
           try {
+            const instrumentedDiscoveryProvider: LlmProvider = selectedProvider === "gemini" && discoveryProvider.name === "gemini"
+              ? {
+                  name: discoveryProvider.name,
+                  async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
+                    const projected = buildGeminiProjection({ input: request.input }, request.systemInstructions);
+                    geminiProjectionAudits.push(projected.audit);
+                    for (let attempt = 1; attempt <= GEMINI_MAX_ATTEMPTS; attempt += 1) {
+                      try {
+                        geminiBudget?.reserve("vocabulary_discovery", attempt > 1);
+                        const result = await discoveryProvider.generate<TOutput>({
+                          ...request,
+                          systemInstructions: projected.systemInstructions,
+                          input: projected.payload.input,
+                        });
+                        const diagnostics = result.providerDiagnostics ?? {};
+                        providerAttempts.push({ stage: "vocabulary_discovery", attempt, ...(typeof diagnostics.httpStatus === "number" ? { httpStatus: diagnostics.httpStatus } : {}), ...(typeof diagnostics.candidateCount === "number" ? { candidateCount: diagnostics.candidateCount } : {}), ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), outcome: "usable" });
+                        return result;
+                      } catch (error) {
+                        providerAttempts.push(providerAttemptFromError("vocabulary_discovery", attempt, error));
+                        if (!(error instanceof IntegrationError && error.code === "request_budget_exceeded")) geminiBudget?.recordFailure();
+                        if (!isRetryableGeminiFailure(error) || attempt === GEMINI_MAX_ATTEMPTS) throw error;
+                        await sleep(GEMINI_RETRY_DELAY_MS * attempt);
+                      }
+                    }
+                    throw new Error("Gemini retry policy ended without a result.");
+                  },
+                }
+              : discoveryProvider;
             const discovery = new DomainVocabularyDiscoveryService(
-              discoveryProvider,
+              instrumentedDiscoveryProvider,
               this.vocabulary,
               this.db,
               { model, reuseExistingCandidate: true },
@@ -565,6 +653,10 @@ export class ModuleService {
               if (vocabularyDryRun.status !== "PASS") candidateSnapshot = null;
             }
           } catch (error) {
+            if (error instanceof IntegrationError && error.code === "request_budget_exceeded") {
+              persistFailedGeneration(error);
+              throw error;
+            }
             // Discovery provider failure / unexpected discovery error => legacy CORE.
             discoveryAudit = {
               status: "PROVIDER_FAILED",
@@ -652,6 +744,7 @@ export class ModuleService {
       ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}),
       ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}),
       ...(providerAttempts.length ? { providerAttempts } : {}),
+      ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}),
       ...(lastProviderInput ? { context: lastProviderInput } : providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
       ...(key==="problems"?{researchFocus:deriveResearchFocus([],project.niche,researchFocusAtStart)}:{}),

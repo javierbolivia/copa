@@ -40,7 +40,7 @@ describe("Gemini module lifecycle safety", () => {
     });
     app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch } });
     const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Projection", niche: "Prueba" } })).json<{ id: string }>();
-    const created = await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text: "Mi vecino dijo hijo de puta durante el paseo." } });
+    const created = await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text: "Mi vecino dijo joder durante el paseo." } });
     expect(created.statusCode).toBe(201);
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "gemini" } });
     expect(response.statusCode, response.body).toBe(200);
@@ -48,7 +48,7 @@ describe("Gemini module lifecycle safety", () => {
 
     const db = new AppDatabase(path);
     try {
-      expect(db.connection.prepare("SELECT quote_text FROM evidence_snippets WHERE project_id=?").get(project.id)).toEqual({ quote_text: "Mi vecino dijo hijo de puta durante el paseo." });
+      expect(db.connection.prepare("SELECT quote_text FROM evidence_snippets WHERE project_id=?").get(project.id)).toEqual({ quote_text: "Mi vecino dijo joder durante el paseo." });
       const generation = db.connection.prepare("SELECT input_snapshot FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string };
       const snapshot = JSON.parse(generation.input_snapshot) as { providerAttempts: Array<{ stage: string; outcome: string }>; geminiPayloadProjection: Array<{ transformedStringCount: number }> };
       expect(snapshot.providerAttempts).toEqual([expect.objectContaining({ stage: "research/direct", outcome: "usable" })]);
@@ -63,8 +63,9 @@ describe("Gemini module lifecycle safety", () => {
     const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Fail fast", niche: "Prueba" } })).json<{ id: string }>();
     const text = Array.from({ length: 61 }, (_, index) => `Problema sensible ${index + 1}`).join("\n\n");
     await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text } });
+    expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
-    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(response.statusCode, response.body).toBe(409);
     expect(fetch).toHaveBeenCalledTimes(1); // no later MAP batch and no global_reduce after a block
     await app.close(); app = undefined;
 
@@ -74,6 +75,36 @@ describe("Gemini module lifecycle safety", () => {
       const snapshot = JSON.parse(generation.input_snapshot) as { providerAttempts: Array<Record<string, unknown>> };
       expect(generation).toMatchObject({ input_tokens: 21, error_code: "invalid_response", error_message: expect.stringContaining("PROHIBITED_CONTENT") });
       expect(snapshot.providerAttempts).toEqual([expect.objectContaining({ stage: "problems/map", batch: { index: 1, total: 2 }, httpStatus: 200, candidateCount: 0, blockReason: "PROHIBITED_CONTENT", outcome: "empty", attempt: 1 })]);
+    } finally { db.close(); }
+  });
+
+  it("projects every Problems MAP and global reduce payload without changing canonical text", async () => {
+    const path = databasePath();
+    const stages: string[] = [];
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(JSON.parse(String(init?.body)).contents[0].parts[0].text)) as { stage?: string; evidence?: Array<{ id: string }> };
+      stages.push(input.stage ?? "direct");
+      expect(JSON.stringify(input)).not.toContain("joder");
+      return geminiSuccess(createDemoOutput("problems", input.evidence?.map((item) => item.id) ?? []));
+    });
+    const discoveryProvider = { name: "local-test", generate: async () => { throw new Error("discovery disabled in this lifecycle fixture"); } };
+    app = await createApp({ databasePath: path, serveFrontend: false, gemini: { apiKey: "test", fetch: fetch as typeof globalThis.fetch }, llm: { discoveryProvider } });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Projection batches", niche: "Prueba", description: "joder: texto canónico de contexto" } })).json<{ id: string }>();
+    const text = Array.from({ length: 61 }, (_, index) => `Comentario ${index + 1} con joder y contexto.`).join("\n\n");
+    await app.inject({ method: "POST", url: `/api/projects/${project.id}/sources`, payload: { sourceType: "manual", title: "Fuente", text } });
+    expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
+    const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/problems/run`, payload: { provider: "gemini" } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(stages).toEqual(["map", "map", "global_reduce"]);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    await app.close(); app = undefined;
+    const db = new AppDatabase(path);
+    try {
+      const canonical = db.connection.prepare("SELECT quote_text FROM evidence_snippets WHERE project_id=? LIMIT 1").get(project.id) as { quote_text: string };
+      expect(canonical.quote_text).toContain("joder");
+      const row = db.connection.prepare("SELECT input_snapshot FROM generations WHERE project_id=? AND provider='gemini'").get(project.id) as { input_snapshot: string };
+      const attempts = (JSON.parse(row.input_snapshot) as { providerAttempts: Array<{ stage: string }> }).providerAttempts;
+      expect(attempts.map((item) => item.stage)).toEqual(["problems/map", "problems/map", "problems/global_reduce"]);
     } finally { db.close(); }
   });
 

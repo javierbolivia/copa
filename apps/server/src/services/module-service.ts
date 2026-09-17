@@ -5,7 +5,7 @@ import {validateBeliefsOutput} from "./beliefs-output-validator.js";
 import {validateMechanismOutput} from "./mechanism-output-validator.js";
 import {AVATAR_FIELDS} from "@our-platform/shared";
 import {validateAvatarOutput} from "./avatar-output-validator.js";
-import type { ArtifactVersion, LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
+import type { ArtifactVersion, LlmGenerateRequest, LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -15,7 +15,8 @@ import type { ArtifactRepository } from "../repositories/artifact-repository.js"
 import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
 import type { WorkflowRepository } from "../repositories/workflow-repository.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
-import type { GeminiProvider } from "../integrations/gemini-provider.js";
+import { GeminiResponseError, type GeminiProvider } from "../integrations/gemini-provider.js";
+import { IntegrationError } from "../integrations/integration-error.js";
 import { DEEPSEEK_DEFAULT_MODEL, type DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import type { FileExporterService } from "./file-exporter-service.js";
 import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
@@ -45,6 +46,7 @@ import {
 import { runDomainVocabularyDryRun, type DomainVocabularyDryRunResult } from "./domain-vocabulary-dry-run.js";
 import { validateResearchOutput } from "./research-output-validator.js";
 import { projectEvidenceForProvider, type ProviderEvidenceAudit } from "./provider-evidence-projection.js";
+import { buildGeminiProjection, type GeminiPayloadProjectionAudit } from "./gemini-payload-projection.js";
 import {
   buildProductGroundingSnapshot,
   buildProductStructuredOutputSchema,
@@ -54,6 +56,39 @@ import {
 } from "./product-output-validator.js";
 
 export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
+const GEMINI_MAX_ATTEMPTS = 2;
+const GEMINI_RETRY_DELAY_MS = 250;
+
+type ProviderStage = "research/direct" | "problems/map" | "problems/global_reduce" | "direct";
+interface ProviderAttemptAudit {
+  readonly stage: ProviderStage;
+  readonly batch?: { readonly index: number; readonly total: number };
+  readonly attempt: number;
+  readonly httpStatus?: number;
+  readonly candidateCount?: number;
+  readonly blockReason?: string;
+  readonly finishReason?: string;
+  readonly responseId?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly outcome: "usable" | "empty" | "error";
+  readonly errorCode?: string;
+  readonly errorMessage?: string;
+  readonly retryable?: boolean;
+}
+
+const sleep = (milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
+function isRetryableGeminiFailure(error: unknown): error is IntegrationError {
+  return error instanceof IntegrationError && error.retryable && (error.status === 429 || error.status === 503);
+}
+
+function providerAttemptFromError(stage: ProviderStage, attempt: number, error: unknown, batch?: { readonly index: number; readonly total: number }): ProviderAttemptAudit {
+  const base = { stage, attempt, ...(batch ? { batch } : {}) };
+  if (error instanceof GeminiResponseError) return { ...base, ...error.diagnostics, outcome: "empty", errorCode: error.code, errorMessage: error.message, retryable: false };
+  if (error instanceof IntegrationError) return { ...base, ...(error.status === undefined ? {} : { httpStatus: error.status }), outcome: "error", errorCode: error.code, errorMessage: error.message, retryable: error.retryable };
+  return { ...base, outcome: "error", errorCode: "generation_error", errorMessage: error instanceof Error ? error.message : "La generación falló.", retryable: false };
+}
 
 export interface ModuleServiceOptions {
   readonly openAI: OpenAIProvider;
@@ -348,6 +383,9 @@ export class ModuleService {
     let structuredOutputDiagnostics: LlmGenerateResult<Record<string, unknown>>["structuredOutputDiagnostics"];
     let providerInput: Record<string, unknown> | undefined;
     let providerEvidenceAudit: ProviderEvidenceAudit | undefined;
+    let geminiProjectionAudits: GeminiPayloadProjectionAudit[] = [];
+    const providerAttempts: ProviderAttemptAudit[] = [];
+    let lastProviderInput: Record<string, unknown> | undefined;
     let problemMetrics: {commentsSelectedForSemanticAnalysis:number;batchesSentToProvider:number;batchesSentToGemini:number;semanticBatchProvider:string|null;commentsPerBatch:number;candidateInsights:number;candidateEvidenceLinks:number;clustersBeforeValidation:number}|undefined;
     const generationId = uuidv7();
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
@@ -381,6 +419,33 @@ export class ModuleService {
       };
       let generated!:LlmGenerateResult<Record<string,unknown>>;
       const providerClient:LlmProvider=selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:this.options.openAI;
+      const callProvider = async (
+        stage: ProviderStage,
+        input: Record<string, unknown>,
+        systemInstructions: string,
+        structuredOutput: NonNullable<LlmGenerateRequest["structuredOutput"]>,
+        batch?: { readonly index: number; readonly total: number },
+      ): Promise<LlmGenerateResult<Record<string, unknown>>> => {
+        const projected = selectedProvider === "gemini"
+          ? buildGeminiProjection(input, systemInstructions)
+          : { payload: input, systemInstructions, audit: undefined };
+        if (projected.audit) geminiProjectionAudits.push(projected.audit);
+        lastProviderInput = projected.payload;
+        const maxAttempts = selectedProvider === "gemini" ? GEMINI_MAX_ATTEMPTS : 1;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            const result = await providerClient.generate<Record<string, unknown>>({ provider:selectedProvider, model, systemInstructions:projected.systemInstructions, input:JSON.stringify(projected.payload), structuredOutput, maxOutputTokens:8_000 });
+            const diagnostics = result.providerDiagnostics ?? {};
+            providerAttempts.push({ stage, attempt, ...(batch ? { batch } : {}), httpStatus: typeof diagnostics.httpStatus === "number" ? diagnostics.httpStatus : 200, candidateCount: typeof diagnostics.candidateCount === "number" ? diagnostics.candidateCount : 1, ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), outcome: "usable" });
+            return result;
+          } catch (error) {
+            providerAttempts.push(providerAttemptFromError(stage, attempt, error, batch));
+            if (!isRetryableGeminiFailure(error) || attempt === maxAttempts) throw error;
+            await sleep(GEMINI_RETRY_DELAY_MS * attempt);
+          }
+        }
+        throw new Error("Gemini retry policy ended without a result.");
+      };
       try{
         const problemBatches=key==="problems"&&(selectedProvider==="gemini"||selectedProvider==="deepseek")?createProblemBatches(evidence):undefined;
         if(problemBatches){
@@ -388,7 +453,7 @@ export class ModuleService {
           for(const [index,batch] of problemBatches.entries()){
             const batchProjection=projectEvidenceForProvider(batch);
             const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
-            const mappedResult=await providerClient.generate<Record<string,unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`,input:JSON.stringify(mapInput),structuredOutput:{name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems},maxOutputTokens:8_000});
+            const mappedResult=await callProvider("problems/map", mapInput, `${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`, {name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems}, {index:index+1,total:problemBatches.length});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
@@ -398,10 +463,19 @@ export class ModuleService {
           providerInput={...providerInput,stage:"global_reduce",researchFocus:researchFocusAtStart??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
-        generated=await providerClient.generate<Record<string, unknown>>({provider:selectedProvider,model,systemInstructions:`${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. Agrupa patrones similares sin convertir toda opinión en dolor.`,input:JSON.stringify(providerInput),structuredOutput:{name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})},maxOutputTokens:8_000});
+        const finalStage: ProviderStage = key === "research" ? "research/direct" : key === "problems" ? "problems/global_reduce" : "direct";
+        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
       }
-      catch(error){const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error";this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,0,0,0,?,?,?,?,?)`).run(generationId,projectId,agentKey,selectedProvider,model,JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,...(providerEvidenceAudit?{providerEvidenceProjection:providerEvidenceAudit}:{}),context:providerInput}),promptVersion,Date.now()-startedAt,code,message,now,now);throw error;}
+      catch(error){
+        const now=new Date().toISOString(),message=error instanceof Error?error.message:`La generación ${selectedProvider} falló.`,code=typeof error==="object"&&error!==null&&"code" in error&&typeof error.code==="string"?error.code:error instanceof Error?error.name:"generation_error",failedAttempt=providerAttempts.at(-1);
+        this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?)`).run(
+          generationId,projectId,agentKey,selectedProvider,model,
+          JSON.stringify({parentVersionIds:parentIds,evidenceIds,moduleKey:key,provider:selectedProvider,model,promptHash,promptPath,...(providerEvidenceAudit?{providerEvidenceProjection:providerEvidenceAudit}:{}),...(geminiProjectionAudits.length?{geminiPayloadProjection:geminiProjectionAudits}:{}),providerAttempts,context:lastProviderInput??providerInput}),
+          promptVersion,failedAttempt?.inputTokens??0,failedAttempt?.outputTokens??0,0,Date.now()-startedAt,code,message,now,now,
+        );
+        throw error;
+      }
       output = generated.output;
       // The provider is never the source of truth for `total`: recompute it
       // deterministically from the validated `scores` (isCanonicalModuleOutput
@@ -576,7 +650,9 @@ export class ModuleService {
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}),
-      ...(providerInput ? { context: providerInput } : {}),
+      ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}),
+      ...(providerAttempts.length ? { providerAttempts } : {}),
+      ...(lastProviderInput ? { context: lastProviderInput } : providerInput ? { context: providerInput } : {}),
       ...(instructions?.trim()?{instructions:instructions.trim()}: {}),
       ...(key==="problems"?{researchFocus:deriveResearchFocus([],project.niche,researchFocusAtStart)}:{}),
       ...(key==="research"?{researchBrief:{project,researchFocus:researchFocusAtStart,evidenceLimit:20,activeVersionIdAtStart}}:{}),

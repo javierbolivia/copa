@@ -29,6 +29,41 @@ function safeGoogleMessage(value: unknown): string | undefined {
   return value.replace(/([?&]key=)[^&\s]+/giu, "$1[redacted]").replace(/AIza[\w-]{20,}/gu, "[redacted]").replace(/\s+/gu, " ").trim().slice(0, 500) || undefined;
 }
 
+export interface GeminiResponseDiagnostics {
+  readonly httpStatus: number;
+  readonly candidateCount: number;
+  readonly blockReason?: string;
+  readonly finishReason?: string;
+  readonly responseId?: string;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+}
+
+/** A safe, structured failure for HTTP-accepted Gemini responses without usable output. */
+export class GeminiResponseError extends IntegrationError {
+  constructor(message: string, readonly diagnostics: GeminiResponseDiagnostics) {
+    super("invalid_response", message, { status: diagnostics.httpStatus, retryable: false });
+  }
+}
+
+function responseDiagnostics(body: Record<string, unknown>, httpStatus = 200): GeminiResponseDiagnostics {
+  const promptFeedback = isRecord(body.promptFeedback) ? body.promptFeedback : undefined;
+  const candidates = Array.isArray(body.candidates) ? body.candidates : [];
+  const first = isRecord(candidates[0]) ? candidates[0] : undefined;
+  const usage = isRecord(body.usageMetadata) ? body.usageMetadata : undefined;
+  const inputTokens = number(usage?.promptTokenCount);
+  const outputTokens = number(usage?.candidatesTokenCount);
+  return {
+    httpStatus,
+    candidateCount: candidates.length,
+    ...(promptFeedback && typeof promptFeedback.blockReason === "string" ? { blockReason: promptFeedback.blockReason } : {}),
+    ...(first && typeof first.finishReason === "string" ? { finishReason: first.finishReason } : {}),
+    ...(typeof body.responseId === "string" ? { responseId: body.responseId } : {}),
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+  };
+}
+
 function noCandidateDiagnostic(body: Record<string, unknown>): string | undefined {
   const promptFeedback = isRecord(body.promptFeedback) ? body.promptFeedback : undefined;
   const blockReason = promptFeedback && typeof promptFeedback.blockReason === "string" ? promptFeedback.blockReason : undefined;
@@ -49,7 +84,8 @@ async function geminiHttpError(response: Response): Promise<IntegrationError> {
     }
   } catch { /* Preserve the HTTP status when Google returns a non-JSON error. */ }
   const prefix = status ? `Gemini ${status}` : `Gemini respondió con HTTP ${response.status}`;
-  return new IntegrationError("http_error", message ? `${prefix}: ${message}` : `${prefix}.`, { status: response.status, retryable: response.status >= 500 });
+  if (response.status === 429) return new IntegrationError("rate_limited", message ? `${prefix}: ${message}` : `${prefix}.`, { status: 429, retryable: true });
+  return new IntegrationError("http_error", message ? `${prefix}: ${message}` : `${prefix}.`, { status: response.status, retryable: response.status === 503 });
 }
 
 export class GeminiProvider implements LlmProvider {
@@ -95,12 +131,13 @@ export class GeminiProvider implements LlmProvider {
       return { response, body };
     });
     const candidates = body.candidates;
+    const diagnostics = responseDiagnostics(body);
     if (!Array.isArray(candidates) || !candidates[0] || typeof candidates[0] !== "object") {
-      throw new IntegrationError("invalid_response", `Gemini no devolvió candidatos.${noCandidateDiagnostic(body) ? ` ${noCandidateDiagnostic(body)}` : ""}`);
+      throw new GeminiResponseError(`Gemini no devolvió candidatos.${noCandidateDiagnostic(body) ? ` ${noCandidateDiagnostic(body)}` : ""}`, diagnostics);
     }
     const parts = (candidates[0] as { content?: { parts?: Array<{ text?: unknown }> } }).content?.parts;
     const text = Array.isArray(parts) ? parts.map((part) => typeof part.text === "string" ? part.text : "").join("\n") : "";
-    if (!text.trim()) throw new IntegrationError("invalid_response", "Gemini no devolvió texto.");
+    if (!text.trim()) throw new GeminiResponseError("Gemini no devolvió texto.", diagnostics);
     let output: unknown = text;
     if (request.structuredOutput) {
       output=parseStructuredJson(text);
@@ -108,6 +145,6 @@ export class GeminiProvider implements LlmProvider {
       if(!matchesJsonSchema(request.structuredOutput.jsonSchema,output))throw new IntegrationError("schema_mismatch", "La salida estructurada de Gemini no cumple el schema solicitado.");
     }
     const usage = body.usageMetadata as { promptTokenCount?: unknown; candidatesTokenCount?: unknown } | undefined, inputTokens = number(usage?.promptTokenCount), outputTokens = number(usage?.candidatesTokenCount);
-    return { provider: this.name, requestedModel: request.model, reportedModel: request.model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" } };
+    return { provider: this.name, requestedModel: request.model, reportedModel: request.model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" }, ...(diagnostics.finishReason ? { finishReason: diagnostics.finishReason } : {}), providerDiagnostics: { ...diagnostics } };
   }
 }

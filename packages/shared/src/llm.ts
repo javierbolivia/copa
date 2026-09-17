@@ -32,6 +32,8 @@ export interface LlmGenerateResult<TOutput = string> {
   readonly output: TOutput;
   readonly usage: LlmUsage;
   readonly finishReason?: string;
+  /** Provider-neutral, safe response metadata for request correlation/audits. */
+  readonly providerDiagnostics?: Readonly<Record<string, unknown>>;
   readonly structuredOutputDiagnostics?: {
     readonly attemptCount: number;
     readonly recoveredAfterInvalidSchema: boolean;

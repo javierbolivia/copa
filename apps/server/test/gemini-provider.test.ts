@@ -28,6 +28,10 @@ describe("GeminiProvider",()=>{
   });
   it("registra el motivo de bloqueo sin incluir la respuesta ni el contenido enviado",async()=>{
     const provider=new GeminiProvider({apiKey:"test",fetch:async()=>new Response(JSON.stringify({promptFeedback:{blockReason:"PROHIBITED_CONTENT",unsafeQuote:"texto que no debe exponerse"}}),{status:200,headers:{"content-type":"application/json"}})});
-    await expect(provider.generate({provider:"gemini",model:"m",systemInstructions:"x",input:"contenido confidencial",structuredOutput:{name:"x",jsonSchema:{type:"object"}}})).rejects.toMatchObject({code:"invalid_response",message:"Gemini no devolvió candidatos. Motivo: PROHIBITED_CONTENT."});
+    await expect(provider.generate({provider:"gemini",model:"m",systemInstructions:"x",input:"contenido confidencial",structuredOutput:{name:"x",jsonSchema:{type:"object"}}})).rejects.toMatchObject({code:"invalid_response",status:200,message:"Gemini no devolvió candidatos. Motivo: PROHIBITED_CONTENT.",diagnostics:{httpStatus:200,candidateCount:0,blockReason:"PROHIBITED_CONTENT"}});
+  });
+  it.each([429,503])("preserva HTTP %s para la política controlada de ModuleService",async(status)=>{
+    const provider=new GeminiProvider({apiKey:"test",fetch:async()=>new Response(JSON.stringify({error:{status:status===429?"RESOURCE_EXHAUSTED":"UNAVAILABLE",message:"retryable"}}),{status,headers:{"content-type":"application/json"}})});
+    await expect(provider.generate({provider:"gemini",model:"m",systemInstructions:"x",input:"x"})).rejects.toMatchObject({code:status===429?"rate_limited":"http_error",status,retryable:true});
   });
 });

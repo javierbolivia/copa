@@ -560,6 +560,7 @@ export class ModuleService {
           const rawBatches = createProblemBatches(evidence);
           problemBatches = rawBatches.map((b) => ({ evidence: b }));
         }
+        let mappedCandidates: Record<string, unknown>[] | undefined;
         if(problemBatches){
           // A Problems run has one MAP request per deterministic batch and one
           // global reduce. If no exact ACTIVE vocabulary exists, discovery may
@@ -587,20 +588,17 @@ export class ModuleService {
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
             mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
           }
-          if (clusteringResult) {
-            const reconciled = reconcileCandidatesWithClusters(mapped, clusteringResult);
-            mapped.length = 0;
-            mapped.push(...reconciled);
-          }
+          mappedCandidates = mapped;
           problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:evidence.length > 120 ? Math.ceil(evidence.length / problemBatches.length) : 60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
           providerInput={...providerInput,stage:"global_reduce",researchFocus:researchFocusAtStart??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
         const finalStage: ProviderStage = key === "research" ? "research/direct" : key === "problems" ? "problems/global_reduce" : "direct";
-        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
+        const reduceInstruction = key === "problems" ? "\n\nEtapa REDUCE global: Consolida y sintetiza los candidatos en una lista de 8 a 15 problemas canónicos principales bien diferenciados, combinando candidatos redundantes o menores. Cada item debe ser conciso e incluir id, name, category, summary y sus evidenceIds representativos." : "";
+        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}${reduceInstruction}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
         if (key === "problems" && clusteringResult && Array.isArray((generated.output as { items?: unknown }).items)) {
-          const finalReconciled = reconcileCandidatesWithClusters((generated.output as { items: Record<string, unknown>[] }).items, clusteringResult);
+          const finalReconciled = reconcileCandidatesWithClusters((generated.output as { items: Record<string, unknown>[] }).items, clusteringResult, mappedCandidates, { filterSupported: true });
           (generated.output as { items: unknown[] }).items = finalReconciled;
         }
       }
@@ -1106,12 +1104,29 @@ function buildKnowledgePromptContext(rows:ModuleKnowledgeItem[],maxCharacters:nu
   return context;
 }
 
-/** Keep semantic parent data while excluding the large deterministic Problems audit. */
+/** Keep semantic parent data while excluding the large deterministic Problems audit and bloated quote arrays. */
 function providerParentOutputs(parents:Partial<Record<ModuleKey,unknown>>):Partial<Record<ModuleKey,unknown>>{
   return Object.fromEntries(Object.entries(parents).map(([key,value])=>{
     if(key!=="problems"||typeof value!=="object"||value===null||Array.isArray(value))return[key,value];
     const problems=value as Record<string,unknown>;
-    return[key,{schemaVersion:problems.schemaVersion,researchFocus:problems.researchFocus,qualityAlgorithmVersion:problems.qualityAlgorithmVersion,items:problems.items}];
+    const items = Array.isArray(problems.items)
+      ? problems.items.map((item) => {
+          const p = asRecord(item);
+          return {
+            id: p.id,
+            name: p.name,
+            category: p.category,
+            summary: p.summary,
+            evidenceIds: Array.isArray(p.evidenceIds) ? p.evidenceIds.slice(0, 10) : [],
+            evidenceCount: p.evidenceCount,
+            uniqueAuthors: p.uniqueAuthors,
+            uniqueSources: p.uniqueSources,
+            problemStrengthScore: p.problemStrengthScore,
+            strengthLevel: p.strengthLevel,
+          };
+        })
+      : [];
+    return[key,{schemaVersion:problems.schemaVersion,researchFocus:problems.researchFocus,qualityAlgorithmVersion:problems.qualityAlgorithmVersion,items}];
   })) as Partial<Record<ModuleKey,unknown>>;
 }
 

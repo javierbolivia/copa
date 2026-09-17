@@ -30,7 +30,7 @@ function loadRealEvidence(): EvidenceItem[] {
          AND s.include_in_analysis = 1
          AND c.analysis_eligible = 1
          AND s.status IN ('ready', 'completed')`,
-    ).all(PROJECT_ID) as EvidenceItem[];
+    ).all(PROJECT_ID) as unknown as EvidenceItem[];
     return rows;
   } finally {
     db.close();

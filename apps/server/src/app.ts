@@ -31,6 +31,8 @@ import {
 import type { ModuleServiceOptions } from "./services/module-service.js";
 import { GeminiProvider, type GeminiProviderOptions } from "./integrations/gemini-provider.js";
 import { DeepSeekProvider, type DeepSeekProviderOptions } from "./integrations/deepseek-provider.js";
+import { GroqProvider, type GroqProviderOptions } from "./integrations/groq-provider.js";
+import { OpenRouterProvider, type OpenRouterProviderOptions } from "./integrations/openrouter-provider.js";
 import { TraceabilityService } from "./services/traceability-service.js";
 import { registerTraceabilityRoutes } from "./routes/traceability.js";
 import { KnowledgeRepository } from "./repositories/knowledge-repository.js";
@@ -58,7 +60,9 @@ export interface CreateAppOptions {
   readonly openAI?: OpenAIProviderOptions;
   readonly gemini?: GeminiProviderOptions;
   readonly deepSeek?: DeepSeekProviderOptions;
-  readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini"|"deepSeek">;
+  readonly groq?: GroqProviderOptions;
+  readonly openRouter?: OpenRouterProviderOptions;
+  readonly llm?: Omit<ModuleServiceOptions, "openAI"|"gemini"|"deepSeek"|"groq"|"openRouter">;
   /** Overrides the real multi-source Research wiring; tests inject doubles here. */
   readonly marketResearch?: Partial<MarketResearchServiceOptions>;
 }
@@ -96,6 +100,16 @@ export async function createApp(
     thinking: "disabled",
     ...options.deepSeek,
   });
+  const groq = new GroqProvider({
+    ...(process.env.GROQ_API_KEY ? { apiKey: process.env.GROQ_API_KEY } : {}),
+    ...(process.env.GROQ_MODEL?.trim() ? { model: process.env.GROQ_MODEL } : {}),
+    ...options.groq,
+  });
+  const openRouter = new OpenRouterProvider({
+    ...(process.env.OPENROUTER_API_KEY ? { apiKey: process.env.OPENROUTER_API_KEY } : {}),
+    ...(process.env.OPENROUTER_MODEL?.trim() ? { model: process.env.OPENROUTER_MODEL } : {}),
+    ...options.openRouter,
+  });
   const knowledge = new KnowledgeRepository(database);
   const vocabulary = new SemanticVocabularyRepository(database);
   const modules = new ModuleService(
@@ -110,6 +124,8 @@ export async function createApp(
       openAI,
       gemini,
       deepSeek,
+      groq,
+      openRouter,
       ...(process.env.OPENAI_ECONOMY_MODEL
         ? { economyModel: process.env.OPENAI_ECONOMY_MODEL }
         : {}),

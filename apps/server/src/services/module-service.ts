@@ -18,6 +18,14 @@ import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import { GeminiResponseError, type GeminiProvider } from "../integrations/gemini-provider.js";
 import { IntegrationError } from "../integrations/integration-error.js";
 import { DEEPSEEK_DEFAULT_MODEL, type DeepSeekProvider } from "../integrations/deepseek-provider.js";
+import { GROQ_DEFAULT_MODEL, type GroqProvider } from "../integrations/groq-provider.js";
+import { OPENROUTER_DEFAULT_MODEL, type OpenRouterProvider } from "../integrations/openrouter-provider.js";
+import {
+  clusterEvidence,
+  buildClusteredMapBatches,
+  reconcileCandidatesWithClusters,
+  type LocalClusteringResult,
+} from "./local-evidence-preprocessor.js";
 import type { FileExporterService } from "./file-exporter-service.js";
 import { isCanonicalModuleOutput, MODULE_OUTPUT_SCHEMAS } from "./module-output-schema.js";
 import { getModulePrompt, type ModelTier } from "./prompt-registry.js";
@@ -153,6 +161,8 @@ export interface ModuleServiceOptions {
   readonly openAI: OpenAIProvider;
   readonly gemini: GeminiProvider;
   readonly deepSeek?: DeepSeekProvider;
+  readonly groq?: GroqProvider;
+  readonly openRouter?: OpenRouterProvider;
   readonly economyModel?: string;
   readonly powerfulModel?: string;
   readonly economyInputCostPerMillion?: number;
@@ -182,7 +192,7 @@ export class ModuleService {
     private readonly options: ModuleServiceOptions,
   ) {}
 
-  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" } {
+  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; groq?: { configured: boolean; model: string }; openrouter?: { configured: boolean; model: string }; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter" } {
     const projectSettings = projectId ? this.settings.get(projectId) : undefined;
     return {
       openai: {
@@ -192,7 +202,9 @@ export class ModuleService {
       },
       gemini:{configured:this.options.gemini.configured,economyModel:GEMINI_ANALYSIS_MODEL,powerfulModel:GEMINI_ANALYSIS_MODEL},
       deepseek:{configured:this.options.deepSeek?.configured??false,model:this.options.deepSeek?.effectiveModel??DEEPSEEK_DEFAULT_MODEL},
-      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider==="deepseek"?"deepseek":projectSettings?.preferredLlmProvider === "openai" ? "openai" : this.options.gemini.configured ? "gemini" : "mock",
+      groq:{configured:this.options.groq?.configured??false,model:this.options.groq?.effectiveModel??GROQ_DEFAULT_MODEL},
+      openrouter:{configured:this.options.openRouter?.configured??false,model:this.options.openRouter?.effectiveModel??OPENROUTER_DEFAULT_MODEL},
+      defaultProvider:projectSettings?.preferredLlmProvider==="gemini"?"gemini":projectSettings?.preferredLlmProvider==="deepseek"?"deepseek":projectSettings?.preferredLlmProvider==="groq"?"groq":projectSettings?.preferredLlmProvider==="openrouter"?"openrouter":projectSettings?.preferredLlmProvider === "openai" ? "openai" : (this.options.deepSeek?.configured ? "deepseek" : this.options.gemini.configured ? "gemini" : "mock"),
     };
   }
 
@@ -370,7 +382,7 @@ export class ModuleService {
     if (!definition) throw new Error("Módulo desconocido.");
     const projectSettings = this.settings.get(projectId);
     const requestedProvider = provider ?? projectSettings?.preferredLlmProvider ?? "mock";
-    if (requestedProvider !== "mock" && requestedProvider !== "openai"&&requestedProvider!=="gemini"&&requestedProvider!=="deepseek") {
+    if (requestedProvider !== "mock" && requestedProvider !== "openai" && requestedProvider !== "gemini" && requestedProvider !== "deepseek" && requestedProvider !== "groq" && requestedProvider !== "openrouter") {
       throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
     }
     const selectedProvider = key === "sources" ? "mock" : requestedProvider;
@@ -379,6 +391,8 @@ export class ModuleService {
     }
     if(selectedProvider==="gemini"&&!this.options.gemini.configured)throw new Error("Gemini no está configurado. Define GEMINI_API_KEY o ejecuta con Demo / Mock.");
     if(selectedProvider==="deepseek"&&!this.options.deepSeek?.configured)throw new Error("DeepSeek no está configurado. Define DEEPSEEK_API_KEY o ejecuta con el proveedor Mock.");
+    if(selectedProvider==="groq"&&!this.options.groq?.configured)throw new Error("Groq no está configurado. Define GROQ_API_KEY o ejecuta con el proveedor Mock.");
+    if(selectedProvider==="openrouter"&&!this.options.openRouter?.configured)throw new Error("OpenRouter no está configurado. Define OPENROUTER_API_KEY o ejecuta con el proveedor Mock.");
     const startedAt = Date.now();
     const activeVersionIdAtStart=this.activeVersion(projectId,key)?.id??null;
     const researchFocusAtStart=key==="problems"||key==="research"?(this.settings.researchFocus(projectId)?.value??null):null;
@@ -408,7 +422,7 @@ export class ModuleService {
 
     const evidence = key==="research"?this.researchEvidence(projectId):this.db.connection.prepare(
       key === "problems"
-        ? "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
+        ? "SELECT e.id, e.comment_id AS commentId, e.quote_text AS quoteText, c.author, e.source_id AS sourceId, s.title AS sourceTitle, c.likes, c.is_reply AS isReply, c.thread_id AS threadId FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
         : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
     ).all(projectId) as unknown as Array<{ id: string; quoteText: string }>;
     const project = this.db.connection.prepare("SELECT name,niche,description FROM projects WHERE id = ?").get(projectId) as { name:string;niche: string;description:string|null };
@@ -466,14 +480,14 @@ export class ModuleService {
         promptVersion, failedAttempt?.inputTokens ?? 0, failedAttempt?.outputTokens ?? 0, 0, Date.now() - startedAt, code, message, now, now,
       );
     };
-    if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek") && key !== "sources") {
+    if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek"||selectedProvider==="groq"||selectedProvider==="openrouter") && key !== "sources") {
       const prompt = getModulePrompt(key);
       if (!prompt) throw new Error(`No existe un prompt activo para el modulo ${key}.`);
       agentKey = prompt.agentKey;
       promptVersion = prompt.versionHash;
       promptHash = prompt.hash;
       promptPath = prompt.relativePath;
-      model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:resolveModel(prompt.modelTier, projectSettings, this.options);
+      model = selectedProvider==="gemini"?GEMINI_ANALYSIS_MODEL:selectedProvider==="deepseek"?this.options.deepSeek!.effectiveModel:selectedProvider==="groq"?(this.options.groq?.effectiveModel||GROQ_DEFAULT_MODEL):selectedProvider==="openrouter"?(this.options.openRouter?.effectiveModel||OPENROUTER_DEFAULT_MODEL):resolveModel(prompt.modelTier, projectSettings, this.options);
       // Product uses its own allow-listed grounding snapshot. Other modules
       // receive a provider-only projection of the evidence below.
       const evidenceProjection = productGroundingSnapshot ? undefined : projectEvidenceForProvider(evidence);
@@ -496,7 +510,7 @@ export class ModuleService {
         additionalInstructions: instructions?.trim() || null,
       };
       let generated!:LlmGenerateResult<Record<string,unknown>>;
-      const providerClient:LlmProvider=selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:this.options.openAI;
+      const providerClient:LlmProvider=selectedProvider==="gemini"?this.options.gemini:selectedProvider==="deepseek"?this.options.deepSeek!:selectedProvider==="groq"?this.options.groq!:selectedProvider==="openrouter"?this.options.openRouter!:this.options.openAI;
       const callProvider = async (
         stage: ProviderStage,
         input: Record<string, unknown>,
@@ -527,7 +541,25 @@ export class ModuleService {
         throw new Error("Gemini retry policy ended without a result.");
       };
       try{
-        const problemBatches=key==="problems"&&(selectedProvider==="gemini"||selectedProvider==="deepseek")?createProblemBatches(evidence):undefined;
+        let clusteringResult: LocalClusteringResult | undefined;
+        type ProblemBatchItem = { evidence: typeof evidence; clusters?: unknown[] };
+        let problemBatches: ProblemBatchItem[] | undefined;
+
+        if (key === "problems" && (selectedProvider === "deepseek" || selectedProvider === "groq" || selectedProvider === "openrouter")) {
+          clusteringResult = clusterEvidence(evidence as unknown as import("./local-evidence-preprocessor.js").EvidenceItem[]);
+          const { batches } = buildClusteredMapBatches(clusteringResult);
+          problemBatches = batches.map((b) => {
+            const repIds = new Set(b.clusters.flatMap((c) => c.representativeEvidenceIds));
+            const repEvidence = evidence.filter((e) => repIds.has(e.id));
+            return {
+              evidence: repEvidence,
+              clusters: b.clusters,
+            };
+          });
+        } else if (key === "problems" && selectedProvider === "gemini") {
+          const rawBatches = createProblemBatches(evidence);
+          problemBatches = rawBatches.map((b) => ({ evidence: b }));
+        }
         if(problemBatches){
           // A Problems run has one MAP request per deterministic batch and one
           // global reduce. If no exact ACTIVE vocabulary exists, discovery may
@@ -547,21 +579,30 @@ export class ModuleService {
           }
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
-            const batchProjection=projectEvidenceForProvider(batch);
-            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
+            const batchProjection=projectEvidenceForProvider(batch.evidence);
+            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batch.clusters?{clusters:batch.clusters}:{}),...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
             const mappedResult=await callProvider("problems/map", mapInput, `${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`, {name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems}, {index:index+1,total:problemBatches.length});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
             mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
           }
-          problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
+          if (clusteringResult) {
+            const reconciled = reconcileCandidatesWithClusters(mapped, clusteringResult);
+            mapped.length = 0;
+            mapped.push(...reconciled);
+          }
+          problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:evidence.length > 120 ? Math.ceil(evidence.length / problemBatches.length) : 60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
           providerInput={...providerInput,stage:"global_reduce",researchFocus:researchFocusAtStart??project.niche,evidence:undefined,candidates:mapped};
           usage={inputTokens:mapInputTokens,outputTokens:mapOutputTokens,estimatedCost:mapCost,currency:"USD",usageKind:"estimated"};
         }
         const finalStage: ProviderStage = key === "research" ? "research/direct" : key === "problems" ? "problems/global_reduce" : "direct";
         generated=await callProvider(finalStage, providerInput, `${prompt.instructions}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
+        if (key === "problems" && clusteringResult && Array.isArray((generated.output as { items?: unknown }).items)) {
+          const finalReconciled = reconcileCandidatesWithClusters((generated.output as { items: Record<string, unknown>[] }).items, clusteringResult);
+          (generated.output as { items: unknown[] }).items = finalReconciled;
+        }
       }
       catch(error){
         persistFailedGeneration(error);
@@ -613,6 +654,10 @@ export class ModuleService {
             ? this.options.gemini
             : selectedProvider === "deepseek"
               ? this.options.deepSeek
+            : selectedProvider === "groq"
+              ? this.options.groq
+            : selectedProvider === "openrouter"
+              ? this.options.openRouter
             : selectedProvider === "openai"
               ? this.options.openAI
               : undefined);

@@ -45,6 +45,9 @@ const SENSITIVE_SPANS: readonly SensitiveSpan[] = [
   { kind: "PROFANITY_REDACTED", pattern: /(?:puta\s+madre|joder|coñ[oa])/giu, replacement: "[insulto omitido]" },
   { kind: "SLUR_REDACTED", pattern: /\b(?:maric[oó]n(?:es)?|put[ao]s?|subnormal(?:es)?|retrasad[oa]s?|imb[eé]cil(?:es)?)\b/giu, replacement: "[insulto dirigido omitido]" },
   { kind: "GRAPHIC_VIOLENCE_REDACTED", pattern: /cortad[oa]s?\s+las?\s+(?:dos\s+)?manos?/giu, replacement: "[violencia gráfica omitida]" },
+  // Stem variants cover real-world Spanish conjugations that the infinitive-only
+  // list below misses (for example, mordió, muerda, herido, maltrato or daño).
+  { kind: "GRAPHIC_VIOLENCE_REDACTED", pattern: /\b(?:mord|muerd|ataqu|agred|lastim|herid|herir|maltrat|dañ)[\p{L}\p{M}]*/giu, replacement: "[conducta violenta descrita]" },
   { kind: "GRAPHIC_VIOLENCE_REDACTED", pattern: /\b(?:matar(?:lo|la|los|las|me|te)?|asesinar(?:lo|la|los|las)?|apuñal\w*|ahorcar\w*|degollar\w*|descuartizar\w*|sangr\w*|violenci\w*|muert[eo]\w*|golpear\w*|pegar(?:le|les)?|atacar\w*|morder\w*|agresi[óo]n|agresiv\w*)\b/giu, replacement: "[conducta violenta descrita]" },
   { kind: "SELF_HARM_REDACTED", pattern: /\b(?:suicid\w*|autolesion\w*|quitarme\s+la\s+vida|matarme)\b/giu, replacement: "[autolesión descrita]" },
   { kind: "SEXUAL_VIOLENCE_REDACTED", pattern: /\b(?:violaci[óo]n|abuso\s+sexual|pornograf\w*)\b/giu, replacement: "[contenido sexual sensible omitido]" },

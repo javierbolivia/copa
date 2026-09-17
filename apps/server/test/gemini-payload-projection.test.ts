@@ -32,4 +32,34 @@ describe("Gemini provider payload projection", () => {
     expect(projection.systemInstructions).toBe("Devuelve JSON.");
     expect(projection.audit.transformedStringCount).toBe(0);
   });
+
+  it("projects conjugated bite and injury language in every nested Research-shaped field", () => {
+    const canonical = {
+      project: { description: "El perro mordió durante el paseo y hubo maltrato." },
+      settings: { generalNotes: "Evita que muerda a otras mascotas." },
+      researchFocus: "Lesiones causadas por mordidas.",
+      parentOutputs: { upstream: { note: "Quedó herido tras el incidente." } },
+      evidence: [{ id: "evidence-real-shape", quoteText: "Un perro mordía y dejó una herida." }],
+      knowledge: { chunks: [{ content: "La familia habló de una mordida anterior." }] },
+      additionalInstructions: "No reconstruyas textos de mordeduras ni daños.",
+    };
+    const original = structuredClone(canonical);
+
+    const projection = buildGeminiProjection(canonical, "No uses ejemplos de perros que muerden o quedan heridos.");
+
+    expect(canonical).toEqual(original);
+    expect(JSON.stringify(projection.payload)).not.toMatch(/\b(?:mord\w*|muerd\w*|herid\w*|maltrat\w*|dañ\w*)\b/iu);
+    expect(projection.systemInstructions).not.toMatch(/\b(?:mord\w*|muerd\w*|herid\w*|maltrat\w*|dañ\w*)\b/iu);
+    expect(projection.payload.evidence[0]?.id).toBe("evidence-real-shape");
+    expect(projection.audit.transformations.map((item) => item.path)).toEqual(expect.arrayContaining([
+      "payload.project.description",
+      "payload.settings.generalNotes",
+      "payload.researchFocus",
+      "payload.parentOutputs.upstream.note",
+      "payload.evidence[0].quoteText",
+      "payload.knowledge.chunks[0].content",
+      "payload.additionalInstructions",
+      "systemInstructions",
+    ]));
+  });
 });

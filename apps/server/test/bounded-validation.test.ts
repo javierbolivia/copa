@@ -13,7 +13,7 @@ import { DeepSeekProvider } from "../src/integrations/deepseek-provider.js";
 import { GeminiProvider, GEMINI_ANALYSIS_MODEL } from "../src/integrations/gemini-provider.js";
 import { OpenAIProvider } from "../src/integrations/openai-provider.js";
 import { GroqProvider } from "../src/integrations/groq-provider.js";
-import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId } from "../src/services/validation-session.js";
+import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId, assertCleanAuthorizationWorktree } from "../src/services/validation-session.js";
 import { StageProviderRouter } from "../src/services/stage-provider-router.js";
 import { assertFrozenPlan, prepareBoundedPlan } from "../src/services/bounded-validation-plan.js";
 
@@ -39,6 +39,10 @@ describe("physical validation budget",()=>{
     expect(()=>resolveValidationAuthorizationId([])).toThrow("VALIDATION_AUTHORIZATION_ID_REQUIRED");
     expect(()=>resolveValidationAuthorizationId(["--authorization-id=generated-by-runner"])).toThrow("VALIDATION_AUTHORIZATION_ID_INVALID");
     expect(()=>resolveValidationAuthorizationId([`--authorization-id=${authorizationId}`,`--authorization-id=${authorizationId}`])).toThrow("VALIDATION_AUTHORIZATION_ID_REQUIRED");
+  });
+  it("requires a clean committed worktree without pinning a historical commit subject",()=>{
+    expect(()=>assertCleanAuthorizationWorktree("")).not.toThrow();
+    expect(()=>assertCleanAuthorizationWorktree(" M apps/server/src/scripts/bounded-validation.ts")).toThrow("IMPLEMENTATION_COMMIT_AND_CLEAN_WORKTREE_REQUIRED");
   });
   it("unscoped calls cannot access the one-shot transport",()=>{
     const http=vi.fn();expect(()=>authorizedValidationTransport(http)("https://api.deepseek.com/chat/completions")).toThrow("UNRESERVED_HTTP_FORBIDDEN");expect(http).not.toHaveBeenCalled();

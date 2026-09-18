@@ -21,6 +21,9 @@ export function resolveValidationAuthorizationId(args:readonly string[]):string 
   if(!validationAuthorizationId.test(values[0]))throw new Error("VALIDATION_AUTHORIZATION_ID_INVALID");
   return values[0];
 }
+export function assertCleanAuthorizationWorktree(status:string):void {
+  if(status)throw new Error("IMPLEMENTATION_COMMIT_AND_CLEAN_WORKTREE_REQUIRED");
+}
 export interface PhysicalContext { session: ValidationSession; provider:string; model:string; stage:string; batch:number|null; generationId:string }
 const physicalContext = new AsyncLocalStorage<PhysicalContext>();
 /** The one-shot CLI supplies this transport, so even an accidental unscoped

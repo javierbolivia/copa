@@ -15,7 +15,7 @@ import { FileExporterService } from "../services/file-exporter-service.js";
 import { OpenAIProvider } from "../integrations/openai-provider.js";
 import { DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import { GeminiProvider } from "../integrations/gemini-provider.js";
-import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId } from "../services/validation-session.js";
+import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId, assertCleanAuthorizationWorktree } from "../services/validation-session.js";
 import { measurePayload } from "../services/bounded-validation-plan.js";
 
 const nativeFetch=authorizedValidationTransport(globalThis.fetch);
@@ -28,7 +28,7 @@ const sessionId=resolveValidationAuthorizationId(process.argv.slice(2));
 const databasePath=resolve(WORKSPACE_ROOT,"data/our-platform.db");
 const real=process.argv.includes("--run-once");
 const git=(...args:string[])=>execFileSync("git",args,{cwd:WORKSPACE_ROOT,encoding:"utf8"}).trim();
-if(real && (git("status","--porcelain") || git("log","-1","--format=%s")!=="feat: enforce bounded multi-provider validation flow"))throw new Error("IMPLEMENTATION_COMMIT_AND_CLEAN_WORKTREE_REQUIRED");
+if(real)assertCleanAuthorizationWorktree(git("status","--porcelain"));
 if(resolve(WORKSPACE_ROOT,process.env.DATA_DIR??"data","our-platform.db")!==databasePath)throw new Error("DATA_DIR_DOES_NOT_POINT_TO_REAL_DATABASE");
 // Read-only preflight must not migrate or write anything.
 const database=real?new AppDatabase(databasePath):{connection:new DatabaseSync(databasePath,{readOnly:true}),path:databasePath} as AppDatabase;

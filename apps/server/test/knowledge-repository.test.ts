@@ -5,7 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AppDatabase } from "../src/database/database.js";
-import { migrations } from "../src/database/migrations.js";
+import { migrations, LATEST_SCHEMA_VERSION } from "../src/database/migrations.js";
 import { ArtifactRepository } from "../src/repositories/artifact-repository.js";
 import { KnowledgeRepository } from "../src/repositories/knowledge-repository.js";
 import { ProjectRepository } from "../src/repositories/project-repository.js";
@@ -33,7 +33,7 @@ describe("Knowledge schema 6 y repository", () => {
     // AppDatabase applies every missing migration through the latest schema. A truly marked
     // v5 database already contains tables 1-5; this fixture exercises the additive path.
     const db = new AppDatabase(path);
-    expect(db.getSchemaVersion()).toBe(12);
+    expect(db.getSchemaVersion()).toBe(LATEST_SCHEMA_VERSION);
     expect(db.connection.prepare("SELECT name FROM projects").get()).toMatchObject({ name: "Legado" });
     expect(db.connection.prepare("SELECT 1 ok FROM sqlite_master WHERE type='table' AND name='knowledge_chunks_fts'").get()).toMatchObject({ ok: 1 });
     expect(db.connection.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });

@@ -97,7 +97,7 @@ export class GeminiProvider implements LlmProvider {
 
   constructor(options: GeminiProviderOptions = {}) {
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.fetchFn = validationFetch("gemini", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://generativelanguage.googleapis.com/v1beta/models";
   }
@@ -148,3 +148,5 @@ export class GeminiProvider implements LlmProvider {
     return { provider: this.name, requestedModel: request.model, reportedModel: request.model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" }, ...(diagnostics.finishReason ? { finishReason: diagnostics.finishReason } : {}), providerDiagnostics: { ...diagnostics } };
   }
 }
+import { validationFetch } from "../services/validation-session.js";
+export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";

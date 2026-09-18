@@ -142,7 +142,7 @@ export class DeepSeekProvider implements LlmProvider {
 
   constructor(options: DeepSeekProviderOptions = {}) {
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.fetchFn = validationFetch("deepseek", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://api.deepseek.com/chat/completions";
     this.thinking = options.thinking;
@@ -275,3 +275,4 @@ export class DeepSeekProvider implements LlmProvider {
     };
   }
 }
+import { validationFetch } from "../services/validation-session.js";

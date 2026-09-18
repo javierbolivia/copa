@@ -52,7 +52,7 @@ export class GroqProvider implements LlmProvider {
 
   constructor(options: GroqProviderOptions = {}) {
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.fetchFn = validationFetch("groq", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.endpoint = options.endpoint ?? "https://api.groq.com/openai/v1/chat/completions";
     this.effectiveModel = options.model?.trim() || GROQ_DEFAULT_MODEL;
@@ -174,3 +174,4 @@ export class GroqProvider implements LlmProvider {
     };
   }
 }
+import { validationFetch } from "../services/validation-session.js";

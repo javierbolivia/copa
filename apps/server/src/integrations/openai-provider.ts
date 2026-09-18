@@ -62,7 +62,7 @@ export class OpenAIProvider implements LlmProvider {
 
   constructor(options: OpenAIProviderOptions = {}) {
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.fetchFn = validationFetch("openai", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://api.openai.com/v1/responses";
   }
@@ -167,3 +167,4 @@ export class OpenAIProvider implements LlmProvider {
     };
   }
 }
+import { validationFetch } from "../services/validation-session.js";

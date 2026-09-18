@@ -17,6 +17,7 @@
 import type { CommentKind } from "./problem-quality-engine.js";
 import { analyzeEvidenceSupport, classifyCommentKind } from "./problem-quality-engine.js";
 import { createHash } from "node:crypto";
+import type { SemanticVocabularySnapshot } from "./semantic-vocabulary.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -152,10 +153,10 @@ class InternalCluster {
 
 export function clusterEvidence(
   items: readonly EvidenceItem[],
-  options: { maxClustersForLlm?: number } = {},
+  options: { maxClustersForLlm?: number; strict?: boolean } = {},
 ): LocalClusteringResult {
   const startTime = Date.now();
-  const maxClustersForLlm = options.maxClustersForLlm ?? 90;
+  const maxClustersForLlm = options.maxClustersForLlm ?? (options.strict ? items.length : 90);
 
   // 1. Build profiles
   const profiles: EvidenceProfile[] = items.map((item) => {
@@ -190,13 +191,14 @@ export function clusterEvidence(
 
   // 3. Leader-centroid clustering
   // Sort profiles by token count descending so the most specific comments seed clusters first
-  const sortedProfiles = [...profiles].sort((a, b) => b.tokens.size - a.tokens.size);
+  const duplicateIds = new Set(options.strict ? [...normalizedGroups.values()].flatMap(group=>group.slice(1).map(i=>profiles[i]!.item.id)) : []);
+  const sortedProfiles = profiles.filter(p=>!duplicateIds.has(p.item.id)).sort((a, b) => b.tokens.size - a.tokens.size || a.item.id.localeCompare(b.item.id));
 
   const internalClusters: InternalCluster[] = [];
   const unassigned: EvidenceProfile[] = [];
 
   for (const p of sortedProfiles) {
-    if (p.tokens.size < 1) {
+    if (p.tokens.size < 1 || (options.strict && (p.tokens.size<3 || p.commentKind==="PRAISE" || p.commentKind==="SOLUTION"))) {
       unassigned.push(p);
       continue;
     }
@@ -205,6 +207,7 @@ export function clusterEvidence(
     let bestScore = 0;
 
     for (const c of internalClusters) {
+      if(options.strict && [...p.tokens].filter(t=>c.members[0]!.tokens.has(t)).length<2)continue;
       const s = c.score(p.tokens);
       if (s > bestScore) {
         bestScore = s;
@@ -216,7 +219,7 @@ export function clusterEvidence(
       bestCluster.add(p);
     } else if (internalClusters.length < maxClustersForLlm) {
       internalClusters.push(new InternalCluster(p));
-    } else if (bestCluster && bestScore >= 0.12) {
+    } else if (!options.strict && bestCluster && bestScore >= 0.12) {
       bestCluster.add(p);
     } else {
       unassigned.push(p);
@@ -225,7 +228,8 @@ export function clusterEvidence(
 
   // 4. Assign remaining unassigned items
   if (unassigned.length > 0) {
-    if (internalClusters.length === 0) {
+    if(options.strict){for(const p of unassigned)internalClusters.push(new InternalCluster(p));}
+    else if (internalClusters.length === 0) {
       internalClusters.push(new InternalCluster(unassigned[0]!));
       for (let i = 1; i < unassigned.length; i++) internalClusters[0]!.add(unassigned[i]!);
     } else {
@@ -243,6 +247,13 @@ export function clusterEvidence(
         internalClusters.push(c);
       }
     }
+  }
+
+  if(options.strict)for(const group of normalizedGroups.values()){
+    const first=profiles[group[0]!]!;
+    const cluster=internalClusters.find(c=>c.members.some(p=>p.item.id===first.item.id));
+    // Retain canonical traceability without letting duplicate text shift centroids.
+    if(cluster)for(const i of group.slice(1))cluster.members.push(profiles[i]!);
   }
 
   // 5. Build final LocalCluster objects
@@ -280,17 +291,23 @@ export function clusterEvidence(
     const repIds: string[] = [];
     const repQuotes: string[] = [];
     const usedAuthors = new Set<string>();
-    for (const p of sorted) {
+    const usedSources = new Set<string>(), usedQuotes = new Set<string>();
+    const remaining=[...sorted];
+    while(remaining.length){
+      if(options.strict)remaining.sort((a,b)=>Number(usedSources.has(a.item.sourceId))-Number(usedSources.has(b.item.sourceId)));
+      const p=remaining.shift()!;
       if (repIds.length >= 3) break;
+      if(options.strict && (p.tokens.size<3 || p.commentKind==="PRAISE" || p.commentKind==="SOLUTION" || usedQuotes.has(p.item.quoteText.trim().toLowerCase()) || p.item.quoteText.length>600))continue;
       const auth = p.item.author.trim().toLocaleLowerCase("es");
       if (usedAuthors.has(auth) && repIds.length >= 1) continue;
       usedAuthors.add(auth);
+      usedSources.add(p.item.sourceId);usedQuotes.add(p.item.quoteText.trim().toLowerCase());
       repIds.push(p.item.id);
       const qt = p.item.quoteText;
-      repQuotes.push(qt.length > 300 ? qt.slice(0, 297) + "..." : qt);
+      repQuotes.push(options.strict?qt:qt.length > 300 ? qt.slice(0, 297) + "..." : qt);
     }
 
-    const clusterId = clusterIdFromTokens(dominantTokens.length > 0 ? dominantTokens : [members[0]!.item.id]);
+    const clusterId = clusterIdFromTokens(options.strict?[...evidenceIds].sort():dominantTokens.length > 0 ? dominantTokens : [members[0]!.item.id]);
 
     clusters.push({
       clusterId,
@@ -406,7 +423,7 @@ export function reconcileCandidatesWithClusters(
   candidates: readonly Record<string, unknown>[],
   clustering: LocalClusteringResult,
   mapCandidates?: readonly Record<string, unknown>[],
-  options?: { filterSupported?: boolean },
+  options?: { filterSupported?: boolean; strict?:boolean; focus?:string|null; vocabulary?:SemanticVocabularySnapshot|null },
 ): Record<string, unknown>[] {
   const filterSupported = options?.filterSupported ?? false;
   const repToCluster = new Map<string, LocalCluster>();
@@ -487,7 +504,7 @@ export function reconcileCandidatesWithClusters(
         if (filterSupported && claim && evidenceById) {
           const item = evidenceById.get(eid);
           if (item) {
-            const support = analyzeEvidenceSupport(claim, item.quoteText, "");
+            const support = analyzeEvidenceSupport(claim, item.quoteText, options?.focus??"",options?.vocabulary);
             if (support.supportType === "DIRECT" || support.supportType === "INFERRED") {
               expandedIds.add(eid);
             }
@@ -500,7 +517,11 @@ export function reconcileCandidatesWithClusters(
 
     return {
       ...candidate,
-      evidenceIds: [...expandedIds],
+      evidenceIds: options?.strict ? [...expandedIds].filter(id=>{
+        const item=evidenceById?.get(id);if(!item)return false;
+        const support=analyzeEvidenceSupport(claim,item.quoteText,options.focus??"",options.vocabulary);
+        return support.supportType==="DIRECT"||support.supportType==="INFERRED";
+      }) : [...expandedIds],
     };
   });
 }

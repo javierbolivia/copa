@@ -18,7 +18,7 @@ import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-pl
 import { IntegrationError } from "../integrations/integration-error.js";
 import { DEEPSEEK_DEFAULT_MODEL, type DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import type { GeminiProvider } from "../integrations/gemini-provider.js";
-import { GEMINI_ANALYSIS_MODEL } from "./module-service.js";
+import { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
 import { GROQ_DEFAULT_MODEL, type GroqProvider } from "../integrations/groq-provider.js";
 import { OPENROUTER_DEFAULT_MODEL, type OpenRouterProvider } from "../integrations/openrouter-provider.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
@@ -63,6 +63,12 @@ export class StageProviderRouter {
 
   getFallbackAuditLog(): readonly StageFallbackRecord[] {
     return [...this.fallbackAuditLog];
+  }
+
+  resolveValidationStage(stage: PipelineStage): {provider:LlmProvider; model:string} {
+    if(stage==="problems/map" && this.options.deepSeek?.configured)return {provider:this.options.deepSeek,model:this.options.deepSeek.effectiveModel};
+    if((stage==="problems/global_reduce"||stage==="opportunities/direct")&&this.options.gemini?.configured)return {provider:this.options.gemini,model:GEMINI_ANALYSIS_MODEL};
+    throw new Error(`VALIDATION_STAGE_UNAVAILABLE: ${stage}`);
   }
 
   /**
@@ -193,10 +199,12 @@ export class StageProviderRouter {
     request: Omit<LlmGenerateRequest, "provider" | "model">,
     options: {
       preferredGlobal?: string;
+      autoFallback?: boolean;
+      validationMode?: boolean;
       onFallback?: (record: StageFallbackRecord) => void;
     } = {},
   ): Promise<RoutedGenerateResult<TOutput>> {
-    const chain = this.resolveProviderChain(stage, options.preferredGlobal);
+    const chain = options.validationMode ? [this.resolveValidationStage(stage)] : this.resolveProviderChain(stage, options.preferredGlobal);
     if (chain.length === 0) {
       throw new IntegrationError(
         "missing_api_key",
@@ -241,6 +249,7 @@ export class StageProviderRouter {
         };
       } catch (error) {
         lastError = error;
+        if(options.validationMode || options.autoFallback===false)throw error;
         // Don't retry budget exceeded or user-abort errors
         if (error instanceof IntegrationError && error.code === "request_budget_exceeded") {
           throw error;

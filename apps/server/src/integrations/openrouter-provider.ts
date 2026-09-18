@@ -50,7 +50,7 @@ export class OpenRouterProvider implements LlmProvider {
 
   constructor(options: OpenRouterProviderOptions = {}) {
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetch ?? globalThis.fetch;
+    this.fetchFn = validationFetch("openrouter", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://openrouter.ai/api/v1/chat/completions";
     this.effectiveModel = options.model?.trim() || OPENROUTER_DEFAULT_MODEL;
@@ -172,3 +172,4 @@ export class OpenRouterProvider implements LlmProvider {
     };
   }
 }
+import { validationFetch } from "../services/validation-session.js";

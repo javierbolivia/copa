@@ -1,0 +1,93 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
+import type { LlmGenerateResult } from "@our-platform/shared";
+
+export const VALIDATION_PLAN = [
+  {provider:"deepseek",stage:"problems/map",batch:1},
+  {provider:"deepseek",stage:"problems/map",batch:2},
+  {provider:"gemini",stage:"problems/global_reduce",batch:null},
+  {provider:"gemini",stage:"opportunities/direct",batch:null},
+] as const;
+export interface PhysicalContext { session: ValidationSession; provider:string; model:string; stage:string; batch:number|null; generationId:string }
+const physicalContext = new AsyncLocalStorage<PhysicalContext>();
+/** The one-shot CLI supplies this transport, so even an accidental unscoped
+ * provider call cannot reach its captured native fetch. */
+export function authorizedValidationTransport(transport:typeof fetch):typeof fetch {
+  return (url,init)=>{
+    const ctx=physicalContext.getStore(),last=ctx?.session.requests().at(-1);
+    if(!ctx || !last || last.outcome!=="reserved" || last.stage!==ctx.stage || last.batch!==ctx.batch || last.generation_id!==ctx.generationId)throw new Error("UNRESERVED_HTTP_FORBIDDEN");
+    return transport(url,init);
+  };
+}
+export class ValidationSession {
+  constructor(readonly db:DatabaseSync, readonly id:string) {}
+  create(projectId:string,snapshotHash:string,plan:unknown):void {
+    this.db.prepare("INSERT INTO validation_sessions(id,project_id,snapshot_hash,plan_json,created_at) VALUES(?,?,?,?,?)")
+      .run(this.id,projectId,snapshotHash,JSON.stringify(plan),new Date().toISOString());
+  }
+  row():Record<string,unknown> { const r=this.db.prepare("SELECT * FROM validation_sessions WHERE id=?").get(this.id);if(!r)throw new Error("VALIDATION_SESSION_MISSING");return r; }
+  requests():Record<string,unknown>[] {return this.db.prepare("SELECT * FROM validation_requests WHERE session_id=? ORDER BY request_number").all(this.id);}
+  start():void {
+    if(this.db.prepare("UPDATE validation_sessions SET state='RUNNING' WHERE id=? AND state='READY' AND used_requests=0").run(this.id).changes!==1)throw new Error("VALIDATION_ALREADY_STARTED");
+  }
+  claimModule(key:"problems"|"opportunities"):void {
+    const field=key==="problems"?"problems_started":"opportunities_started";
+    const expected=key==="problems"?0:3;
+    if(this.db.prepare(`UPDATE validation_sessions SET ${field}=1 WHERE id=? AND state='RUNNING' AND ${field}=0 AND used_requests=? ${key==="opportunities"?"AND problems_version_id IS NOT NULL":""}`).run(this.id,expected).changes!==1)throw new Error("DUPLICATE_OR_OUT_OF_ORDER_MODULE");
+  }
+  fail(code="VALIDATION_FAILED"):void {this.db.prepare("UPDATE validation_sessions SET state='FAILED',error_code=? WHERE id=? AND state<>'COMPLETED'").run(code,this.id);}
+  published(key:"problems"|"opportunities",versionId:string):void {
+    if(this.db.prepare(`UPDATE validation_sessions SET ${key}_version_id=? ${key==="opportunities"?",state='COMPLETED'":""} WHERE id=? AND state='RUNNING' AND used_requests=?`).run(versionId,this.id,key==="problems"?3:4).changes!==1)throw new Error("VALIDATION_PUBLICATION_CONFLICT");
+  }
+  reserve(ctx:PhysicalContext,bytes:number,candidateCount:number|null=null):number {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row=this.row(), used=Number(row.used_requests);
+      if(used>=4){this.db.prepare("UPDATE validation_sessions SET request5_attempted=1,error_code='EXTERNAL_REQUEST_BUDGET_EXHAUSTED' WHERE id=?").run(this.id);this.db.exec("COMMIT");throw new Error("EXTERNAL_REQUEST_BUDGET_EXHAUSTED");}
+      const expected=VALIDATION_PLAN[used]!;
+      if(row.state!=="RUNNING" || ctx.provider!==expected.provider || ctx.stage!==expected.stage || ctx.batch!==expected.batch)throw new Error("UNAUTHORIZED_PHYSICAL_REQUEST");
+      if(used && this.requests().at(-1)?.outcome!=="usable")throw new Error("PREVIOUS_REQUEST_NOT_VALIDATED");
+      this.db.prepare("UPDATE validation_sessions SET used_requests=used_requests+1 WHERE id=?").run(this.id);
+      this.db.prepare("INSERT INTO validation_requests(session_id,request_number,provider,requested_model,module,stage,batch,generation_id,payload_bytes,estimated_input_tokens,candidate_count,outcome) VALUES(?,?,?,?,?,?,?,?,?,?,?,'reserved')")
+        .run(this.id,used+1,ctx.provider,ctx.model,ctx.stage.split('/')[0]!,ctx.stage,ctx.batch,ctx.generationId,bytes,Math.ceil(bytes/3),candidateCount);
+      this.db.exec("COMMIT");return used+1;
+    } catch(error){if(this.db.isTransaction)this.db.exec("ROLLBACK");throw error;}
+  }
+  async invoke<T>(ctx:Omit<PhysicalContext,"session">, action:()=>Promise<LlmGenerateResult<T>>):Promise<LlmGenerateResult<T>> {
+    try {
+      const result=await physicalContext.run({...ctx,session:this},action);
+      const row=this.requests().at(-1);
+      if(!row || row.generation_id!==ctx.generationId || row.stage!==ctx.stage || row.batch!==ctx.batch || row.outcome!=="response_received")throw new Error("MISSING_PHYSICAL_TELEMETRY");
+      this.db.prepare("UPDATE validation_requests SET outcome='usable',reported_model=COALESCE(reported_model,?),input_tokens=COALESCE(?,input_tokens),output_tokens=COALESCE(?,output_tokens),finish_reason=COALESCE(?,finish_reason) WHERE session_id=? AND request_number=?")
+        .run(result.reportedModel??ctx.model,result.usage.inputTokens??null,result.usage.outputTokens??null,result.finishReason??null,this.id,Number(row.request_number));
+      return result;
+    } catch(error){this.db.prepare("UPDATE validation_requests SET outcome='failed' WHERE session_id=? AND outcome IN ('reserved','response_received')").run(this.id);this.fail();throw error;}
+  }
+}
+
+/** Called at the physical boundary, not once per logical generate(). Redirects are forbidden. */
+export function validationFetch(provider:string, transport:typeof fetch):typeof fetch {
+  return async (url,init) => {
+    const ctx=physicalContext.getStore();
+    if(!ctx)return transport(url,init);
+    if(ctx.provider!==provider)throw new Error("UNAUTHORIZED_PROVIDER");
+    const address=new URL(String(url));
+    const allowed=provider==="deepseek"?"https://api.deepseek.com/chat/completions":`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(ctx.model)}:generateContent`;
+    if(address.href!==allowed)throw new Error("UNAUTHORIZED_ENDPOINT");
+    const bytes=Buffer.byteLength(String(init?.body??""));
+    if(bytes>100_000)throw new Error("PHYSICAL_PAYLOAD_TOO_LARGE");
+    const envelope=JSON.parse(String(init?.body));
+    const payload=JSON.parse(provider==="deepseek"?envelope.messages.find((m:{role:string})=>m.role==="user").content:envelope.contents[0].parts[0].text);
+    const n=ctx.session.reserve(ctx,bytes,Array.isArray(payload.candidates)?payload.candidates.length:null),start=Date.now();
+    try {
+      const response=await transport(url,{...init,redirect:"error"});
+      ctx.session.db.prepare("UPDATE validation_requests SET http_status=?,duration_ms=?,outcome='response_received' WHERE session_id=? AND request_number=?").run(response.status,Date.now()-start,ctx.session.id,n);
+      const body=await response.clone().json().catch(()=>null) as any;
+      const usage=body?.usage??body?.usageMetadata;
+      const input=usage?.prompt_tokens??usage?.promptTokenCount??null, output=usage?.completion_tokens??usage?.candidatesTokenCount??null;
+      ctx.session.db.prepare("UPDATE validation_requests SET reported_model=?,input_tokens=?,output_tokens=?,total_tokens=?,duration_ms=?,finish_reason=? WHERE session_id=? AND request_number=?")
+        .run(body?.model??body?.modelVersion??null,input,output,usage?.total_tokens??usage?.totalTokenCount??(input!==null&&output!==null?input+output:null),Date.now()-start,body?.choices?.[0]?.finish_reason??body?.candidates?.[0]?.finishReason??null,ctx.session.id,n);
+      return response;
+    } catch(error){ctx.session.db.prepare("UPDATE validation_requests SET outcome='failed',duration_ms=? WHERE session_id=? AND request_number=?").run(Date.now()-start,ctx.session.id,n);ctx.session.fail("PHYSICAL_REQUEST_FAILED");throw error;}
+  };
+}

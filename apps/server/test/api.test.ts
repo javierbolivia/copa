@@ -27,7 +27,7 @@ describe("API local", () => {
       sqlite: {
         status: "ok",
         implementation: "node:sqlite",
-        schemaVersion: 12,
+        schemaVersion: LATEST_SCHEMA_VERSION,
       },
     });
   });
@@ -111,3 +111,4 @@ describe("API local", () => {
     expect((await app.inject({method:"GET",url:`/api/projects/${created.id}`})).statusCode).toBe(404);
   });
 });
+import { LATEST_SCHEMA_VERSION } from "../src/database/migrations.js";

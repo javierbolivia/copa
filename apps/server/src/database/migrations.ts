@@ -1111,6 +1111,26 @@ export const migrations: readonly Migration[] = [
       CREATE INDEX video_transcript_segments_retrieval_idx ON video_transcript_segments(project_id,source_id,video_id,segment_index);
     `,
   },
+{version:14,name:"014_bounded_validation",sql:`
+CREATE TABLE validation_sessions (
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ snapshot_hash TEXT NOT NULL, plan_json TEXT NOT NULL,
+ state TEXT NOT NULL DEFAULT 'READY', used_requests INTEGER NOT NULL DEFAULT 0 CHECK(used_requests BETWEEN 0 AND 4),
+ problems_started INTEGER NOT NULL DEFAULT 0, opportunities_started INTEGER NOT NULL DEFAULT 0,
+ problems_version_id TEXT, opportunities_version_id TEXT,
+ request5_attempted INTEGER NOT NULL DEFAULT 0, error_code TEXT,
+ created_at TEXT NOT NULL
+) STRICT;
+CREATE UNIQUE INDEX validation_one_active_project ON validation_sessions(project_id) WHERE state IN ('READY','RUNNING');
+CREATE TABLE validation_requests (
+ session_id TEXT NOT NULL REFERENCES validation_sessions(id) ON DELETE CASCADE, request_number INTEGER NOT NULL CHECK(request_number BETWEEN 1 AND 4),
+ provider TEXT NOT NULL, requested_model TEXT NOT NULL, reported_model TEXT,
+ module TEXT NOT NULL, stage TEXT NOT NULL, batch INTEGER, generation_id TEXT NOT NULL,
+ payload_bytes INTEGER NOT NULL, estimated_input_tokens INTEGER NOT NULL, candidate_count INTEGER,
+ input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER,
+ duration_ms INTEGER, http_status INTEGER, finish_reason TEXT, outcome TEXT NOT NULL,
+ PRIMARY KEY(session_id,request_number)
+) STRICT;
+`},
 ];
-
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

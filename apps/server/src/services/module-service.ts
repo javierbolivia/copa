@@ -63,7 +63,11 @@ import {
   type ProductValidationContext,
 } from "./product-output-validator.js";
 
-export const GEMINI_ANALYSIS_MODEL = "gemini-3.5-flash-lite";
+import { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
+export { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
+import { StageProviderRouter, type PipelineStage } from "./stage-provider-router.js";
+import { prepareBoundedPlan, assertFrozenPlan, compactValidationPayload, validationProblemSchema, type BoundedPlan } from "./bounded-validation-plan.js";
+import { ValidationSession } from "./validation-session.js";
 const GEMINI_MAX_ATTEMPTS = 2;
 const GEMINI_RETRY_DELAY_MS = 250;
 
@@ -377,7 +381,42 @@ export class ModuleService {
     return version.status==="approved"&&this.validatePersistedProduct(version).audit.ok;
   }
 
-  async run(projectId: string, key: ModuleKey, provider?: string, instructions?:string): Promise<ModuleResult> {
+  prepareValidation(projectId:string,expectedEvidence?:number):BoundedPlan {
+    const router=new StageProviderRouter(this.options);
+    for(const stage of ["problems/map","problems/global_reduce","opportunities/direct"] as const)router.resolveValidationStage(stage);
+    return prepareBoundedPlan(this.db,projectId,expectedEvidence===undefined?{}:{expectedEvidence});
+  }
+
+  async executeValidation(sessionId:string,plan:BoundedPlan):Promise<{problems:ModuleResult;opportunities:ModuleResult}> {
+    assertFrozenPlan(this.db,plan);
+    const session=new ValidationSession(this.db.connection,sessionId);
+    session.create(plan.projectId,plan.snapshotHash,{metrics:plan.metrics,maps:plan.maps,manifest:plan.clustering.clusters.map(c=>({clusterId:c.clusterId,evidenceIds:c.evidenceIds})),vocabulary:plan.vocabulary?.vocabularyVersionId??"LOCAL_CORE"});
+    session.start();
+    try {
+      const problems=await this.run(plan.projectId,"problems","deepseek",undefined,{session,plan});
+      if(problems.status!=="approved"||problems.freshness!=="fresh")throw new Error("PROBLEMS_NOT_APPROVED_FRESH");
+      const opportunities=await this.run(plan.projectId,"opportunities","gemini",undefined,{session,plan});
+      return {problems,opportunities};
+    } catch(error){
+      session.fail("VALIDATION_FAILED");
+      const last=session.requests().at(-1);
+      if(last && !this.db.connection.prepare("SELECT 1 FROM generations WHERE id=?").get(String(last.generation_id))){
+        const now=new Date().toISOString();
+        this.db.connection.prepare("INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,prompt_version,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,'bounded-validation-v1','VALIDATION_FAILED','Validation stopped; see physical request ledger.',?,?)")
+          .run(String(last.generation_id),plan.projectId,String(last.module),String(last.provider),String(last.requested_model),JSON.stringify({validationSessionId:sessionId,physicalRequests:session.requests()}),now,now);
+      }
+      throw error;
+    }
+  }
+
+  async run(projectId: string, key: ModuleKey, provider?: string, instructions?:string, validation?:{session:ValidationSession;plan:BoundedPlan}): Promise<ModuleResult> {
+    if(validation){
+      if(key!=="problems"&&key!=="opportunities")throw new Error("VALIDATION_MODULE_FORBIDDEN");
+      assertFrozenPlan(this.db,validation.plan);
+      validation.session.claimModule(key);
+    }else if(this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? LIMIT 1").get(projectId)){
+      throw new Error("VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED");
+    }
     const definition = getModule(key);
     if (!definition) throw new Error("Módulo desconocido.");
     const projectSettings = this.settings.get(projectId);
@@ -400,19 +439,20 @@ export class ModuleService {
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
     for (const parentKey of definition.parents) {
       let parent = this.get(projectId, parentKey);
-      if (!parent && parentKey === "sources") {
+      if (!validation && !parent && parentKey === "sources") {
         const sourceCount = (this.db.connection.prepare(
           "SELECT COUNT(*) AS total FROM sources WHERE project_id = ? AND status IN ('ready', 'completed')",
         ).get(projectId) as { total: number }).total;
         if (sourceCount > 0) parent = await this.run(projectId, "sources", "mock");
       }
-      if (parentKey === "sources" && parent?.freshness === "stale") {
+      if (!validation && parentKey === "sources" && parent?.freshness === "stale") {
         parent = await this.run(projectId, "sources", "mock");
       }
       if (!parent) throw new Error(`Falta completar ${parentKey}.`);
       if (parent.freshness === "stale") throw new Error(`${parentKey} está obsoleto.`);
       parentIds.push(parent.versionId);
       parentOutputs[parentKey]=parent.outputData;
+      if(validation && parentKey==="problems" && (parent.status!=="approved" || parent.versionId!==validation.session.row().problems_version_id))throw new Error("WRONG_VALIDATION_PROBLEMS_PARENT");
     }
     for (const optional of definition.optionalParents ?? []) {
       const parent = this.get(projectId, optional);
@@ -420,7 +460,7 @@ export class ModuleService {
       if(parent&&parent.freshness!=="stale")parentOutputs[optional]=parent.outputData;
     }
 
-    const evidence = key==="research"?this.researchEvidence(projectId):this.db.connection.prepare(
+    const evidence = validation ? validation.plan.snapshot.rows : key==="research"?this.researchEvidence(projectId):this.db.connection.prepare(
       key === "problems"
         ? "SELECT e.id, e.comment_id AS commentId, e.quote_text AS quoteText, c.author, e.source_id AS sourceId, s.title AS sourceTitle, c.likes, c.is_reply AS isReply, c.thread_id AS threadId FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at"
         : "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id = ? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
@@ -518,6 +558,18 @@ export class ModuleService {
         structuredOutput: NonNullable<LlmGenerateRequest["structuredOutput"]>,
         batch?: { readonly index: number; readonly total: number },
       ): Promise<LlmGenerateResult<Record<string, unknown>>> => {
+        if(validation){
+          const routedStage:PipelineStage=stage==="direct"?"opportunities/direct":stage;
+          const router=new StageProviderRouter(this.options),route=router.resolveValidationStage(routedStage);
+          const compact=compactValidationPayload(routedStage,input);
+          const projected=route.provider.name==="gemini"?buildGeminiProjection(compact,systemInstructions):{payload:compact,systemInstructions};
+          lastProviderInput=projected.payload;
+          assertFrozenPlan(this.db,validation.plan);
+          const result=await validation.session.invoke({provider:route.provider.name,model:route.model,stage:routedStage,batch:batch?.index??null,generationId},()=>router.generateWithRouting<Record<string,unknown>>(routedStage,{input:JSON.stringify(projected.payload),systemInstructions:projected.systemInstructions+"\nModo de validación única: responde en español. Sé conciso. Un patrón por candidato; no mezcles temas. No inventes soporte. Para Problems: name <=180 caracteres, summary <=480, 1–6 evidenceIds representativos por candidato; MAP máximo 24 candidatos, REDUCE máximo 15. Reutiliza exclusivamente las referencias entregadas.",structuredOutput:{...structuredOutput,...(key==="problems"?{jsonSchema:validationProblemSchema(routedStage)}:{}),retryOnInvalidSchema:false},maxOutputTokens:8000},{validationMode:true,autoFallback:false}));
+          model=result.requestedModel;
+          providerAttempts.push({...validation.session.requests().at(-1),stage,attempt:1,outcome:"usable"} as ProviderAttemptAudit);
+          return result;
+        }
         const projected = selectedProvider === "gemini"
           ? buildGeminiProjection(input, systemInstructions, { omitEvidenceQuoteText: key === "research" })
           : { payload: input, systemInstructions, audit: undefined };
@@ -545,7 +597,10 @@ export class ModuleService {
         type ProblemBatchItem = { evidence: typeof evidence; clusters?: unknown[] };
         let problemBatches: ProblemBatchItem[] | undefined;
 
-        if (key === "problems" && (selectedProvider === "deepseek" || selectedProvider === "groq" || selectedProvider === "openrouter")) {
+        if(validation && key==="problems"){
+          clusteringResult=validation.plan.clustering;
+          problemBatches=validation.plan.maps.map(m=>({evidence:[],clusters:m.clusters as unknown[]}));
+        } else if (key === "problems" && (selectedProvider === "deepseek" || selectedProvider === "groq" || selectedProvider === "openrouter")) {
           clusteringResult = clusterEvidence(evidence as unknown as import("./local-evidence-preprocessor.js").EvidenceItem[]);
           const { batches } = buildClusteredMapBatches(clusteringResult);
           problemBatches = batches.map((b) => {
@@ -581,10 +636,19 @@ export class ModuleService {
           const mapped:Record<string,unknown>[]=[];let mapInputTokens=0,mapOutputTokens=0,mapCost=0;
           for(const [index,batch] of problemBatches.entries()){
             const batchProjection=projectEvidenceForProvider(batch.evidence);
-            const mapInput={...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batch.clusters?{clusters:batch.clusters}:{}),...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
+            const mapInput=validation?validation.plan.maps[index]!:{...providerInput,stage:"map",researchFocus:researchFocusAtStart??project.niche,evidence:batchProjection.evidence,...(batch.clusters?{clusters:batch.clusters}:{}),...(batchProjection.audit.transformedSnippetCount?{providerEvidenceProjection:batchProjection.audit}:{}),batch:{index:index+1,total:problemBatches.length}};
             const mappedResult=await callProvider("problems/map", mapInput, `${prompt.instructions}\n\nEtapa MAP: extrae candidatos normalizados, no problemas finales. Cada item debe incluir name, summary, category, evidenceIds, semanticSignature y researchRelevanceScore (0-100).`, {name:"problems_map_output",jsonSchema:MODULE_OUTPUT_SCHEMAS.problems}, {index:index+1,total:problemBatches.length});
             if(!isCanonicalModuleOutput("problems",mappedResult.output))throw new Error(`${selectedProvider} devolvió un batch que no cumple el contrato de Problemas.`);
             const mappedItems=(mappedResult.output as {items:unknown[]}).items;
+            if(validation){
+              const allowed=new Set((validation.plan.maps[index]!.clusters as Array<{representativeEvidenceIds:string[]}>).flatMap(c=>c.representativeEvidenceIds));
+              for(const [ci,value] of mappedItems.entries()){
+                const c=value as Record<string,unknown>;
+                if(!Array.isArray(c.evidenceIds)||!c.evidenceIds.length||c.evidenceIds.some(id=>!allowed.has(String(id))))throw new Error("MAP_EVIDENCE_OUTSIDE_FROZEN_BATCH");
+                c.id=`map${index+1}-candidate${ci+1}`;
+              }
+              if(!mappedItems.length)throw new Error("EMPTY_MAP_OUTPUT");
+            }
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
             mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
           }
@@ -597,8 +661,16 @@ export class ModuleService {
         const reduceInstruction = key === "problems" ? "\n\nEtapa REDUCE global: Consolida y sintetiza los candidatos en una lista de 8 a 15 problemas canónicos principales bien diferenciados, combinando candidatos redundantes o menores. Cada item debe ser conciso e incluir id, name, category, summary y sus evidenceIds representativos." : "";
         generated=await callProvider(finalStage, providerInput, `${prompt.instructions}${reduceInstruction}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
+        if(validation && key==="problems"){
+          const allowed=new Set(mappedCandidates!.flatMap(c=>[String(c.id),...(c.evidenceIds as string[])]));
+          const seen=new Set<string>();
+          for(const c of (generated.output as {items:Record<string,unknown>[]}).items){
+            if(seen.has(String(c.id)) || (c.evidenceIds as string[]).some(id=>!allowed.has(id)))throw new Error("REDUCE_INVALID_REFERENCES");
+            seen.add(String(c.id));
+          }
+        }
         if (key === "problems" && clusteringResult && Array.isArray((generated.output as { items?: unknown }).items)) {
-          const finalReconciled = reconcileCandidatesWithClusters((generated.output as { items: Record<string, unknown>[] }).items, clusteringResult, mappedCandidates, { filterSupported: true });
+          const finalReconciled = reconcileCandidatesWithClusters((generated.output as { items: Record<string, unknown>[] }).items, clusteringResult, mappedCandidates, { filterSupported: true,...(validation?{strict:true,focus:validation.plan.focus,vocabulary:validation.plan.vocabulary}:{}) });
           (generated.output as { items: unknown[] }).items = finalReconciled;
         }
       }
@@ -632,9 +704,9 @@ export class ModuleService {
     if (key === "problems") {
       const effectiveFocus = deriveResearchFocus([], project.niche, researchFocusAtStart);
       const focusHash = researchFocusHash(effectiveFocus);
-      const analysisSet = analysisSetSnapshot(this.db, projectId);
+      const analysisSet = validation?.plan.snapshot ?? analysisSetSnapshot(this.db, projectId);
       const snapshotHash = analysisSnapshotHashFromRows(analysisSet.rows);
-      const loaded = this.vocabulary.loadActiveVocabularySnapshot(projectId, focusHash, snapshotHash);
+      const loaded = validation ? validation.plan.vocabulary : this.vocabulary.loadActiveVocabularySnapshot(projectId, focusHash, snapshotHash);
       vocabularySnapshot = loaded ?? null;
       vocabularyVersionId = vocabularySnapshot?.vocabularyVersionId ?? null;
       // Explicit corruption guard: an ACTIVE vocabulary must always carry content.
@@ -645,7 +717,7 @@ export class ModuleService {
       }
 
       // PHASE 4C — only when there is no ACTIVE exact vocabulary do we discover.
-      if (!vocabularySnapshot) {
+      if (!vocabularySnapshot && !validation) {
         const discoveryProvider =
           this.options.discoveryProvider ??
           (selectedProvider === "gemini"
@@ -763,6 +835,10 @@ export class ModuleService {
       if (problemMetrics) qualityOptions.metrics = problemMetrics;
       if (vocabularySnapshot) qualityOptions.vocabularySnapshot = vocabularySnapshot;
       output = qualityProblems(this.db, projectId, output, qualityOptions);
+      if(validation){
+        output.localPreprocessing=validation.plan.metrics;
+        if(!Array.isArray(output.items)||output.items.length===0)throw new Error("NO_PROBLEMS_PASSED_QUALITY_GATES");
+      }
       if (vocabularyDryRun !== undefined) output.domainVocabularyDryRun = vocabularyDryRun;
       if (discoveryAudit !== undefined) output.domainVocabularyDiscovery = discoveryAudit;
     }
@@ -810,8 +886,10 @@ export class ModuleService {
       output = validation.output;
       artifactStatus = validation.audit.ok ? "approved" : "draft";
     }
+    const persistedProvider=validation&&key==="problems"?"multi":selectedProvider;
     const inputSnapshot = {
-      generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model,
+      ...(validation?{validationSessionId:validation.session.id,frozenSnapshotHash:validation.plan.snapshotHash,physicalRequests:validation.session.requests(),localPreprocessing:validation.plan.metrics}:{}),
+      generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: persistedProvider, model,
       ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel")?{activeVersionIdAtStart}:{}),
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
@@ -837,6 +915,7 @@ export class ModuleService {
     const db=this.db.connection;
     db.exec("BEGIN IMMEDIATE");let createdVersionId:string|undefined;
     try {
+    if(validation)assertFrozenPlan(this.db,validation.plan);
     this.assertActivationContext(projectId,key,parentIds,activeVersionIdAtStart,researchFocusAtStart);
     if(key==="research"){
       const currentProject=this.db.connection.prepare("SELECT name,niche,description FROM projects WHERE id=?").get(projectId);
@@ -857,6 +936,7 @@ export class ModuleService {
        ...(artifactStatus ? { status: artifactStatus } : {}),
     });
     createdVersionId=version.id;
+    if(validation && (key==="problems"||key==="opportunities"))validation.session.published(key,version.id);
 
     this.db.connection.prepare(`
       INSERT INTO generations (
@@ -866,7 +946,7 @@ export class ModuleService {
       ) VALUES (?, ?, ?, ?, ?, 'COMPLETED', ?, ?, ?,
         ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      generationId, projectId, agentKey, selectedProvider, model, vocabularyVersionId, JSON.stringify(inputSnapshot), JSON.stringify(output),
+      generationId, projectId, agentKey, persistedProvider, model, vocabularyVersionId, JSON.stringify(inputSnapshot), JSON.stringify(output),
       promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, now, now,
     );
     this.db.connection.prepare(`
@@ -874,7 +954,7 @@ export class ModuleService {
         id, project_id, generation_id, provider, model, input_tokens,
         output_tokens, estimated_cost, currency, is_estimate, recorded_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?)
-    `).run(uuidv7(), projectId, generationId, selectedProvider, model, inputTokens, outputTokens, estimatedCost, usage.estimatedCost!==undefined&&usage.usageKind === "provider_reported" ? 0 : 1, now);
+    `).run(uuidv7(), projectId, generationId, persistedProvider, model, inputTokens, outputTokens, estimatedCost, usage.estimatedCost!==undefined&&usage.usageKind === "provider_reported" ? 0 : 1, now);
 
     if(knowledgeContext.length){
       const usedRows=knowledgeContext.map(context=>knowledgeRows.find(item=>context.chunkId===item.chunkId&&context.memoryId===item.memoryId)!).filter(Boolean);

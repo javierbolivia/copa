@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { migrations } from "../src/database/migrations.js";
+import { migrations, LATEST_SCHEMA_VERSION } from "../src/database/migrations.js";
 import { AppDatabase } from "../src/database/database.js";
 import { ProjectRepository } from "../src/repositories/project-repository.js";
 import { JobRepository } from "../src/repositories/job-repository.js";
@@ -559,7 +559,7 @@ describe("Domain Semantic Vocabulary - real migration v9 -> latest (AUDIT 3)", (
     legacy.close();
 
     const db = new AppDatabase(path);
-    expect(db.getSchemaVersion()).toBe(12);
+    expect(db.getSchemaVersion()).toBe(LATEST_SCHEMA_VERSION);
     expect(db.connection.prepare("SELECT name FROM projects WHERE id='proj-legacy'").get()).toMatchObject({
       name: "Legado",
     });

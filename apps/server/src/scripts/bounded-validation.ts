@@ -15,15 +15,16 @@ import { FileExporterService } from "../services/file-exporter-service.js";
 import { OpenAIProvider } from "../integrations/openai-provider.js";
 import { DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import { GeminiProvider } from "../integrations/gemini-provider.js";
-import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport } from "../services/validation-session.js";
+import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId } from "../services/validation-session.js";
 import { measurePayload } from "../services/bounded-validation-plan.js";
 
 const nativeFetch=authorizedValidationTransport(globalThis.fetch);
 globalThis.fetch=async()=>{throw new Error("UNPLANNED_NETWORK_FORBIDDEN");};
 loadEnv({path:resolve(WORKSPACE_ROOT,".env"),quiet:true});
 const projectId="01a0289f-9377-70b0-b9ac-a0eb5a9dd35a";
-// This identity represents THIS authorization, never a timestamp or random UUID.
-const sessionId="hallazia-bounded-validation-47fcb2c7-0842-416d-9c9c-7c066e44ace7";
+// This identity represents the explicitly granted authorization for this run.
+// The runner never creates one, and the ledger rejects an already-used identity.
+const sessionId=resolveValidationAuthorizationId(process.argv.slice(2));
 const databasePath=resolve(WORKSPACE_ROOT,"data/our-platform.db");
 const real=process.argv.includes("--run-once");
 const git=(...args:string[])=>execFileSync("git",args,{cwd:WORKSPACE_ROOT,encoding:"utf8"}).trim();
@@ -40,7 +41,7 @@ try {
   const options={openAI:new OpenAIProvider(),deepSeek:new DeepSeekProvider({apiKey:process.env.DEEPSEEK_API_KEY??"",model:process.env.DEEPSEEK_MODEL?.trim()||"deepseek-v4-flash",thinking:"disabled",fetch:real?nativeFetch:globalThis.fetch}),gemini:new GeminiProvider({apiKey:process.env.GEMINI_API_KEY??"",fetch:real?nativeFetch:globalThis.fetch})};
   const modules=new ModuleService(database,new ArtifactRepository(database),new WorkflowRepository(database),new FileExporterService(database,resolve(WORKSPACE_ROOT,"data")),new ProjectSettingsRepository(database),new KnowledgeRepository(database),new SemanticVocabularyRepository(database),options);
   const plan=modules.prepareValidation(projectId,3359);
-  console.log(JSON.stringify({phase:"PRE-REAL-RUN",projectId,database:databasePath,implementationCommit:git("rev-parse","HEAD"),integrity:"ok",snapshotFrozen:true,snapshotHash:plan.snapshotHash,metrics:plan.metrics,mapBatches:plan.maps.length,mapPayloads:plan.maps.map(measurePayload),vocabulary:plan.vocabulary?.vocabularyVersionId??"LOCAL_CORE",deepSeekAvailable:options.deepSeek.configured,geminiAvailable:options.gemini.configured,autoFallback:false,retries:0,externalDiagnostics:0,usedRequests:0,remainingRequests:4,plan:VALIDATION_PLAN},null,2));
+  console.log(JSON.stringify({phase:"PRE-REAL-RUN",authorizationId:sessionId,projectId,database:databasePath,implementationCommit:git("rev-parse","HEAD"),integrity:"ok",snapshotFrozen:true,snapshotHash:plan.snapshotHash,metrics:plan.metrics,mapBatches:plan.maps.length,mapPayloads:plan.maps.map(measurePayload),vocabulary:plan.vocabulary?.vocabularyVersionId??"LOCAL_CORE",deepSeekAvailable:options.deepSeek.configured,geminiAvailable:options.gemini.configured,autoFallback:false,retries:0,externalDiagnostics:0,usedRequests:0,remainingRequests:4,plan:VALIDATION_PLAN},null,2));
   if(real){
     try {await modules.executeValidation(sessionId,plan);console.log("VALIDATION_COMPLETED");}
     catch(error){console.log(JSON.stringify({validation:"STOPPED",error:error instanceof Error?error.message:"VALIDATION_FAILED"}));process.exitCode=1;}

@@ -13,7 +13,7 @@ import { DeepSeekProvider } from "../src/integrations/deepseek-provider.js";
 import { GeminiProvider, GEMINI_ANALYSIS_MODEL } from "../src/integrations/gemini-provider.js";
 import { OpenAIProvider } from "../src/integrations/openai-provider.js";
 import { GroqProvider } from "../src/integrations/groq-provider.js";
-import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport } from "../src/services/validation-session.js";
+import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId } from "../src/services/validation-session.js";
 import { StageProviderRouter } from "../src/services/stage-provider-router.js";
 import { assertFrozenPlan, prepareBoundedPlan } from "../src/services/bounded-validation-plan.js";
 
@@ -33,6 +33,13 @@ function response(provider:string,output:unknown,status=200){return new Response
 const schema={name:"test",jsonSchema:{type:"object",properties:{ok:{type:"boolean"}},required:["ok"]},retryOnInvalidSchema:false};
 function sessionFixture(){const f=fixture(),session=new ValidationSession(f.db.connection,"once");session.create(f.project.id,"hash",{});session.start();return {...f,session};}
 describe("physical validation budget",()=>{
+  it("requires one explicitly supplied, well-formed authorization identity",()=>{
+    const authorizationId="hallazia-bounded-validation-9b2a105b-8df1-4d82-9b8e-73962d4384f0";
+    expect(resolveValidationAuthorizationId([`--authorization-id=${authorizationId}`])).toBe(authorizationId);
+    expect(()=>resolveValidationAuthorizationId([])).toThrow("VALIDATION_AUTHORIZATION_ID_REQUIRED");
+    expect(()=>resolveValidationAuthorizationId(["--authorization-id=generated-by-runner"])).toThrow("VALIDATION_AUTHORIZATION_ID_INVALID");
+    expect(()=>resolveValidationAuthorizationId([`--authorization-id=${authorizationId}`,`--authorization-id=${authorizationId}`])).toThrow("VALIDATION_AUTHORIZATION_ID_REQUIRED");
+  });
   it("unscoped calls cannot access the one-shot transport",()=>{
     const http=vi.fn();expect(()=>authorizedValidationTransport(http)("https://api.deepseek.com/chat/completions")).toThrow("UNRESERVED_HTTP_FORBIDDEN");expect(http).not.toHaveBeenCalled();
   });

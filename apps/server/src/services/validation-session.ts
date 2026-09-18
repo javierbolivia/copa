@@ -63,6 +63,11 @@ export class ValidationSession {
       return result;
     } catch(error){this.db.prepare("UPDATE validation_requests SET outcome='failed' WHERE session_id=? AND outcome IN ('reserved','response_received')").run(this.id);this.fail();throw error;}
   }
+  recordRejectedMapOutput(batch:number, output:unknown, returnedEvidenceIds:readonly string[], invalidEvidenceIds:readonly string[], rejectionCode:string):void {
+    const changed=this.db.prepare("UPDATE validation_requests SET outcome='rejected',response_json=?,returned_evidence_ids_json=?,invalid_evidence_ids_json=?,rejection_code=? WHERE session_id=? AND stage='problems/map' AND batch=? AND outcome='usable'")
+      .run(JSON.stringify(output),JSON.stringify([...returnedEvidenceIds]),JSON.stringify([...invalidEvidenceIds]),rejectionCode,this.id,batch).changes;
+    if(changed!==1)throw new Error("VALIDATION_REJECTION_AUDIT_CONFLICT");
+  }
 }
 
 /** Called at the physical boundary, not once per logical generate(). Redirects are forbidden. */

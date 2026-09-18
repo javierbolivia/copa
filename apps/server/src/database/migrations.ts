@@ -1132,5 +1132,11 @@ CREATE TABLE validation_requests (
  PRIMARY KEY(session_id,request_number)
 ) STRICT;
 `},
+{version:15,name:"015_validation_rejection_audit",sql:`
+ALTER TABLE validation_requests ADD COLUMN response_json TEXT;
+ALTER TABLE validation_requests ADD COLUMN returned_evidence_ids_json TEXT;
+ALTER TABLE validation_requests ADD COLUMN invalid_evidence_ids_json TEXT;
+ALTER TABLE validation_requests ADD COLUMN rejection_code TEXT;
+`},
 ];
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

@@ -561,11 +561,13 @@ export class ModuleService {
         if(validation){
           const routedStage:PipelineStage=stage==="direct"?"opportunities/direct":stage;
           const router=new StageProviderRouter(this.options),route=router.resolveValidationStage(routedStage);
+          const mapAllowedEvidenceIds=routedStage==="problems/map"?[...new Set((validation.plan.maps[(batch?.index??1)-1]!.clusters as Array<{representativeEvidenceIds:string[]}>).flatMap(cluster=>cluster.representativeEvidenceIds))]:[];
           const compact=compactValidationPayload(routedStage,input);
           const projected=route.provider.name==="gemini"?buildGeminiProjection(compact,systemInstructions):{payload:compact,systemInstructions};
           lastProviderInput=projected.payload;
           assertFrozenPlan(this.db,validation.plan);
-          const result=await validation.session.invoke({provider:route.provider.name,model:route.model,stage:routedStage,batch:batch?.index??null,generationId},()=>router.generateWithRouting<Record<string,unknown>>(routedStage,{input:JSON.stringify(projected.payload),systemInstructions:projected.systemInstructions+"\nModo de validación única: responde en español. Sé conciso. Un patrón por candidato; no mezcles temas. No inventes soporte. Para Problems: name <=180 caracteres, summary <=480, 1–6 evidenceIds representativos por candidato; MAP máximo 24 candidatos, REDUCE máximo 15. Reutiliza exclusivamente las referencias entregadas.",structuredOutput:{...structuredOutput,...(key==="problems"?{jsonSchema:validationProblemSchema(routedStage)}:{}),retryOnInvalidSchema:false},maxOutputTokens:8000},{validationMode:true,autoFallback:false}));
+          const mapEvidenceContract=mapAllowedEvidenceIds.length?`\nCONTRATO MAP ESTRICTO: evidenceIds debe contener exclusivamente copias literales de esta lista; no uses clusterId, sourceId ni IDs inferidos: ${JSON.stringify(mapAllowedEvidenceIds)}`:"";
+          const result=await validation.session.invoke({provider:route.provider.name,model:route.model,stage:routedStage,batch:batch?.index??null,generationId},()=>router.generateWithRouting<Record<string,unknown>>(routedStage,{input:JSON.stringify(projected.payload),systemInstructions:projected.systemInstructions+"\nModo de validación única: responde en español. Sé conciso. Un patrón por candidato; no mezcles temas. No inventes soporte. Para Problems: name <=180 caracteres, summary <=480, 1–6 evidenceIds representativos por candidato; MAP máximo 24 candidatos, REDUCE máximo 15. Reutiliza exclusivamente las referencias entregadas."+mapEvidenceContract,structuredOutput:{...structuredOutput,...(key==="problems"?{jsonSchema:validationProblemSchema(routedStage)}:{}),retryOnInvalidSchema:false},maxOutputTokens:8000},{validationMode:true,autoFallback:false}));
           model=result.requestedModel;
           providerAttempts.push({...validation.session.requests().at(-1),stage,attempt:1,outcome:"usable"} as ProviderAttemptAudit);
           return result;
@@ -644,7 +646,13 @@ export class ModuleService {
               const allowed=new Set((validation.plan.maps[index]!.clusters as Array<{representativeEvidenceIds:string[]}>).flatMap(c=>c.representativeEvidenceIds));
               for(const [ci,value] of mappedItems.entries()){
                 const c=value as Record<string,unknown>;
-                if(!Array.isArray(c.evidenceIds)||!c.evidenceIds.length||c.evidenceIds.some(id=>!allowed.has(String(id))))throw new Error("MAP_EVIDENCE_OUTSIDE_FROZEN_BATCH");
+                const returned=Array.isArray(c.evidenceIds)?c.evidenceIds.map(String):[];
+                const invalid=returned.filter(id=>!allowed.has(id));
+                const rejectionCode=!Array.isArray(c.evidenceIds)?"MAP_EVIDENCE_IDS_MISSING":!returned.length?"MAP_EVIDENCE_IDS_EMPTY":invalid.length?"MAP_EVIDENCE_OUTSIDE_FROZEN_BATCH":null;
+                if(rejectionCode){
+                  validation.session.recordRejectedMapOutput(index+1,mappedResult.output,returned,invalid,rejectionCode);
+                  throw new Error(rejectionCode);
+                }
                 c.id=`map${index+1}-candidate${ci+1}`;
               }
               if(!mappedItems.length)throw new Error("EMPTY_MAP_OUTPUT");

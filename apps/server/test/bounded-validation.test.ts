@@ -74,7 +74,7 @@ describe("physical validation budget",()=>{
     expect(()=>assertFrozenPlan(db,plan)).toThrow("VALIDATION_SNAPSHOT_CONFLICT");
   });
 });
-function pipelineFixture(failAt=0, mutateAt=0){
+function pipelineFixture(failAt=0, mutateAt=0, invalidMapEvidenceId?:string){
     const {db,project,artifacts}=fixture();
     const http=vi.fn(async(url:unknown,init?:RequestInit)=>{
       const provider=String(url).includes("deepseek")?"deepseek":"gemini",body=JSON.parse(String(init?.body));
@@ -82,7 +82,7 @@ function pipelineFixture(failAt=0, mutateAt=0){
       if(http.mock.calls.length===mutateAt)db.connection.prepare("UPDATE comments SET likes=likes+1 WHERE project_id=?").run(project.id);
       const input=JSON.parse(provider==="deepseek"?body.messages.find((m:any)=>m.role==="user").content:body.contents[0].parts[0].text);
       let output:unknown;
-      if(input.stage==="map")output={schemaVersion:1,items:input.clusters.map((c:any,i:number)=>({id:`p${i}`,name:c.representativeQuotes[0],summary:c.representativeQuotes[0],category:"pain",evidenceIds:c.representativeEvidenceIds}))};
+      if(input.stage==="map")output={schemaVersion:1,items:input.clusters.map((c:any,i:number)=>({id:`p${i}`,name:c.representativeQuotes[0],summary:c.representativeQuotes[0],category:"pain",evidenceIds:i===0&&invalidMapEvidenceId?[invalidMapEvidenceId]:c.representativeEvidenceIds}))};
       else if(input.stage==="global_reduce")output={schemaVersion:1,items:input.candidates};
       else {const p=input.parentOutputs.problems.items[0];output={schemaVersion:1,items:[{id:"o1",name:"Guía",problemId:p.id,evidenceIds:p.evidenceIds,scores:{frequency:60,urgency:60,emotionalIntensity:60,willingnessToPay:60,solutionFeasibility:60,competition:60,differentiation:60,commercialPotential:60,evidenceConfidence:60}}],selectedId:"o1"};}
       return response(provider,output);
@@ -113,6 +113,19 @@ describe("canonical bounded pipeline",()=>{
     expect(ledger.row().opportunities_started).toBe(n===4?1:0);
     expect(ledger.row().problems_version_id!==null).toBe(n===4);
     await expect(modules.executeValidation("once",plan)).rejects.toThrow();expect(http).toHaveBeenCalledTimes(n);
+  });
+  it("records a rejected MAP response with its exact invalid IDs and stops before request 2",async()=>{
+    const invalid="not-an-allowed-evidence-id";
+    const {db,modules,plan,http}=pipelineFixture(0,0,invalid);
+    await expect(modules.executeValidation("once",plan)).rejects.toThrow("MAP_EVIDENCE_OUTSIDE_FROZEN_BATCH");
+    expect(http).toHaveBeenCalledTimes(1);
+    const request=new ValidationSession(db.connection,"once").requests()[0]!;
+    expect(request.outcome).toBe("rejected");
+    expect(JSON.parse(String(request.invalid_evidence_ids_json))).toEqual([invalid]);
+    expect(JSON.parse(String(request.returned_evidence_ids_json))).toEqual([invalid]);
+    expect(JSON.parse(String(request.response_json)).items[0].evidenceIds).toEqual([invalid]);
+    const body=JSON.parse(String(http.mock.calls[0]![1]?.body));
+    expect(body.messages.find((message:any)=>message.role==="system").content).toContain("CONTRATO MAP ESTRICTO");
   });
   it("concurrent duplicate submit cannot spend another request",async()=>{
     const {modules,plan,http}=pipelineFixture();

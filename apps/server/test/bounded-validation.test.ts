@@ -15,7 +15,7 @@ import { OpenAIProvider } from "../src/integrations/openai-provider.js";
 import { GroqProvider } from "../src/integrations/groq-provider.js";
 import { ValidationSession, VALIDATION_PLAN, authorizedValidationTransport, resolveValidationAuthorizationId, assertCleanAuthorizationWorktree } from "../src/services/validation-session.js";
 import { StageProviderRouter } from "../src/services/stage-provider-router.js";
-import { assertFrozenPlan, prepareBoundedPlan } from "../src/services/bounded-validation-plan.js";
+import { assertFrozenPlan, prepareBoundedPlan, aliasMapEvidence, decodeMapEvidence } from "../src/services/bounded-validation-plan.js";
 
 const dbs:AppDatabase[]=[];
 afterEach(()=>{for(const db of dbs.splice(0))db.close();});
@@ -33,6 +33,13 @@ function response(provider:string,output:unknown,status=200){return new Response
 const schema={name:"test",jsonSchema:{type:"object",properties:{ok:{type:"boolean"}},required:["ok"]},retryOnInvalidSchema:false};
 function sessionFixture(){const f=fixture(),session=new ValidationSession(f.db.connection,"once");session.create(f.project.id,"hash",{});session.start();return {...f,session};}
 describe("physical validation budget",()=>{
+  it("round-trips batch-local aliases without changing frozen evidence or repairing unknown IDs",()=>{
+    const input={batch:{index:2},clusters:[{representativeEvidenceIds:["canonical-a","canonical-b"]},{representativeEvidenceIds:["canonical-a"]}]};
+    const {payload,aliases}=aliasMapEvidence(input);
+    expect((payload.clusters as typeof input.clusters).map(c=>c.representativeEvidenceIds)).toEqual([["b2e1","b2e2"],["b2e1"]]);
+    expect(input.clusters[0]!.representativeEvidenceIds).toEqual(["canonical-a","canonical-b"]);
+    expect(decodeMapEvidence({items:[{evidenceIds:["b2e1","b1e1","b2e999","truncated-id"]}]},aliases)).toEqual({items:[{evidenceIds:["canonical-a","b1e1","b2e999","truncated-id"]}]});
+  });
   it("requires one explicitly supplied, well-formed authorization identity",()=>{
     const authorizationId="hallazia-bounded-validation-9b2a105b-8df1-4d82-9b8e-73962d4384f0";
     expect(resolveValidationAuthorizationId([`--authorization-id=${authorizationId}`])).toBe(authorizationId);
@@ -111,6 +118,12 @@ describe("canonical bounded pipeline",()=>{
     expect(result.problems.status).toBe("approved");expect(result.opportunities.status).toBe("approved");
     expect(db.connection.prepare("SELECT parent_version_id FROM lineage_edges WHERE child_version_id=?").get(result.opportunities.versionId)?.parent_version_id).toBe(result.problems.versionId);
     const session=new ValidationSession(db.connection,"once");expect(session.requests().map(r=>r.provider)).toEqual(["deepseek","deepseek","gemini","gemini"]);
+    const saved=JSON.parse(String(session.row().plan_json));
+    expect(saved.mapEvidenceAliases[0].b1e1).toBeDefined();
+    const firstBody=JSON.parse(String(http.mock.calls[0]![1]?.body));
+    const firstInput=JSON.parse(firstBody.messages.find((m:any)=>m.role==="user").content);
+    expect(firstInput.clusters[0].representativeEvidenceIds[0]).toBe("b1e1");
+    expect(JSON.stringify(result.problems.outputData)).not.toContain('"b1e1"');
     expect(()=>session.claimModule("opportunities")).toThrow();
     await expect(modules.executeValidation("once",plan)).rejects.toThrow();
     await expect(modules.run(project.id,"problems","deepseek")).rejects.toThrow("VALIDATION_PROJECT_LOCKED");

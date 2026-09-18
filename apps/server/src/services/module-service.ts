@@ -66,7 +66,7 @@ import {
 import { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
 export { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
 import { StageProviderRouter, type PipelineStage } from "./stage-provider-router.js";
-import { prepareBoundedPlan, assertFrozenPlan, compactValidationPayload, validationProblemSchema, type BoundedPlan } from "./bounded-validation-plan.js";
+import { prepareBoundedPlan, assertFrozenPlan, compactValidationPayload, validationProblemSchema, aliasMapEvidence, decodeMapEvidence, type BoundedPlan } from "./bounded-validation-plan.js";
 import { ValidationSession } from "./validation-session.js";
 const GEMINI_MAX_ATTEMPTS = 2;
 const GEMINI_RETRY_DELAY_MS = 250;
@@ -390,7 +390,7 @@ export class ModuleService {
   async executeValidation(sessionId:string,plan:BoundedPlan):Promise<{problems:ModuleResult;opportunities:ModuleResult}> {
     assertFrozenPlan(this.db,plan);
     const session=new ValidationSession(this.db.connection,sessionId);
-    session.create(plan.projectId,plan.snapshotHash,{metrics:plan.metrics,maps:plan.maps,manifest:plan.clustering.clusters.map(c=>({clusterId:c.clusterId,evidenceIds:c.evidenceIds})),vocabulary:plan.vocabulary?.vocabularyVersionId??"LOCAL_CORE"});
+    session.create(plan.projectId,plan.snapshotHash,{metrics:plan.metrics,maps:plan.maps,mapEvidenceAliases:plan.maps.map(map=>Object.fromEntries(aliasMapEvidence(map).aliases)),manifest:plan.clustering.clusters.map(c=>({clusterId:c.clusterId,evidenceIds:c.evidenceIds})),vocabulary:plan.vocabulary?.vocabularyVersionId??"LOCAL_CORE"});
     session.start();
     try {
       const problems=await this.run(plan.projectId,"problems","deepseek",undefined,{session,plan});
@@ -561,16 +561,17 @@ export class ModuleService {
         if(validation){
           const routedStage:PipelineStage=stage==="direct"?"opportunities/direct":stage;
           const router=new StageProviderRouter(this.options),route=router.resolveValidationStage(routedStage);
-          const mapAllowedEvidenceIds=routedStage==="problems/map"?[...new Set((validation.plan.maps[(batch?.index??1)-1]!.clusters as Array<{representativeEvidenceIds:string[]}>).flatMap(cluster=>cluster.representativeEvidenceIds))]:[];
           const compact=compactValidationPayload(routedStage,input);
-          const projected=route.provider.name==="gemini"?buildGeminiProjection(compact,systemInstructions):{payload:compact,systemInstructions};
+          const mapAliases=routedStage==="problems/map"?aliasMapEvidence(compact):undefined;
+          const mapAllowedEvidenceIds=mapAliases?[...mapAliases.aliases.keys()]:[];
+          const projected=route.provider.name==="gemini"?buildGeminiProjection(compact,systemInstructions):{payload:mapAliases?.payload??compact,systemInstructions};
           lastProviderInput=projected.payload;
           assertFrozenPlan(this.db,validation.plan);
           const mapEvidenceContract=mapAllowedEvidenceIds.length?`\nCONTRATO MAP ESTRICTO: evidenceIds debe contener exclusivamente copias literales de esta lista; no uses clusterId, sourceId ni IDs inferidos: ${JSON.stringify(mapAllowedEvidenceIds)}`:"";
           const result=await validation.session.invoke({provider:route.provider.name,model:route.model,stage:routedStage,batch:batch?.index??null,generationId},()=>router.generateWithRouting<Record<string,unknown>>(routedStage,{input:JSON.stringify(projected.payload),systemInstructions:projected.systemInstructions+"\nModo de validación única: responde en español. Sé conciso. Un patrón por candidato; no mezcles temas. No inventes soporte. Para Problems: name <=180 caracteres, summary <=480, 1–6 evidenceIds representativos por candidato; MAP máximo 24 candidatos, REDUCE máximo 15. Reutiliza exclusivamente las referencias entregadas."+mapEvidenceContract,structuredOutput:{...structuredOutput,...(key==="problems"?{jsonSchema:validationProblemSchema(routedStage)}:{}),retryOnInvalidSchema:false},maxOutputTokens:8000},{validationMode:true,autoFallback:false}));
           model=result.requestedModel;
           providerAttempts.push({...validation.session.requests().at(-1),stage,attempt:1,outcome:"usable"} as ProviderAttemptAudit);
-          return result;
+          return mapAliases?{...result,output:decodeMapEvidence(result.output,mapAliases.aliases)}:result;
         }
         const projected = selectedProvider === "gemini"
           ? buildGeminiProjection(input, systemInstructions, { omitEvidenceQuoteText: key === "research" })

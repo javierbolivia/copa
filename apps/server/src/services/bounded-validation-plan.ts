@@ -77,3 +77,28 @@ export function compactValidationPayload(stage:string,input:Record<string,unknow
   const parents=input.parentOutputs as Record<string,unknown>;
   const result={moduleKey:"opportunities",project:input.project,parentOutputs:{problems:parents.problems}};assertCompact(result);return result;
 }
+
+/** Request-local aliases avoid asking a model to transcribe long canonical IDs.
+ * The frozen input determines the mapping; no fuzzy matching or inferred IDs. */
+export function aliasMapEvidence(input:Record<string,unknown>) {
+  const payload=structuredClone(input);
+  const batch=(payload.batch as {index:number}).index;
+  const aliases=new Map<string,string>();
+  const reverse=new Map<string,string>();
+  for(const cluster of payload.clusters as Array<{representativeEvidenceIds:string[]}>){
+    cluster.representativeEvidenceIds=cluster.representativeEvidenceIds.map(id=>{
+      let alias=reverse.get(id);
+      if(!alias){alias=`b${batch}e${reverse.size+1}`;reverse.set(id,alias);aliases.set(alias,id);}
+      return alias;
+    });
+  }
+  return {payload,aliases};
+}
+
+export function decodeMapEvidence(output:Record<string,unknown>,aliases:ReadonlyMap<string,string>):Record<string,unknown> {
+  const decoded=structuredClone(output);
+  if(Array.isArray(decoded.items))for(const item of decoded.items){
+    if(item && Array.isArray(item.evidenceIds))item.evidenceIds=item.evidenceIds.map((id:unknown)=>typeof id==="string"?(aliases.get(id)??id):id);
+  }
+  return decoded;
+}

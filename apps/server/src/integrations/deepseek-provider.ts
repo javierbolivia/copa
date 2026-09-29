@@ -42,6 +42,9 @@ interface DeepSeekChoice {
 interface DeepSeekResponseApiBody {
   readonly model?: unknown;
   readonly status?: unknown;
+  readonly incomplete_details?: {
+    readonly reason?: unknown;
+  };
   readonly output?: unknown;
   readonly usage?: {
     readonly input_tokens?: unknown;
@@ -63,7 +66,8 @@ const isDeepSeekV4Pro = (model: string): boolean =>
  * current Flash model. Canonicalizing prevents configuration from pinning the
  * request path to an obsolete model name.
  */
-const canonicalModel = (model: string): string => {
+const canonicalModel = (model: string | undefined): string | undefined => {
+  if (typeof model !== "string") return undefined;
   const trimmed = model.trim();
   const normalized = trimmed.toLowerCase();
   return normalized === "deepseek-v4-flash" || normalized === "deepseek-v4-flash-vision-exp"
@@ -332,6 +336,12 @@ export class DeepSeekProvider implements LlmProvider {
     if (request.structuredOutput) {
       output = parseStructuredJson(text);
       if (output === undefined) {
+        if (finishReason === "length") {
+          throw new IntegrationError(
+            "quota_exceeded",
+            "DeepSeek truncó la salida al alcanzar el límite de tokens (finish_reason=length).",
+          );
+        }
         throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount);
       }
       const validationIssues = validateJsonSchema(request.structuredOutput.jsonSchema, output);
@@ -414,6 +424,15 @@ export class DeepSeekProvider implements LlmProvider {
       if (!isRecord(body)) throw new IntegrationError("invalid_schema", "DeepSeek devolvió una respuesta JSON que no es un objeto.");
       return { body: body as DeepSeekResponseApiBody };
     });
+    const incompleteReason = typeof body.incomplete_details?.reason === "string"
+      ? body.incomplete_details.reason
+      : undefined;
+    if (body.status === "incomplete" && incompleteReason === "max_output_tokens") {
+      throw new IntegrationError(
+        "quota_exceeded",
+        "DeepSeek truncó la salida en el reintento estructurado al alcanzar max_output_tokens.",
+      );
+    }
     const text = responseApiText(body);
     if (typeof text !== "string") {
       throw new IntegrationError("empty_completion", "DeepSeek no devolvió texto en el reintento estructurado.");

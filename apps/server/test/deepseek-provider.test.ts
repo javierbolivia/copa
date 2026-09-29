@@ -235,4 +235,28 @@ Razonando sobre la oportunidad {"id": "item-1"} y evaluando scores.
     expect(result.output).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("identifica truncamiento por límite de tokens (finish_reason=length) como quota_exceeded", async () => {
+    const truncatedPayload = '{"items": [{"id": "opp-1", "name": "Incompleto", "scores": {"urgency": ';
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      model: DEEPSEEK_DEFAULT_MODEL,
+      choices: [{ finish_reason: "length", message: { content: truncatedPayload } }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    await expect(provider.generate({
+      provider: "deepseek",
+      model: provider.effectiveModel,
+      systemInstructions: "JSON",
+      input: "{}",
+      structuredOutput: {
+        name: "check",
+        jsonSchema: { type: "object", required: ["items"], properties: { items: { type: "array" } } },
+      },
+    })).rejects.toMatchObject({
+      code: "quota_exceeded",
+      message: expect.stringContaining("finish_reason=length"),
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });

@@ -584,7 +584,8 @@ export class ModuleService {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
             geminiBudget?.reserve(stage, attempt > 1);
-            const result = await providerClient.generate<Record<string, unknown>>({ provider:selectedProvider, model, systemInstructions:projected.systemInstructions, input:JSON.stringify(projected.payload), structuredOutput, maxOutputTokens:8_000 });
+            const defaultMaxTokens = (key === "opportunities" || selectedProvider === "deepseek") ? 16_000 : 8_000;
+            const result = await providerClient.generate<Record<string, unknown>>({ provider:selectedProvider, model, systemInstructions:projected.systemInstructions, input:JSON.stringify(projected.payload), structuredOutput, maxOutputTokens:defaultMaxTokens });
             const diagnostics = result.providerDiagnostics ?? {};
             providerAttempts.push({ stage, attempt, ...(batch ? { batch } : {}), ...(typeof diagnostics.httpStatus === "number" ? { httpStatus: diagnostics.httpStatus } : {}), ...(typeof diagnostics.candidateCount === "number" ? { candidateCount: diagnostics.candidateCount } : {}), ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), outcome: "usable" });
             return result;
@@ -670,7 +671,8 @@ export class ModuleService {
         }
         const finalStage: ProviderStage = key === "research" ? "research/direct" : key === "problems" ? "problems/global_reduce" : "direct";
         const reduceInstruction = key === "problems" ? "\n\nEtapa REDUCE global: Consolida y sintetiza los candidatos en una lista de 8 a 15 problemas canónicos principales bien diferenciados, combinando candidatos redundantes o menores. Cada item debe ser conciso e incluir id, name, category, summary y sus evidenceIds representativos." : "";
-        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}${reduceInstruction}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
+        const opportunityInstruction = key === "opportunities" ? "\n\nInstrucción de concisión para Oportunidades:\n- Mantén rationale y cada justificación en scoreRationales concisas (1 o 2 oraciones breves y directas por criterio).\n- En evidenceIds de cada oportunidad, copia literalmente entre 2 y 5 identificadores de la lista evidenceIds del problema padre correspondiente. No inventes IDs ni uses IDs de otros problemas." : "";
+        generated=await callProvider(finalStage, providerInput, `${prompt.instructions}${reduceInstruction}${opportunityInstruction}\n\nReglas de ejecución: usa únicamente evidenceIds incluidos en el contexto, distingue evidencia observada de inferencias y no inventes evidencia, cifras, testimonios, ventas ni credenciales. Si providerEvidenceProjection existe, sus quoteText son extractos redactados para compatibilidad: no los presentes como citas literales ni reconstruyas el texto omitido. ${selectedProvider === "gemini" && key === "research" ? "Los textos de evidence se conservan localmente y no se incluyen en esta solicitud; trátalos solo como IDs de trazabilidad. No generes EVIDENCE_BACKED ni asignes evidenceIds: usa AI_INFERENCE con evidenceIds vacíos." : ""} Agrupa patrones similares sin convertir toda opinión en dolor.`, {name:`${key}_output`,jsonSchema:structuredOutputSchema,...(key==="product"?{retryOnInvalidSchema:false}:{})});
         if(key!=="product"&&!isCanonicalModuleOutput(key,generated.output))throw new Error(`${selectedProvider} devolvió una salida que no cumple el contrato de ${key}.`);
         if(validation && key==="problems"){
           const allowed=new Set(mappedCandidates!.flatMap(c=>[String(c.id),...(c.evidenceIds as string[])]));
@@ -869,6 +871,7 @@ export class ModuleService {
       output.isDemo = counts.allDemo === 1;
     }
     if(key==="opportunities"){
+      if(parentOutputs.problems)output=reconcileOpportunityEvidence(output,parentOutputs.problems);
       assertOpportunityReferences(output,parentOutputs.problems);
       output=applyOpportunityScoring(output);
     }
@@ -1310,6 +1313,26 @@ function problemEvidenceIds(problem:Record<string,unknown>):Set<string>{
   if(Array.isArray(problem.evidenceIds))for(const id of problem.evidenceIds)if(typeof id==="string")ids.add(id);
   if(Array.isArray(problem.evidence))for(const value of problem.evidence){const evidence=asRecord(value);if(typeof evidence.evidenceId==="string")ids.add(evidence.evidenceId);}
   return ids;
+}
+
+function reconcileOpportunityEvidence(output:Record<string,unknown>,problemsOutput:unknown):Record<string,unknown>{
+  const problems=asRecord(problemsOutput);
+  const problemItems=Array.isArray(problems.items)?problems.items.map(asRecord):[];
+  const problemById=new Map(problemItems.filter((item)=>typeof item.id==="string").map((item)=>[item.id as string,item]));
+  if(!Array.isArray(output.items))return output;
+  const items=output.items.map((raw)=>{
+    if(typeof raw!=="object"||raw===null||Array.isArray(raw))return raw;
+    const item=raw as Record<string,unknown>;
+    const problemId=typeof item.problemId==="string"?item.problemId:"";
+    const problem=problemById.get(problemId);
+    if(!problem)return item;
+    const allowedEvidence=problemEvidenceIds(problem);
+    const rawEvidenceIds=Array.isArray(item.evidenceIds)?item.evidenceIds:[];
+    const validEvidenceIds=rawEvidenceIds.filter((id):id is string=>typeof id==="string"&&allowedEvidence.has(id));
+    const evidenceIds=validEvidenceIds.length>0?validEvidenceIds:[...allowedEvidence].slice(0,Math.min(5,allowedEvidence.size));
+    return {...item,evidenceIds};
+  });
+  return {...output,items};
 }
 
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{

@@ -3,7 +3,7 @@ import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-pl
 import { IntegrationError, normalizeFetchError } from "./integration-error.js";
 import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
 
-export interface GeminiProviderOptions { readonly apiKey?: string; readonly fetch?: typeof fetch; readonly timeoutMs?: number; readonly endpoint?: string; }
+export interface GeminiProviderOptions { readonly apiKey?: string; readonly model?: string; readonly fetch?: typeof fetch; readonly timeoutMs?: number; readonly endpoint?: string; }
 const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const GEMINI_TYPES: Readonly<Record<string, string>> = { string: "STRING", number: "NUMBER", integer: "INTEGER", boolean: "BOOLEAN", object: "OBJECT", array: "ARRAY" };
@@ -94,24 +94,27 @@ export class GeminiProvider implements LlmProvider {
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
   private readonly endpoint: string;
+  readonly defaultModel: string;
 
   constructor(options: GeminiProviderOptions = {}) {
     this.apiKey = options.apiKey;
     this.fetchFn = validationFetch("gemini", options.fetch ?? globalThis.fetch);
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://generativelanguage.googleapis.com/v1beta/models";
+    this.defaultModel = options.model?.trim() || GEMINI_ANALYSIS_MODEL;
   }
 
   get configured(): boolean { return typeof this.apiKey === "string" && this.apiKey.trim().length > 0; }
 
   async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Gemini no está configurado.");
+    const model = request.model?.trim() || this.defaultModel;
     const generationConfig: Record<string, unknown> = { ...(request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens }) };
     if (request.structuredOutput) Object.assign(generationConfig, { responseMimeType: "application/json", responseSchema: toGeminiResponseSchema(request.structuredOutput.jsonSchema) });
     const { body } = await withIntegrationTimeout("Gemini", this.timeoutMs, async signal => {
       let response: Response;
       try {
-        response = await this.fetchFn(`${this.endpoint}/${encodeURIComponent(request.model)}:generateContent`, {
+        response = await this.fetchFn(`${this.endpoint}/${encodeURIComponent(model)}:generateContent`, {
           method: "POST",
           headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey! },
           body: JSON.stringify({
@@ -145,7 +148,7 @@ export class GeminiProvider implements LlmProvider {
       if(!matchesJsonSchema(request.structuredOutput.jsonSchema,output))throw new IntegrationError("schema_mismatch", "La salida estructurada de Gemini no cumple el schema solicitado.");
     }
     const usage = body.usageMetadata as { promptTokenCount?: unknown; candidatesTokenCount?: unknown } | undefined, inputTokens = number(usage?.promptTokenCount), outputTokens = number(usage?.candidatesTokenCount);
-    return { provider: this.name, requestedModel: request.model, reportedModel: request.model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" }, ...(diagnostics.finishReason ? { finishReason: diagnostics.finishReason } : {}), providerDiagnostics: { ...diagnostics } };
+    return { provider: this.name, requestedModel: model, reportedModel: model, output: output as TOutput, usage: { ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }), usageKind: usage ? "provider_reported" : "unknown" }, ...(diagnostics.finishReason ? { finishReason: diagnostics.finishReason } : {}), providerDiagnostics: { ...diagnostics } };
   }
 }
 import { validationFetch } from "../services/validation-session.js";

@@ -58,7 +58,33 @@ function parsedCandidates(values:readonly unknown[]):Candidate[]{return values.m
 export function mergeProblemCandidates(values:readonly unknown[]):Candidate[]{const merged:Candidate[]=[];for(const item of parsedCandidates(values)){if(isMiscellaneous(item))continue;const existing=merged.find(other=>similar(item,other));if(existing){existing.evidenceIds=[...new Set([...existing.evidenceIds,...item.evidenceIds])];existing.relevanceScore=Math.max(existing.relevanceScore??0,item.relevanceScore??0);}else merged.push({...item});}return merged;}
 export interface AnalysisSetSnapshot{rows:EvidenceRow[];activeSources:number;rawComments:number;eligibleComments:number}
 export function analysisSetSnapshot(database:AppDatabase,projectId:string):AnalysisSetSnapshot{const db=database.connection;const rows=db.prepare(`SELECT e.id,e.comment_id commentId,e.quote_text quoteText,c.author,e.source_id sourceId,s.title sourceTitle,c.likes,c.is_reply isReply,c.thread_id threadId FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed')`).all(projectId) as unknown as EvidenceRow[];const counts=db.prepare(`SELECT COUNT(DISTINCT CASE WHEN s.include_in_analysis=1 AND s.status IN ('ready','completed') THEN s.id END) activeSources,COUNT(DISTINCT c.id) rawComments,COUNT(DISTINCT CASE WHEN s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') THEN c.id END) eligibleComments FROM sources s LEFT JOIN comments c ON c.source_id=s.id AND c.project_id=s.project_id WHERE s.project_id=?`).get(projectId) as {activeSources:number;rawComments:number;eligibleComments:number};return{rows,activeSources:counts.activeSources,rawComments:counts.rawComments,eligibleComments:counts.eligibleComments};}
-function relevance(claim:string,focus:string):number{const shared=overlap(tokens(claim),tokens(focus)).length;return Math.min(100,shared*34+(shared?18:10));}
+function baseStem(w: string): string {
+  if (w.length <= 3) return w;
+  return w.replace(/idades$|idad$/u, "").replace(/(?:os|as|es|[oase])$/u, "");
+}
+function matchesWord(set: Set<string>, word: string): boolean {
+  if (set.has(word)) return true;
+  if (word.length > 3) {
+    if (set.has(word + "s") || set.has(word + "es")) return true;
+    if (word.endsWith("es") && (set.has(word.slice(0, -2)) || set.has(word.slice(0, -1)))) return true;
+    if (word.endsWith("s") && set.has(word.slice(0, -1))) return true;
+    const stem = baseStem(word);
+    if (stem.length >= 4) {
+      for (const other of set) {
+        if (other.length >= 4 && baseStem(other) === stem) return true;
+      }
+    }
+  }
+  return false;
+}
+function lexicalOverlap(claimSet: Set<string>, focusSet: Set<string>): number {
+  let count = 0;
+  for (const focusWord of focusSet) {
+    if (matchesWord(claimSet, focusWord)) count++;
+  }
+  return count;
+}
+function relevance(claim:string,focus:string):number{const shared=lexicalOverlap(tokens(claim),tokens(focus));return Math.min(100,shared*34+(shared?18:10));}
 interface FocusMatchResult{deterministicScore:number;lexicalShared:number;semanticShared:number;hasMeaningfulFocus:boolean;hasSignal:boolean;}
 /**
  * Deterministic research-focus match.
@@ -73,7 +99,7 @@ interface FocusMatchResult{deterministicScore:number;lexicalShared:number;semant
  * (OUT_OF_SCOPE). A focus with no meaningful tokens disables the relevance gate
  * (intentional no-focus analysis is preserved).
  */
-function focusMatch(claim:string,focus:string,vocabularySnapshot?:SemanticVocabularySnapshot|null):FocusMatchResult{const claimLex=tokens(claim),focusLex=tokens(focus),lexicalShared=overlap(claimLex,focusLex).length,claimSem=normalizeQualityText(claim,vocabularySnapshot).semanticConcepts,focusSem=normalizeQualityText(focus,vocabularySnapshot).semanticConcepts,semanticShared=intersect(claimSem,focusSem).length,hasMeaningfulFocus=focusLex.size>0,hasSignal=lexicalShared>=1||semanticShared>=1,lexicalScore=Math.min(100,lexicalShared*34+(lexicalShared?18:10)),deterministicScore=semanticShared>=1?Math.min(100,lexicalScore+semanticShared*30):lexicalScore;return{deterministicScore,lexicalShared,semanticShared,hasMeaningfulFocus,hasSignal};}
+function focusMatch(claim:string,focus:string,vocabularySnapshot?:SemanticVocabularySnapshot|null):FocusMatchResult{const claimLex=tokens(claim),focusLex=tokens(focus),lexicalShared=lexicalOverlap(claimLex,focusLex),claimSem=normalizeQualityText(claim,vocabularySnapshot).semanticConcepts,focusSem=normalizeQualityText(focus,vocabularySnapshot).semanticConcepts,semanticShared=intersect(claimSem,focusSem).length,hasMeaningfulFocus=focusLex.size>0,hasSignal=lexicalShared>=1||semanticShared>=1,lexicalScore=Math.min(100,lexicalShared*34+(lexicalShared?18:10)),deterministicScore=semanticShared>=1?Math.min(100,lexicalScore+semanticShared*30):lexicalScore;return{deterministicScore,lexicalShared,semanticShared,hasMeaningfulFocus,hasSignal};}
 function cohesionBreakdown(evidence:readonly ValidatedEvidence[],vocabularySnapshot?:SemanticVocabularySnapshot|null):{score:number|null;details:EvidenceQualityAudit[]}{const supported=evidence.filter(row=>row.supportType==="DIRECT"||row.supportType==="INFERRED");if(!supported.length)return{score:null,details:evidence.map(row=>({...row.quality,evidenceId:row.id,cohesionContribution:0,includedInCohesionDenominator:false}))};const domainWeights=new Map<string,number>();if(vocabularySnapshot)for(const concept of vocabularySnapshot.concepts)domainWeights.set(concept.conceptKey,concept.cohesionWeight);const details=evidence.map(row=>{const included=row.supportType==="DIRECT"||row.supportType==="INFERRED",lexicalContribution=Math.min(1,row.quality.lexicalTokensShared.length/2),coreShared=row.quality.semanticConceptsShared.filter(concept=>CORE_CONCEPTS.has(concept)),domainShared=row.quality.semanticConceptsShared.filter(concept=>!CORE_CONCEPTS.has(concept)),coreContribution=Math.min(1,coreShared.length/2),domainContribution=Math.min(1,domainShared.reduce((sum,key)=>sum+(domainWeights.get(key)??0),0)),semanticContribution=Math.min(1,coreContribution+domainContribution),contribution=included?Math.max(lexicalContribution,semanticContribution):0;return{...row.quality,evidenceId:row.id,cohesionContribution:contribution,includedInCohesionDenominator:included};});const score=Math.round(details.filter(row=>row.includedInCohesionDenominator).reduce((sum,row)=>sum+row.cohesionContribution,0)/supported.length*100);return{score,details};}
 /** Cohesion averages only DIRECT/INFERRED evidence; CONTEXT_ONLY and NOT_SUPPORTED are excluded from the denominator. */
 function cohesion(evidence:readonly ValidatedEvidence[]):number{return cohesionBreakdown(evidence).score??0;}

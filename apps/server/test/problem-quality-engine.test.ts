@@ -421,4 +421,29 @@ describe("PHASE 2 — Dynamic semantic vocabulary integration (explicit snapshot
     expect(ev2.semanticConceptsShared).not.toContain("domain_problem");
     db.close();
   });
+
+  it("reconoce coincidencia léxica morfológica (singular/plural y derivaciones comunes) entre foco y claim", () => {
+    const { db, project, ids } = makeDb("el perro reactivo se altera ante otros perros");
+    const focus = "Modificación de conducta para perros reactivos";
+    const input = {
+      schemaVersion: 1,
+      items: [
+        {
+          id: "p1",
+          name: "Paseo estresante con perro reactivo",
+          summary: "Dueños describen dificultades ante la reactividad del perro en el paseo",
+          category: "pain",
+          evidenceIds: [ids[0]!.id],
+        },
+      ],
+    };
+    const res = qualityProblems(db, project.id, input, { researchFocus: focus }) as {
+      analysisAudit: { postMergeClusters: ClusterAuditRecord[] };
+    };
+    const cluster = res.analysisAudit.postMergeClusters[0]!;
+    // Both 'perros'/'perro' and 'reactivos'/'reactivo'/'reactividad' match morphologically
+    expect(cluster.researchRelevanceScore).toBeGreaterThanOrEqual(80);
+    expect(cluster.researchRelevanceLevel).toBe("CORE");
+    db.close();
+  });
 });

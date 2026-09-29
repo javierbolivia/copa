@@ -216,7 +216,7 @@ describe("Phase 20.4 semantic mining", () => {
   it("bloquea DeepSeek V4 Pro antes de cualquier red", () => {
     expect(() => new DeepSeekProvider({ apiKey: "k", model: "deepseek-v4-pro" })).toThrow(IntegrationError);
     expect(() => new DeepSeekProvider({ apiKey: "k", model: "DeepSeek V4 Pro" })).toThrowError(/V4 Pro/);
-    expect(new DeepSeekProvider({ apiKey: "k" }).effectiveModel).toBe("deepseek-v4-flash");
+    expect(new DeepSeekProvider({ apiKey: "k" }).effectiveModel).toBe("deepseek-flash");
   });
 });
 

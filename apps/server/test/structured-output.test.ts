@@ -74,4 +74,35 @@ describe("safe structured-output diagnostics", () => {
     expect(parseStructuredJson("```json\n{\"ok\":true}\n```")).toEqual({ ok: true });
     expect(parseStructuredJson("Respuesta:\n{\"ok\":true}\nFin.")).toEqual({ ok: true });
   });
+
+  it("extrae JSON válido cuando la respuesta contiene bloques <think> con llaves y prosa circundante", () => {
+    const thinkWithBraces = `<think>
+Pensando en la estructura del objeto {"clave": "valor"} y validando scores.
+</think>
+\`\`\`json
+{"schemaVersion": 1, "items": [], "selectedId": "item-1"}
+\`\`\``;
+    expect(parseStructuredJson(thinkWithBraces)).toEqual({
+      schemaVersion: 1,
+      items: [],
+      selectedId: "item-1",
+    });
+
+    const thinkWithoutFences = `<think>
+Evaluando item {"id": "item-1"}.
+</think>
+{"schemaVersion": 1, "items": [], "selectedId": "item-1"}`;
+    expect(parseStructuredJson(thinkWithoutFences)).toEqual({
+      schemaVersion: 1,
+      items: [],
+      selectedId: "item-1",
+    });
+
+    const proseWithBraces = `He analizado la oportunidad {item-1} del problema {problem-1}:
+\`\`\`json
+{"ok": true}
+\`\`\`
+Nota: {revision: "ok"}`;
+    expect(parseStructuredJson(proseWithBraces)).toEqual({ ok: true });
+  });
 });

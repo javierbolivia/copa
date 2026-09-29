@@ -58,7 +58,7 @@ function opportunitiesOutput(scores: Record<string, unknown>, extraItemFields: R
 function deepSeekResponse(output: unknown) {
   return new Response(JSON.stringify({
     model: DEEPSEEK_DEFAULT_MODEL,
-    choices: [{ finish_reason: "stop", message: { content: JSON.stringify(output) } }],
+    choices: [{ finish_reason: "stop", message: { content: typeof output === "string" ? output : JSON.stringify(output) } }],
     usage: { prompt_tokens: 40, completion_tokens: 30 },
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
@@ -136,6 +136,28 @@ describe("scoring determinista de Opportunities (provider scores -> backend tota
     });
     const result = response.json<ModuleResult>();
     expect(result.outputData).toMatchObject({ selectedId: "opp-1" });
+  });
+
+  it("A3. procesa exitosamente la respuesta de DeepSeek cuando incluye bloques <think> de razonamiento y llaves", async () => {
+    const rawOutputWithThink = `<think>
+Razonando sobre el problema {"id": "problem-1"}.
+Evaluando frequency: 80, urgency: 70, etc.
+</think>
+\`\`\`json
+${JSON.stringify(opportunitiesOutput(VALID_SCORES))}
+\`\`\``;
+    const fetchMock = vi.fn(async () => deepSeekResponse(rawOutputWithThink));
+    const project = await projectWithFreshProblems(fetchMock as unknown as typeof fetch);
+
+    const response = await app!.inject({
+      method: "POST", url: `/api/projects/${project.id}/modules/opportunities/run`, payload: { provider: "deepseek" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const item = (response.json<ModuleResult>().outputData as { items: Array<Record<string, unknown>> }).items[0]!;
+    expect(item.total).toBe(EXPECTED_TOTAL_FOR_VALID_SCORES);
+    expect(item.scores).toMatchObject(VALID_SCORES);
   });
 
   it("B. score faltante: rechazado explícitamente, no crea versión", async () => {

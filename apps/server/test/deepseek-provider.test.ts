@@ -210,4 +210,29 @@ describe("DeepSeekProvider", () => {
     });
     expect(fetchMock).toHaveBeenCalledOnce();
   });
+
+  it("acepta respuestas con bloques <think> y llaves de razonamiento", async () => {
+    const thinkResponse = `<think>
+Razonando sobre la oportunidad {"id": "item-1"} y evaluando scores.
+</think>
+\`\`\`json
+{"ok": true}
+\`\`\``;
+    const fetchMock = vi.fn(async () => response(thinkResponse));
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    const result = await provider.generate<{ ok: boolean }>({
+      provider: "deepseek",
+      model: provider.effectiveModel,
+      systemInstructions: "JSON",
+      input: "{}",
+      structuredOutput: {
+        name: "check",
+        jsonSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
+      },
+    });
+
+    expect(result.output).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });

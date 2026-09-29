@@ -1,15 +1,38 @@
 /** Parse the small set of structured-output envelopes accepted from LLMs. */
-export function parseStructuredJson(text:string):unknown|undefined {
-  const trimmed=text.trim();
-  const candidates=[trimmed];
-  const fenced=trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/iu)?.[1]?.trim();
-  if(fenced)candidates.push(fenced);
-  const firstBrace=trimmed.indexOf("{");
-  const lastBrace=trimmed.lastIndexOf("}");
-  if(firstBrace>=0&&lastBrace>firstBrace)candidates.push(trimmed.slice(firstBrace,lastBrace+1));
-  for(const candidate of new Set(candidates)){
-    try{return JSON.parse(candidate) as unknown;}
-    catch{/* Try the next bounded envelope; never repair or invent fields. */}
+export function parseStructuredJson(text: string): unknown | undefined {
+  const trimmed = text.trim();
+  // Strip reasoning/thinking tags (e.g. <think>...</think>) emitted by reasoning LLMs
+  const stripped = trimmed.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+
+  const candidates: string[] = [trimmed, stripped];
+
+  // Extract all fenced code blocks (```json ... ``` or ``` ... ```)
+  for (const source of [stripped, trimmed]) {
+    for (const match of source.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+      if (match[1]?.trim()) candidates.push(match[1].trim());
+    }
+  }
+
+  // Find outermost object/array bounds in stripped and trimmed text
+  for (const source of [stripped, trimmed]) {
+    const firstBrace = source.indexOf("{");
+    const lastBrace = source.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      candidates.push(source.slice(firstBrace, lastBrace + 1));
+    }
+    const firstBracket = source.indexOf("[");
+    const lastBracket = source.lastIndexOf("]");
+    if (firstBracket >= 0 && lastBracket > firstBracket) {
+      candidates.push(source.slice(firstBracket, lastBracket + 1));
+    }
+  }
+
+  for (const candidate of new Set(candidates)) {
+    try {
+      return JSON.parse(candidate) as unknown;
+    } catch {
+      /* Try the next bounded envelope; never repair or invent fields. */
+    }
   }
   return undefined;
 }

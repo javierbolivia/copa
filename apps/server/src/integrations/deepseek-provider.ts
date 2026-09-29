@@ -93,18 +93,21 @@ const validationSummary = (issues: readonly JsonSchemaValidationIssue[]): string
  * Build one from the declared contract so it only demonstrates shape and types,
  * never fabricated module data.
  */
-const jsonShapeExample = (schema: unknown, depth = 0): unknown => {
+const jsonShapeExample = (schema: unknown, depth = 0, keyName = ""): unknown => {
   if (depth > 8 || !isRecord(schema)) return "texto";
   const type = schema.type;
   if (type === "array") return [jsonShapeExample(schema.items, depth + 1)];
   if (type === "boolean") return false;
+  if (keyName === "schemaVersion") return 1;
   if (type === "integer" || type === "number") return 0;
-  if (type !== "object") return "texto";
+  if (type !== "object" && !schema.properties) {
+    if (keyName === "id" || keyName === "selectedId") return "item-1";
+    if (keyName === "problemId") return "problem-1";
+    return "texto";
+  }
   const properties = isRecord(schema.properties) ? schema.properties : {};
-  const required = Array.isArray(schema.required)
-    ? schema.required.filter((key): key is string => typeof key === "string")
-    : Object.keys(properties);
-  return Object.fromEntries(required.map(key => [key, jsonShapeExample(properties[key], depth + 1)]));
+  const keys = Object.keys(properties);
+  return Object.fromEntries(keys.map(key => [key, jsonShapeExample(properties[key], depth + 1, key)]));
 };
 
 const invalidStructuredOutput = (
@@ -133,14 +136,21 @@ const invalidSchemaIssues = (error: unknown): readonly JsonSchemaValidationIssue
     : undefined;
 };
 
-const responseApiText = (body: DeepSeekResponseApiBody): string | undefined => {
-  if (!Array.isArray(body.output)) return undefined;
-  for (const item of body.output) {
-    if (!isRecord(item) || !Array.isArray(item.content)) continue;
-    for (const part of item.content) {
-      if (isRecord(part) && part.type === "output_text" && typeof part.text === "string" && part.text.trim()) {
-        return part.text;
+const responseApiText = (body: DeepSeekResponseApiBody & DeepSeekResponse): string | undefined => {
+  if (Array.isArray(body.output)) {
+    for (const item of body.output) {
+      if (!isRecord(item) || !Array.isArray(item.content)) continue;
+      for (const part of item.content) {
+        if (isRecord(part) && part.type === "output_text" && typeof part.text === "string" && part.text.trim()) {
+          return part.text;
+        }
       }
+    }
+  }
+  if (Array.isArray(body.choices) && isRecord(body.choices[0])) {
+    const choice = body.choices[0] as DeepSeekChoice;
+    if (typeof choice.message?.content === "string" && choice.message.content.trim()) {
+      return choice.message.content;
     }
   }
   return undefined;

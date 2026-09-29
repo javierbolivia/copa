@@ -111,6 +111,17 @@ function pipelineFixture(failAt=0, mutateAt=0, invalidMapEvidenceId?:string){
     return {db,project,modules,plan,http,fallback};
 }
 describe("canonical bounded pipeline",()=>{
+  it("reports the generation lock only for the owning project, including completed validations",async()=>{
+    const {db,project,modules,plan,http}=pipelineFixture();
+    const other=new ProjectRepository(db).create({name:"Other",niche:"photography",description:null});
+    expect(modules.providerStatus(project.id).generationBlock).toBeNull();
+    await modules.executeValidation("once",plan);
+    expect(modules.providerStatus(project.id).generationBlock).toMatchObject({code:"VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED",message:expect.stringContaining("autorización")});
+    expect(modules.providerStatus(other.id).generationBlock).toBeNull();
+    expect(modules.providerStatus().generationBlock).toBeNull();
+    await expect(modules.run(project.id,"product","deepseek")).rejects.toThrow("VALIDATION_PROJECT_LOCKED");
+    expect(http).toHaveBeenCalledTimes(4);
+  });
   it("routes two DeepSeek MAP then Gemini reduce/opportunities, publishes canonical lineage only once",async()=>{
     const {db,project,modules,plan,http,fallback}=pipelineFixture();
     const result=await modules.executeValidation("once",plan);

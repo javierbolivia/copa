@@ -41,6 +41,7 @@ export class ApiClientError extends Error {
 }
 
 export interface ProviderStatus {
+  generationBlock?: {code:string;message:string}|null;
   openai: { configured: boolean; economyModel: string; powerfulModel: string };
   gemini:{configured:boolean;economyModel:string;powerfulModel:string};
   deepseek: { configured: boolean; model: string };

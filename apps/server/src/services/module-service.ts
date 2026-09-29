@@ -196,9 +196,11 @@ export class ModuleService {
     private readonly options: ModuleServiceOptions,
   ) {}
 
-  providerStatus(projectId?: string): { openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; groq?: { configured: boolean; model: string }; openrouter?: { configured: boolean; model: string }; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter" } {
+  providerStatus(projectId?: string): { generationBlock: {code:string;message:string}|null; openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; groq?: { configured: boolean; model: string }; openrouter?: { configured: boolean; model: string }; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter" } {
     const projectSettings = projectId ? this.settings.get(projectId) : undefined;
     return {
+      generationBlock:projectId && this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? LIMIT 1").get(projectId)
+        ?{code:"VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED",message:"La generación de este proyecto está bloqueada tras una validación controlada. Puedes revisar los resultados guardados; para generar de nuevo se necesita una nueva autorización."}:null,
       openai: {
         configured: this.options.openAI.configured,
         economyModel: projectSettings?.economyModel?.trim() || this.options.economyModel || "gpt-5-mini",

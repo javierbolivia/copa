@@ -40,6 +40,17 @@ function documentedSuccess(overrides: {
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
+function documentedResponsesSuccess(content: unknown) {
+  return new Response(JSON.stringify({
+    id: "resp-contract",
+    object: "response",
+    model: DEEPSEEK_DEFAULT_MODEL,
+    status: "completed",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: content }] }],
+    usage: { input_tokens: 11, output_tokens: 8, total_tokens: 19 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
 function documentedError(status: number, code: string) {
   return new Response(JSON.stringify({ error: { message: "deepseek-secret-value", type: code, code } }), {
     status,
@@ -138,7 +149,9 @@ describe("contrato documentado de DeepSeek V4 Flash", () => {
     await expect(provider(vi.fn(async () => new Response(JSON.stringify({ model: DEEPSEEK_DEFAULT_MODEL, choices: {} }), { status: 200, headers: { "content-type": "application/json" } })))
       .generate(baseRequest)).rejects.toMatchObject({ code: "invalid_schema" });
 
-    await expect(provider(vi.fn(async () => documentedSuccess({ content: "no es json" })))
+    await expect(provider(vi.fn()
+      .mockResolvedValueOnce(documentedSuccess({ content: "no es json" }))
+      .mockResolvedValueOnce(documentedResponsesSuccess("no es json")))
       .generate({ ...baseRequest, structuredOutput: { name: "check", jsonSchema: { type: "object" } } }))
       .rejects.toMatchObject({ code: "invalid_schema" });
   });

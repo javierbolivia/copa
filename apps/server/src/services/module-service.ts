@@ -199,7 +199,7 @@ export class ModuleService {
   providerStatus(projectId?: string): { generationBlock: {code:string;message:string}|null; openai: { configured: boolean; economyModel: string; powerfulModel: string }; gemini:{configured:boolean;economyModel:string;powerfulModel:string}; deepseek:{configured:boolean;model:string}; groq?: { configured: boolean; model: string }; openrouter?: { configured: boolean; model: string }; defaultProvider: "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter" } {
     const projectSettings = projectId ? this.settings.get(projectId) : undefined;
     return {
-      generationBlock:projectId && this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? LIMIT 1").get(projectId)
+      generationBlock:projectId && this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? AND state IN ('READY','RUNNING') LIMIT 1").get(projectId)
         ?{code:"VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED",message:"La generación de este proyecto está bloqueada tras una validación controlada. Puedes revisar los resultados guardados; para generar de nuevo se necesita una nueva autorización."}:null,
       openai: {
         configured: this.options.openAI.configured,
@@ -416,7 +416,7 @@ export class ModuleService {
       if(key!=="problems"&&key!=="opportunities")throw new Error("VALIDATION_MODULE_FORBIDDEN");
       assertFrozenPlan(this.db,validation.plan);
       validation.session.claimModule(key);
-    }else if(this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? LIMIT 1").get(projectId)){
+    }else if(this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? AND state IN ('READY','RUNNING') LIMIT 1").get(projectId)){
       throw new Error("VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED");
     }
     const definition = getModule(key);

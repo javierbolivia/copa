@@ -28,8 +28,9 @@ export interface VideoTranscriptSegment { readonly id:string; readonly transcrip
 
 export interface SourceListFilter { query?: string; sourceType?: SourceType }
 export interface CommentListFilter {
-  query?: string; sourceId?: string; replies?: boolean; minLikes?: number; limit?: number; offset?: number;
+  query?: string; sourceId?: string; replies?: boolean; minLikes?: number; analysis?:"all"|"included"|"excluded"; limit?: number; offset?: number;
 }
+export interface CommentPage { comments:Comment[]; total:number; }
 
 const DEMO_COMMENTS = [
   ["Ana (DEMO)", "Tengo miles de fotos repetidas y nunca encuentro la que busco.", 42],
@@ -206,14 +207,26 @@ export class SourceRepository {
     }catch(error){this.database.connection.exec("ROLLBACK");throw error;}
   }
 
-  listComments(projectId:string,filter:CommentListFilter={}):Comment[] {
+  listComments(projectId:string,filter:CommentListFilter={}):Comment[] { return this.listCommentsPage(projectId,filter).comments; }
+
+  listCommentsPage(projectId:string,filter:CommentListFilter={}):CommentPage {
     const clauses=["project_id = ?"], values:Array<string|number>=[projectId];
     if(filter.sourceId){clauses.push("source_id = ?");values.push(filter.sourceId);}
     if(filter.replies!==undefined){clauses.push("is_reply = ?");values.push(filter.replies?1:0);}
     if(filter.minLikes!==undefined){clauses.push("likes >= ?");values.push(filter.minLikes);}
     if(filter.query?.trim()){clauses.push("(text LIKE ? OR author LIKE ?)");const q=`%${filter.query.trim()}%`;values.push(q,q);}
-    const limit=Math.min(Math.max(filter.limit??100,1),1000),offset=Math.max(filter.offset??0,0);values.push(limit,offset);
-    return (this.database.connection.prepare(`SELECT * FROM comments WHERE ${clauses.join(" AND ")} ORDER BY likes DESC, created_at ASC LIMIT ? OFFSET ?`).all(...values) as unknown as CommentRow[]).map(toComment);
+    const eligible="analysis_eligible=1 AND EXISTS(SELECT 1 FROM sources source WHERE source.id=comments.source_id AND source.project_id=comments.project_id AND source.include_in_analysis=1 AND source.status IN ('ready','completed'))";
+    if(filter.analysis==="included")clauses.push(eligible);
+    if(filter.analysis==="excluded")clauses.push(`NOT (${eligible})`);
+    const total=Number((this.database.connection.prepare(`SELECT COUNT(*) count FROM comments WHERE ${clauses.join(" AND ")}`).get(...values) as {count:number}).count);
+    const limit=Math.min(Math.max(filter.limit??100,1),1000),offset=Math.max(filter.offset??0,0);
+    const comments=(this.database.connection.prepare(`SELECT * FROM comments WHERE ${clauses.join(" AND ")} ORDER BY likes DESC, created_at ASC LIMIT ? OFFSET ?`).all(...values,limit,offset) as unknown as CommentRow[]).map(toComment);
+    return {comments,total};
+  }
+
+  commentSummary(projectId:string):{eligibleIncluded:number} {
+    const row=this.database.connection.prepare(`SELECT COUNT(*) eligibleIncluded FROM comments comment JOIN sources source ON source.id=comment.source_id AND source.project_id=comment.project_id WHERE comment.project_id=? AND comment.analysis_eligible=1 AND source.include_in_analysis=1 AND source.status IN ('ready','completed')`).get(projectId) as {eligibleIncluded:number};
+    return {eligibleIncluded:Number(row.eligibleIncluded)};
   }
 
   private insertBundle(projectId:string,sourceData:{sourceType:SourceType;title:string;url:string|null;rawText:string|null;metadata:Record<string,unknown>},comments:Array<{author:string;text:string;likes:number;platformId:string}>,isDemo:boolean):SourceBundle {

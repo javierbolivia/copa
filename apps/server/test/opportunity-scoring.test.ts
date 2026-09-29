@@ -63,6 +63,15 @@ function deepSeekResponse(output: unknown) {
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
+function deepSeekResponsesResponse(output: unknown) {
+  return new Response(JSON.stringify({
+    model: DEEPSEEK_DEFAULT_MODEL,
+    status: "completed",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify(output) }] }],
+    usage: { input_tokens: 40, output_tokens: 30 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
 describe("scoring determinista de Opportunities (provider scores -> backend total)", () => {
   let app: FastifyInstance | undefined;
 
@@ -106,10 +115,35 @@ describe("scoring determinista de Opportunities (provider scores -> backend tota
     expect(item.scores).toMatchObject(VALID_SCORES);
   });
 
+  it("A2. recupera Oportunidades cuando Chat no devuelve JSON usando Responses JSON Schema", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(deepSeekResponse("No puedo generar el objeto solicitado."))
+      .mockResolvedValueOnce(deepSeekResponsesResponse(opportunitiesOutput(VALID_SCORES)));
+    const project = await projectWithFreshProblems(fetchMock as unknown as typeof fetch);
+
+    const response = await app!.inject({
+      method: "POST", url: `/api/projects/${project.id}/modules/opportunities/run`, payload: { provider: "deepseek" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://api.deepseek.com/responses");
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(retryInit.body))).toMatchObject({
+      model: DEEPSEEK_DEFAULT_MODEL,
+      reasoning: { effort: "none" },
+      text: { format: { type: "json_schema", name: "opportunities_output" } },
+    });
+    const result = response.json<ModuleResult>();
+    expect(result.outputData).toMatchObject({ selectedId: "opp-1" });
+  });
+
   it("B. score faltante: rechazado explícitamente, no crea versión", async () => {
     const incomplete = { ...VALID_SCORES } as Record<string, unknown>;
     delete incomplete.emotionalIntensity;
-    const fetchMock = vi.fn(async () => deepSeekResponse(opportunitiesOutput(incomplete)));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(deepSeekResponse(opportunitiesOutput(incomplete)))
+      .mockResolvedValueOnce(deepSeekResponsesResponse(opportunitiesOutput(incomplete)));
     const project = await projectWithFreshProblems(fetchMock as unknown as typeof fetch);
 
     const response = await app!.inject({

@@ -22,6 +22,17 @@ describe("Sources API",()=>{
     const workflow=await app.inject({method:"GET",url:`/api/projects/${project.id}/workflow`});expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="sources").state).toBe("COMPLETED");expect(workflow.json().steps.find((s:{stepKey:string})=>s.stepKey==="problems").state).toBe("READY");
   });
 
+  it("pagina comentarios y conserva totales y filtros de análisis",async()=>{
+    const bundle=(await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}})).json<SourceBundle>();
+    const first=await app.inject({method:"GET",url:`/api/projects/${project.id}/comments?limit=3&offset=0`});
+    expect(first.json()).toMatchObject({total:10,eligibleIncluded:10});expect(first.json().comments).toHaveLength(3);
+    await app.inject({method:"PUT",url:`/api/projects/${project.id}/sources/${bundle.sources[0]!.id}/analysis`,payload:{included:false}});
+    const included=await app.inject({method:"GET",url:`/api/projects/${project.id}/comments?analysis=included&limit=3`});
+    const excluded=await app.inject({method:"GET",url:`/api/projects/${project.id}/comments?analysis=excluded&limit=3`});
+    expect(included.json()).toMatchObject({total:0,eligibleIncluded:0});expect(included.json().comments).toEqual([]);
+    expect(excluded.json()).toMatchObject({total:10,eligibleIncluded:0});expect(excluded.json().comments).toHaveLength(3);
+  });
+
   it("persiste include/exclude, conserva datos y marca Sources stale",async()=>{
     const bundle=(await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"demo"}})).json<SourceBundle>();
     const source=bundle.sources[0]!;

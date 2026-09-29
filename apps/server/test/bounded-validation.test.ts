@@ -111,16 +111,24 @@ function pipelineFixture(failAt=0, mutateAt=0, invalidMapEvidenceId?:string){
     return {db,project,modules,plan,http,fallback};
 }
 describe("canonical bounded pipeline",()=>{
-  it("reports the generation lock only for the owning project, including completed validations",async()=>{
+  it("releases normal generation after a completed validation while retaining its ledger",async()=>{
     const {db,project,modules,plan,http}=pipelineFixture();
     const other=new ProjectRepository(db).create({name:"Other",niche:"photography",description:null});
     expect(modules.providerStatus(project.id).generationBlock).toBeNull();
     await modules.executeValidation("once",plan);
-    expect(modules.providerStatus(project.id).generationBlock).toMatchObject({code:"VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED",message:expect.stringContaining("autorización")});
+    expect(new ValidationSession(db.connection,"once").row().state).toBe("COMPLETED");
+    expect(modules.providerStatus(project.id).generationBlock).toBeNull();
     expect(modules.providerStatus(other.id).generationBlock).toBeNull();
     expect(modules.providerStatus().generationBlock).toBeNull();
-    await expect(modules.run(project.id,"product","deepseek")).rejects.toThrow("VALIDATION_PROJECT_LOCKED");
+    await expect(modules.run(project.id,"product","mock")).resolves.toMatchObject({moduleKey:"product"});
     expect(http).toHaveBeenCalledTimes(4);
+  });
+  it("keeps normal generation blocked only while a validation is active",async()=>{
+    const {db,project,modules}=pipelineFixture();
+    const active=new ValidationSession(db.connection,"active");
+    active.create(project.id,"hash",{});
+    expect(modules.providerStatus(project.id).generationBlock).toMatchObject({code:"VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED"});
+    await expect(modules.run(project.id,"product","mock")).rejects.toThrow("VALIDATION_PROJECT_LOCKED");
   });
   it("routes two DeepSeek MAP then Gemini reduce/opportunities, publishes canonical lineage only once",async()=>{
     const {db,project,modules,plan,http,fallback}=pipelineFixture();
@@ -137,7 +145,7 @@ describe("canonical bounded pipeline",()=>{
     expect(JSON.stringify(result.problems.outputData)).not.toContain('"b1e1"');
     expect(()=>session.claimModule("opportunities")).toThrow();
     await expect(modules.executeValidation("once",plan)).rejects.toThrow();
-    await expect(modules.run(project.id,"problems","deepseek")).rejects.toThrow("VALIDATION_PROJECT_LOCKED");
+    await expect(modules.run(project.id,"product","mock")).resolves.toMatchObject({moduleKey:"product"});
     expect(http).toHaveBeenCalledTimes(4);
   });
   it.each([1,2,3,4])("stops entire pipeline at physical failure %s without a second run",async(n)=>{

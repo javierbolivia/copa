@@ -39,4 +39,11 @@ describe("Project delete UI wiring", () => {
     expect(app).toContain("await api.deleteProject(project.id)");
     expect(app).toContain("if(selected?.id===project.id)setSelected(null);await loadProjects()");
   });
+
+  it("usa botones con estado presionado para filtrar proyectos", () => {
+    expect(projectsView).toContain('aria-label="Estado de los proyectos"');
+    expect(projectsView).toContain('aria-pressed={filter==="active"}');
+    expect(projectsView).toContain('aria-pressed={filter==="archived"}');
+    expect(projectsView).not.toContain('role="tablist"');
+  });
 });

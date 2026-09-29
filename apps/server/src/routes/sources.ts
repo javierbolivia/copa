@@ -11,8 +11,8 @@ const ProjectParams=Type.Object({id:Type.String({format:"uuid"})});
 const SourceParams=Type.Object({id:Type.String({format:"uuid"}),sourceId:Type.String({format:"uuid"})});
 const JobParams=Type.Object({id:Type.String({format:"uuid"}),jobId:Type.String({format:"uuid"})});
 const SourceListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:300})),sourceType:Type.Optional(Type.Union([Type.Literal("youtube"),Type.Literal("manual"),Type.Literal("demo")]))});
-const CommentListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:300})),sourceId:Type.Optional(Type.String({format:"uuid"})),replies:Type.Optional(Type.Boolean()),minLikes:Type.Optional(Type.Integer({minimum:0})),limit:Type.Optional(Type.Integer({minimum:1,maximum:1000})),offset:Type.Optional(Type.Integer({minimum:0}))});
-const SourcesResponse=Type.Object({sources:Type.Array(SourceSchema)}),CommentsResponse=Type.Object({comments:Type.Array(CommentSchema)}),JobsResponse=Type.Object({jobs:Type.Array(JobSchema)}),GenerationsResponse=Type.Object({generations:Type.Array(GenerationSchema)});
+const CommentListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:300})),sourceId:Type.Optional(Type.String({format:"uuid"})),replies:Type.Optional(Type.Boolean()),minLikes:Type.Optional(Type.Integer({minimum:0})),analysis:Type.Optional(Type.Union([Type.Literal("all"),Type.Literal("included"),Type.Literal("excluded")])),limit:Type.Optional(Type.Integer({minimum:1,maximum:1000})),offset:Type.Optional(Type.Integer({minimum:0}))});
+const SourcesResponse=Type.Object({sources:Type.Array(SourceSchema)}),AnalysisSetResponse=Type.Object({comments:Type.Array(CommentSchema)}),CommentsResponse=Type.Object({comments:Type.Array(CommentSchema),total:Type.Integer({minimum:0}),eligibleIncluded:Type.Integer({minimum:0})}),JobsResponse=Type.Object({jobs:Type.Array(JobSchema)}),GenerationsResponse=Type.Object({generations:Type.Array(GenerationSchema)});
 const YouTubeQueuedResponse=Type.Object({source:SourceSchema,job:JobSchema});
 const EvidenceParams=Type.Object({id:Type.String({format:"uuid"}),evidenceId:Type.String({format:"uuid"})});
 const YouTubeSearchQuery=Type.Object({q:Type.String({minLength:2,maxLength:300}),pageToken:Type.Optional(Type.String({maxLength:500}))});
@@ -20,7 +20,7 @@ const YouTubeImportBody=Type.Object({videoId:Type.String({minLength:11,maxLength
 const IncludeAnalysisBody=Type.Object({included:Type.Boolean()});
 
 type SourceListQueryType={query?:string;sourceType?:"youtube"|"manual"|"demo"};
-type CommentListQueryType={query?:string;sourceId?:string;replies?:boolean;minLikes?:number;limit?:number;offset?:number};
+type CommentListQueryType={query?:string;sourceId?:string;replies?:boolean;minLikes?:number;analysis?:"all"|"included"|"excluded";limit?:number;offset?:number};
 const missing=(message:string):ApiError=>({error:"not_found",message});
 
 export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepository,jobs:JobRepository,youtube:YouTubeImportService,studio:ProductStudioService):void {
@@ -53,8 +53,8 @@ export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepositor
   });
   app.delete<{Params:{id:string;sourceId:string};Reply:{deleted:true}|ApiError}>("/api/projects/:id/sources/:sourceId",{schema:{params:SourceParams}},async(req,reply)=>sources.delete(req.params.id,req.params.sourceId)?{deleted:true as const}:reply.code(404).send(missing("La fuente no existe en este proyecto.")));
   app.put<{Params:{id:string;sourceId:string};Body:{included:boolean};Reply:Source|ApiError}>("/api/projects/:id/sources/:sourceId/analysis",{schema:{params:SourceParams,body:IncludeAnalysisBody}},async(req,reply)=>sources.setIncludedInAnalysis(req.params.id,req.params.sourceId,req.body.included)??reply.code(404).send(missing("La fuente no existe en este proyecto.")));
-  app.get<{Params:{id:string};Reply:{comments:Comment[]}}>("/api/projects/:id/analysis-set",{schema:{params:ProjectParams,response:{200:CommentsResponse}}},async(req)=>({comments:sources.analysisSet(req.params.id)}));
-  app.get<{Params:{id:string};Querystring:CommentListQueryType;Reply:{comments:Comment[]}}>("/api/projects/:id/comments",{schema:{params:ProjectParams,querystring:CommentListQuery,response:{200:CommentsResponse}}},async(req)=>({comments:sources.listComments(req.params.id,req.query)}));
+  app.get<{Params:{id:string};Reply:{comments:Comment[]}}>("/api/projects/:id/analysis-set",{schema:{params:ProjectParams,response:{200:AnalysisSetResponse}}},async(req)=>({comments:sources.analysisSet(req.params.id)}));
+  app.get<{Params:{id:string};Querystring:CommentListQueryType;Reply:{comments:Comment[];total:number;eligibleIncluded:number}}>("/api/projects/:id/comments",{schema:{params:ProjectParams,querystring:CommentListQuery,response:{200:CommentsResponse}}},async(req)=>({...sources.listCommentsPage(req.params.id,req.query),...sources.commentSummary(req.params.id)}));
   app.get<{Params:{id:string};Reply:{jobs:Job[]}}>("/api/projects/:id/jobs",{schema:{params:ProjectParams,response:{200:JobsResponse}}},async(req)=>({jobs:jobs.list(req.params.id)}));
   app.get<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>jobs.get(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));
   app.post<{Params:{id:string;jobId:string};Reply:Job|ApiError}>("/api/projects/:id/jobs/:jobId/cancel",{schema:{params:JobParams,response:{200:JobSchema,404:ApiErrorSchema}}},async(req,reply)=>youtube.cancel(req.params.id,req.params.jobId)??reply.code(404).send(missing("El trabajo no existe en este proyecto.")));

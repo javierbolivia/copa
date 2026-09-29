@@ -22,6 +22,7 @@ describe("Overview truthful project state",()=>{
   it("explains the current blocker outside a tooltip",()=>{
     const html=render();
     expect(html).toContain("<p>Cambió la evidencia original.</p>");
+    expect(html).toContain("Revisar · Cambió la evidencia original.");
   });
   it("shows a retry instead of completion when loading failed",()=>{
     const html=render({workflow:null,loadError:"Servidor no disponible",onRetry:()=>{}});

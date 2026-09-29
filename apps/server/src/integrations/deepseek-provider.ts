@@ -10,7 +10,8 @@ import {
   type JsonSchemaValidationIssue,
 } from "./structured-output.js";
 
-export const DEEPSEEK_DEFAULT_MODEL = "deepseek-v4-flash";
+/** Official current model name for DeepSeek Flash. */
+export const DEEPSEEK_DEFAULT_MODEL = "deepseek-flash";
 
 /** Thinking mode is enabled by default server-side; omit the field to keep that default. */
 export type DeepSeekThinkingMode = "enabled" | "disabled";
@@ -38,6 +39,16 @@ interface DeepSeekChoice {
   readonly message?: { readonly content?: unknown };
 }
 
+interface DeepSeekResponseApiBody {
+  readonly model?: unknown;
+  readonly status?: unknown;
+  readonly output?: unknown;
+  readonly usage?: {
+    readonly input_tokens?: unknown;
+    readonly output_tokens?: unknown;
+  };
+}
+
 const number = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
@@ -46,6 +57,19 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const isDeepSeekV4Pro = (model: string): boolean =>
   model.trim().toLowerCase().replace(/[\s_-]+/g, "") === "deepseekv4pro";
+
+/**
+ * DeepSeek keeps these retired aliases available, but serves them through the
+ * current Flash model. Canonicalizing prevents configuration from pinning the
+ * request path to an obsolete model name.
+ */
+const canonicalModel = (model: string): string => {
+  const trimmed = model.trim();
+  const normalized = trimmed.toLowerCase();
+  return normalized === "deepseek-v4-flash" || normalized === "deepseek-v4-flash-vision-exp"
+    ? DEEPSEEK_DEFAULT_MODEL
+    : trimmed;
+};
 
 const assertAllowedModel = (model: string): void => {
   if (isDeepSeekV4Pro(model)) {
@@ -64,6 +88,25 @@ const validationSummary = (issues: readonly JsonSchemaValidationIssue[]): string
     return `${issue.path} (expected ${issue.expected}; actual ${issue.actual}${missing})`;
   }).join("; ");
 
+/**
+ * DeepSeek JSON Output requires an example alongside the JSON instruction.
+ * Build one from the declared contract so it only demonstrates shape and types,
+ * never fabricated module data.
+ */
+const jsonShapeExample = (schema: unknown, depth = 0): unknown => {
+  if (depth > 8 || !isRecord(schema)) return "texto";
+  const type = schema.type;
+  if (type === "array") return [jsonShapeExample(schema.items, depth + 1)];
+  if (type === "boolean") return false;
+  if (type === "integer" || type === "number") return 0;
+  if (type !== "object") return "texto";
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((key): key is string => typeof key === "string")
+    : Object.keys(properties);
+  return Object.fromEntries(required.map(key => [key, jsonShapeExample(properties[key], depth + 1)]));
+};
+
 const invalidStructuredOutput = (
   issues: readonly JsonSchemaValidationIssue[],
   attemptCount: number,
@@ -72,6 +115,36 @@ const invalidStructuredOutput = (
   `La salida estructurada de DeepSeek no cumple el schema: ${validationSummary(issues)}.`,
   { validationIssues: compactValidationIssues(issues), attemptCount },
 );
+
+/**
+ * The provider can be invoked through loaders that do not preserve a shared
+ * IntegrationError prototype. Keep the retry decision based on its stable,
+ * public error contract rather than `instanceof`, while retaining the bounded
+ * invalid-schema-only scope.
+ */
+const invalidSchemaIssues = (error: unknown): readonly JsonSchemaValidationIssue[] | undefined => {
+  if (!isRecord(error) || error.code !== "invalid_schema") return undefined;
+  const issues = error.validationIssues;
+  return Array.isArray(issues) && issues.length > 0
+    ? issues.filter((issue): issue is JsonSchemaValidationIssue => isRecord(issue)
+      && typeof issue.path === "string"
+      && typeof issue.expected === "string"
+      && typeof issue.actual === "string")
+    : undefined;
+};
+
+const responseApiText = (body: DeepSeekResponseApiBody): string | undefined => {
+  if (!Array.isArray(body.output)) return undefined;
+  for (const item of body.output) {
+    if (!isRecord(item) || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (isRecord(part) && part.type === "output_text" && typeof part.text === "string" && part.text.trim()) {
+        return part.text;
+      }
+    }
+  }
+  return undefined;
+};
 
 const structuredInstructions = (
   request: LlmGenerateRequest,
@@ -95,6 +168,8 @@ CONTRATO DE SALIDA JSON ESTRICTO:
 - No omitas campos requeridos; usa arrays vacíos solo cuando el schema los permita.
 - No uses placeholders como TBD, pendiente, sin completar, null o texto equivalente.
 - No inventes afirmaciones, resultados, cifras, credenciales ni características para rellenar el contrato.${correction}
+EJEMPLO DE FORMA DEL OBJETO RAÍZ (solo ilustra campos y tipos; reemplaza todos sus valores con la respuesta solicitada):
+${JSON.stringify(jsonShapeExample(request.structuredOutput.jsonSchema))}
 JSON Schema completo:
 ${JSON.stringify(request.structuredOutput.jsonSchema)}`;
 };
@@ -146,7 +221,7 @@ export class DeepSeekProvider implements LlmProvider {
     this.timeoutMs = options.timeoutMs ?? 60_000;
     this.endpoint = options.endpoint ?? "https://api.deepseek.com/chat/completions";
     this.thinking = options.thinking;
-    const model = options.model?.trim() || DEEPSEEK_DEFAULT_MODEL;
+    const model = canonicalModel(options.model ?? DEEPSEEK_DEFAULT_MODEL) || DEEPSEEK_DEFAULT_MODEL;
     assertAllowedModel(model);
     this.model = model;
   }
@@ -161,18 +236,17 @@ export class DeepSeekProvider implements LlmProvider {
 
   async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "DeepSeek no está configurado.");
-    const model = request.model.trim() || this.model;
+    const model = canonicalModel(request.model) || this.model;
     assertAllowedModel(model);
     try {
       return await this.generateOnce<TOutput>(request, model, 1);
     } catch (error) {
-      if (!(error instanceof IntegrationError)
-        || error.code !== "invalid_schema"
+      const firstAttemptIssues = invalidSchemaIssues(error);
+      if (!firstAttemptIssues?.length
         || !request.structuredOutput
         || request.structuredOutput.retryOnInvalidSchema === false
-        || !error.validationIssues?.length) throw error;
-      const firstAttemptIssues = error.validationIssues;
-      const result = await this.generateOnce<TOutput>(request, model, 2, firstAttemptIssues);
+      ) throw error;
+      const result = await this.generateStructuredResponseOnce<TOutput>(request, model, 2, firstAttemptIssues);
       return {
         ...result,
         structuredOutputDiagnostics: {
@@ -191,7 +265,7 @@ export class DeepSeekProvider implements LlmProvider {
     retryIssues?: readonly JsonSchemaValidationIssue[],
   ): Promise<LlmGenerateResult<TOutput>> {
     const systemInstructions = structuredInstructions(request, retryIssues);
-    const { body } = await withIntegrationTimeout("DeepSeek", this.timeoutMs, async signal => {
+    const { body } = await withIntegrationTimeout<{ body: DeepSeekResponse }>("DeepSeek", this.timeoutMs, async signal => {
       let response: Response;
       try {
         response = await this.fetchFn(this.endpoint, {
@@ -272,6 +346,91 @@ export class DeepSeekProvider implements LlmProvider {
           recoveredAfterInvalidSchema: false,
         },
       } : {}),
+    };
+  }
+
+  /**
+   * The corrective pass uses DeepSeek Responses JSON Schema mode instead of
+   * repeating Chat JSON mode. This is the API's schema-constrained path and
+   * is only reached after the first structured response was unusable.
+   */
+  private async generateStructuredResponseOnce<TOutput>(
+    request: LlmGenerateRequest,
+    model: string,
+    attemptCount: number,
+    retryIssues: readonly JsonSchemaValidationIssue[],
+  ): Promise<LlmGenerateResult<TOutput>> {
+    const structuredOutput = request.structuredOutput;
+    if (!structuredOutput) throw new Error("DeepSeek structured retry requires an output contract.");
+    const responseEndpoint = this.endpoint.endsWith("/chat/completions")
+      ? `${this.endpoint.slice(0, -"/chat/completions".length)}/responses`
+      : "https://api.deepseek.com/responses";
+    const { body } = await withIntegrationTimeout<{ body: DeepSeekResponseApiBody }>("DeepSeek", this.timeoutMs, async signal => {
+      let response: Response;
+      try {
+        response = await this.fetchFn(responseEndpoint, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            model,
+            instructions: structuredInstructions(request, retryIssues),
+            input: request.input,
+            reasoning: { effort: "none" },
+            stream: false,
+            ...(request.maxOutputTokens === undefined ? {} : { max_output_tokens: request.maxOutputTokens }),
+            text: {
+              format: {
+                type: "json_schema",
+                name: structuredOutput.name,
+                schema: structuredOutput.jsonSchema,
+              },
+            },
+          }),
+          signal,
+        });
+      } catch (error) {
+        throw deepSeekTransportError(error);
+      }
+      if (!response.ok) throw deepSeekHttpError(response.status, await readErrorType(response));
+      let body: DeepSeekResponseApiBody;
+      try {
+        body = await response.json() as DeepSeekResponseApiBody;
+      } catch (error) {
+        throw new IntegrationError("non_json_response", "DeepSeek devolvió una respuesta que no es JSON.", { cause: error });
+      }
+      if (!isRecord(body)) throw new IntegrationError("invalid_schema", "DeepSeek devolvió una respuesta JSON que no es un objeto.");
+      return { body: body as DeepSeekResponseApiBody };
+    });
+    const text = responseApiText(body);
+    if (typeof text !== "string") {
+      throw new IntegrationError("empty_completion", "DeepSeek no devolvió texto en el reintento estructurado.");
+    }
+    const output = parseStructuredJson(text);
+    if (output === undefined) {
+      throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount);
+    }
+    const validationIssues = validateJsonSchema(structuredOutput.jsonSchema, output);
+    if (validationIssues.length > 0) throw invalidStructuredOutput(validationIssues, attemptCount);
+    const inputTokens = number(body.usage?.input_tokens);
+    const outputTokens = number(body.usage?.output_tokens);
+    return {
+      provider: this.name,
+      requestedModel: model,
+      ...(typeof body.model === "string" ? { reportedModel: body.model } : {}),
+      output: output as TOutput,
+      usage: {
+        ...(inputTokens === undefined ? {} : { inputTokens }),
+        ...(outputTokens === undefined ? {} : { outputTokens }),
+        usageKind: body.usage === undefined ? "unknown" : "provider_reported",
+      },
+      ...(typeof body.status === "string" ? { finishReason: body.status } : {}),
+      structuredOutputDiagnostics: {
+        attemptCount,
+        recoveredAfterInvalidSchema: false,
+      },
     };
   }
 }

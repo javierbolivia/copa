@@ -192,10 +192,13 @@ export const api = {
     request<{ sources: import("@our-platform/shared").Source[] }>(
       `/api/projects/${id}/sources`,
     ),
-  comments: (id: string, offset = 0) =>
-    request<{ comments: import("@our-platform/shared").Comment[] }>(
-      `/api/projects/${id}/comments?limit=1000&offset=${offset}`,
-    ),
+  comments: (id: string, filter: {offset?:number;limit?:number;query?:string;sourceId?:string;analysis?:"all"|"included"|"excluded"} = {}) => {
+    const query=new URLSearchParams({limit:String(filter.limit??60),offset:String(filter.offset??0)});
+    if(filter.query?.trim())query.set("query",filter.query.trim());
+    if(filter.sourceId)query.set("sourceId",filter.sourceId);
+    if(filter.analysis&&filter.analysis!=="all")query.set("analysis",filter.analysis);
+    return request<{ comments: import("@our-platform/shared").Comment[]; total:number; eligibleIncluded:number }>(`/api/projects/${id}/comments?${query}`);
+  },
   createSource: (id: string, input: CreateSourceInput) =>
     request<
       | import("@our-platform/shared").SourceBundle

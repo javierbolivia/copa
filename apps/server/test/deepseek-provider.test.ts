@@ -2,11 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DEEPSEEK_DEFAULT_MODEL, DeepSeekProvider } from "../src/integrations/deepseek-provider.js";
 
-function response(content: unknown, model = "deepseek-v4-flash") {
+function response(content: unknown, model = DEEPSEEK_DEFAULT_MODEL) {
   return new Response(JSON.stringify({
     model,
     choices: [{ finish_reason: "stop", message: { content: typeof content === "string" ? content : JSON.stringify(content) } }],
     usage: { prompt_tokens: 12, completion_tokens: 4 },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+function responsesApiResponse(content: unknown, model = DEEPSEEK_DEFAULT_MODEL) {
+  return new Response(JSON.stringify({
+    model,
+    status: "completed",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: typeof content === "string" ? content : JSON.stringify(content) }] }],
+    usage: { input_tokens: 12, output_tokens: 4 },
   }), { status: 200, headers: { "content-type": "application/json" } });
 }
 
@@ -23,7 +32,7 @@ describe("DeepSeekProvider", () => {
       structuredOutput: { name: "check", jsonSchema: { type: "object" } },
     });
 
-    expect(DEEPSEEK_DEFAULT_MODEL).toBe("deepseek-v4-flash");
+    expect(DEEPSEEK_DEFAULT_MODEL).toBe("deepseek-flash");
     expect(result).toMatchObject({ requestedModel: DEEPSEEK_DEFAULT_MODEL, reportedModel: DEEPSEEK_DEFAULT_MODEL, usage: { inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" }, finishReason: "stop" });
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     const body=JSON.parse(String(init.body));
@@ -34,6 +43,8 @@ describe("DeepSeekProvider", () => {
     expect(body.messages[0].content).toContain("uses null");
     expect(body.messages[0].content).toContain("No uses placeholders");
     expect(body.messages[0].content).toContain("No inventes afirmaciones");
+    expect(body.messages[0].content).toContain('EJEMPLO DE FORMA DEL OBJETO RAÍZ');
+    expect(body.messages[0].content).toContain("\n{}\nJSON Schema completo:");
     expect(body.messages[0].content).toContain('"type":"object"');
   });
 
@@ -71,12 +82,36 @@ describe("DeepSeekProvider", () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ model: "allowed-request-model" });
   });
 
+  it("normaliza los aliases retirados de Flash al nombre canónico", async () => {
+    const fetchMock = vi.fn(async () => response({ ok: true }, "deepseek-flash"));
+    const provider = new DeepSeekProvider({
+      apiKey: "deepseek-test-key",
+      model: "deepseek-v4-flash",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    const result = await provider.generate({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      systemInstructions: "JSON",
+      input: "{}",
+      structuredOutput: { name: "check", jsonSchema: { type: "object" } },
+    });
+
+    expect(provider.effectiveModel).toBe("deepseek-flash");
+    expect(result.requestedModel).toBe("deepseek-flash");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toMatchObject({ model: "deepseek-flash" });
+  });
+
   it("acepta un único bloque JSON cercado y rechaza objetos que no cumplen el schema",async()=>{
     const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
     const fenced=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:vi.fn(async()=>response("```json\n{\"ok\":true}\n```")) as typeof fetch});
     await expect(fenced.generate({provider:"deepseek",model:fenced.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).resolves.toMatchObject({output:{ok:true}});
 
-    const invalidFetch = vi.fn(async()=>response({}));
+    const invalidFetch = vi.fn()
+      .mockResolvedValueOnce(response({}))
+      .mockResolvedValueOnce(responsesApiResponse({}));
     const invalid=new DeepSeekProvider({apiKey:"deepseek-test-key",fetch:invalidFetch as typeof fetch});
     await expect(invalid.generate({provider:"deepseek",model:invalid.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).rejects.toMatchObject({
       code:"invalid_schema",
@@ -91,7 +126,7 @@ describe("DeepSeekProvider", () => {
     const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({}))
-      .mockResolvedValueOnce(response({ ok: true }));
+      .mockResolvedValueOnce(responsesApiResponse({ ok: true }));
     const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
 
     const result = await provider.generate({provider:"deepseek",model:provider.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}});
@@ -107,9 +142,43 @@ describe("DeepSeekProvider", () => {
     });
     const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
     const retryBody = JSON.parse(String(retryInit.body));
-    expect(retryBody.messages[0].content).toContain("INTENTO FINAL 2/2");
-    expect(retryBody.messages[0].content).toContain("$.ok (expected boolean; actual missing");
-    expect(retryBody.messages[0].content).toContain("JSON Schema completo");
+    expect(retryBody).toMatchObject({
+      model: DEEPSEEK_DEFAULT_MODEL,
+      reasoning: { effort: "none" },
+      text: { format: { type: "json_schema", name: "check", schema } },
+    });
+    expect(retryBody.instructions).toContain("INTENTO FINAL 2/2");
+    expect(retryBody.instructions).toContain("$.ok (expected boolean; actual missing");
+    expect(retryBody.instructions).toContain("JSON Schema completo");
+    expect(fetchMock.mock.calls[1]![0]).toBe("https://api.deepseek.com/responses");
+  });
+
+  it("reintenta una vez si DeepSeek devuelve texto en lugar de JSON", async () => {
+    const schema={type:"object",required:["ok"],properties:{ok:{type:"boolean"}},additionalProperties:false} as const;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response("No pude preparar el objeto solicitado."))
+      .mockResolvedValueOnce(responsesApiResponse({ ok: true }));
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    const result = await provider.generate({
+      provider:"deepseek",
+      model:provider.effectiveModel,
+      systemInstructions:"JSON",
+      input:"{}",
+      structuredOutput:{name:"check",jsonSchema:schema},
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      output:{ok:true},
+      structuredOutputDiagnostics:{
+        attemptCount:2,
+        recoveredAfterInvalidSchema:true,
+        firstAttemptIssues:[{path:"$",expected:"valid JSON object",actual:"non-JSON text"}],
+      },
+    });
+    const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(retryInit.body)).instructions).toContain("INTENTO FINAL 2/2");
   });
 
   it("respeta un contrato de intento único sin hacer retry de schema", async () => {

@@ -1,2 +1,2 @@
 import { defineConfig } from "vitest/config";
-export default defineConfig({test:{setupFiles:["./test/offline-network-guard.ts"]}});
+export default defineConfig({test:{setupFiles:["./test/offline-network-guard.ts"],testTimeout:15_000}});

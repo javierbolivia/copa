@@ -1,6 +1,7 @@
 import {AVATAR_FIELDS} from "@our-platform/shared";
 const record=(value:unknown):Record<string,unknown>=>value&&typeof value==="object"&&!Array.isArray(value)?value as Record<string,unknown>:{};
-const normalized=(value:string)=>value.trim().replace(/\s+/gu," ");
+const cleanBoundaryPunctuation=(value:string)=>value.trim().replace(/^[.,;:¿?¡!"'\s]+|[.,;:¿?¡!"'\s]+$/gu,"");
+const normalized=(value:string)=>cleanBoundaryPunctuation(value.replace(/\s+/gu," ")).toLowerCase();
 
 export function validateAvatarOutput(input:unknown,evidence:readonly {id:string;quoteText:string}[]){
   const source=record(input),output:Record<string,unknown>={...source,schemaVersion:2};

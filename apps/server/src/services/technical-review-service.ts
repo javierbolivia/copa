@@ -16,6 +16,8 @@ export const REVIEW_FILES={
   product:[...sharedUi,...editorUi,"apps/web/src/features/refinement/ProductWorkspace.tsx","apps/web/src/features/refinement/ProductEditor.tsx","apps/web/src/features/refinement/product-adapter.ts"],
   avatar:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/AvatarEditor.tsx","apps/web/src/features/refinement/avatar-adapter.ts","apps/server/src/services/avatar-output-validator.ts","packages/shared/src/avatar-module.ts","prompts/avatar-builder.md"],
   mechanism:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/MechanismEditor.tsx","apps/web/src/features/refinement/mechanism-adapter.ts","apps/server/src/services/mechanism-output-validator.ts","prompts/mechanism-builder.md"],
+  beliefs:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/BeliefsEditor.tsx","apps/web/src/features/refinement/beliefs-adapter.ts","apps/server/src/services/beliefs-output-validator.ts","prompts/beliefs-agent.md"],
+  offer:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/OfferEditor.tsx","apps/web/src/features/refinement/offer-adapter.ts","apps/server/src/services/offer-output-validator.ts","prompts/offer-builder.md"],
 } as const;
 type ReviewEntry={reviewedAt:string;fingerprint:string};
 type ReviewStore={schemaVersion:1;sections:Record<string,ReviewEntry>};

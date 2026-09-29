@@ -20,4 +20,11 @@ describe("Avatar deterministic validation",()=>{
     expect(validateAvatarOutput(first.output,evidence).audit.ok).toBe(false);
   });
   it("does not claim language is literal when only a paraphrase is supplied",()=>{expect(validateAvatarOutput({...output,language:[{...claim,text:"Mis archivos son difíciles de encontrar"}]},evidence).audit.ok).toBe(false);});
+  it("accepts language quote matching with case insensitivity and boundary punctuation",()=>{
+    const res = validateAvatarOutput({
+      ...output,
+      language: [{...claim, text: "no encuentro mis fotos."}]
+    }, evidence);
+    expect(res.audit.ok).toBe(true);
+  });
 });

@@ -49,9 +49,67 @@ export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
   opportunities: object({ schemaVersion: { type: "integer" }, items: { type: "array", items: object({ id: string, name: string, problemId: string, evidenceIds, scores: opportunityScores, rationale:string, scoreRationales:opportunityRationales, missingData:stringArray, validationPlan:stringArray },["id","name","problemId","evidenceIds","scores"]) }, selectedId: string }),
   product: ProductModuleOutputSchema,
   avatar: AvatarModuleOutputSchema,
-  mechanism: object({ schemaVersion: { type: "integer" }, perceivedProblem: string, apparentCause: string, rootCauseHypothesis: string, mechanism: string, solutionMechanism: string, differentiation: string, simpleExplanation: string, detailedExplanation: string, provenance: string, evidenceIds }),
-  beliefs: object({ schemaVersion: { type: "integer" }, currentBeliefs: stringArray, limitingBeliefs: stringArray, requiredBeliefs: stringArray, objections: stringArray, arguments: stringArray, centralThesis: string }),
-  offer: object({ schemaVersion: { type: "integer" }, name: string, promise: string, benefits: stringArray, deliverables: stringArray, cta: string, provenance: string, evidenceIds }),
+  mechanism: object({
+    schemaVersion: { type: "integer" },
+    perceivedProblem: string,
+    apparentCause: string,
+    rootCauseHypothesis: string,
+    mechanism: string,
+    solutionMechanism: string,
+    differentiation: string,
+    simpleExplanation: string,
+    detailedExplanation: string,
+    steps: stringArray,
+    alternatives: stringArray,
+    limitations: stringArray,
+    validationPlan: stringArray,
+    provenance: string,
+    evidenceIds,
+  }, [
+    "schemaVersion", "perceivedProblem", "apparentCause", "rootCauseHypothesis",
+    "mechanism", "solutionMechanism", "differentiation", "simpleExplanation",
+    "detailedExplanation", "provenance", "evidenceIds"
+  ]),
+  beliefs: object({
+    schemaVersion: { type: "integer" },
+    currentBeliefs: stringArray,
+    limitingBeliefs: stringArray,
+    bridgeBeliefs: stringArray,
+    requiredBeliefs: stringArray,
+    objections: stringArray,
+    arguments: stringArray,
+    centralThesis: string,
+    evidenceIds,
+  }, [
+    "schemaVersion", "currentBeliefs", "limitingBeliefs", "requiredBeliefs",
+    "objections", "arguments", "centralThesis"
+  ]),
+  offer: object({
+    schemaVersion: { type: "integer" },
+    name: string,
+    promise: string,
+    benefits: stringArray,
+    deliverables: stringArray,
+    bonuses: stringArray,
+    bonusDetails: { type: "array", items: object({ name: string, description: string }) },
+    pricingSuggestion: object({
+      amount: { type: ["number", "null"] },
+      currency: string,
+      rationale: string,
+      terms: string,
+    }, ["amount"]),
+    guaranteeSuggestion: string,
+    orderBump: { type: ["object", "string", "null"], properties: { name: string, description: string } },
+    upsell: { type: ["object", "string", "null"], properties: { name: string, description: string } },
+    downsell: { type: ["object", "string", "null"], properties: { name: string, description: string } },
+    cta: string,
+    provenance: string,
+    disclaimer: string,
+    evidenceIds,
+  }, [
+    "schemaVersion", "name", "promise", "benefits", "deliverables", "bonuses",
+    "cta", "provenance", "evidenceIds"
+  ]),
   landing: object({ schemaVersion: { type: "integer" }, title: string, sections: { type: "array", items: object({ type: string }, ["type"]) }, evidenceIds }),
   funnel: object({ schemaVersion: { type: "integer" }, nodes: { type: "array", items: object({ id: string, type: string, label: string }) }, edges: { type: "array", items: object({ from: string, to: string, event: string }) }, paymentsEnabled: { type: "boolean" } }),
   emails: object({ schemaVersion: { type: "integer" }, sequences: { type: "array", items: object({ type: string, emails: { type: "array", items: object({ subject: string, body: string, cta: string }) } }) }, evidenceIds }),
@@ -62,7 +120,12 @@ export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
 export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
   if(typeof value!=="object"||value===null||Array.isArray(value))return false;
   const output=value as Record<string,unknown>;
-  if(typeof output.schemaVersion!=="number")return false;
+  if (typeof output.schemaVersion === "string" && /^\d+$/.test((output.schemaVersion as string).trim())) {
+    output.schemaVersion = Number.parseInt((output.schemaVersion as string).trim(), 10);
+  } else if (output.schemaVersion === undefined) {
+    output.schemaVersion = (key === "avatar" || key === "product") ? 2 : 1;
+  }
+  if(typeof output.schemaVersion!=="number"||!Number.isInteger(output.schemaVersion))return false;
   switch(key){
     case "research":return typeof output.summary==="string";
     case "sources":return typeof output.sourceCount==="number"&&typeof output.commentCount==="number";

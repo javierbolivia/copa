@@ -99,10 +99,16 @@ const validationSummary = (issues: readonly JsonSchemaValidationIssue[]): string
  */
 const jsonShapeExample = (schema: unknown, depth = 0, keyName = ""): unknown => {
   if (depth > 8 || !isRecord(schema)) return "texto";
-  const type = schema.type;
-  if (type === "array") return [jsonShapeExample(schema.items, depth + 1)];
+  const rawType = schema.type;
+  const type = Array.isArray(rawType)
+    ? (rawType.find((item): item is string => typeof item === "string" && item !== "null") ?? rawType[0])
+    : rawType;
+  if (type === "array") return [jsonShapeExample(schema.items, depth + 1, keyName)];
   if (type === "boolean") return false;
   if (keyName === "schemaVersion") return 1;
+  if (keyName === "amount") return 27;
+  if (keyName === "currency") return "USD";
+  if (keyName === "provenance") return "AI_INFERENCE";
   if (type === "integer" || type === "number") return 0;
   if (type !== "object" && !schema.properties) {
     if (keyName === "id" || keyName === "selectedId") return "item-1";

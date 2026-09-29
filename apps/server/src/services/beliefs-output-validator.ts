@@ -11,5 +11,7 @@ export function validateBeliefsOutput(input:unknown,evidence:readonly {id:string
   const allowed=new Set(evidence.map(item=>item.id));
   if(source.evidenceIds!==undefined&&(!Array.isArray(source.evidenceIds)||source.evidenceIds.length>20||source.evidenceIds.some(id=>typeof id!=="string"||!allowed.has(id))))errors.push("Las referencias deben pertenecer al contexto disponible al generar.");
   const audit={ok:!errors.length,errors};
-  return {output:{...source,beliefsValidationAudit:audit},audit};
+  const schemaVersion=typeof source.schemaVersion==="number"?source.schemaVersion:1;
+  const output:Record<string,unknown>={...source,schemaVersion,beliefsValidationAudit:audit};
+  return {output,audit};
 }

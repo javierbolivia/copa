@@ -9,5 +9,7 @@ export function validateMechanismOutput(input:unknown,evidence:readonly {id:stri
   if(source.provenance!=="AI_INFERENCE"&&source.provenance!=="EVIDENCE_BACKED")errors.push("Clasifica el origen como evidencia o inferencia.");
   if(source.provenance==="EVIDENCE_BACKED"&&(!Array.isArray(refs)||!refs.length))errors.push("El contexto basado en evidencia necesita referencias válidas.");
   const audit={ok:!errors.length,errors,inputEvidenceCount:evidence.length};
-  return {output:{...source,mechanismValidationAudit:audit},audit};
+  const schemaVersion=typeof source.schemaVersion==="number"?source.schemaVersion:1;
+  const output:Record<string,unknown>={...source,schemaVersion,mechanismValidationAudit:audit};
+  return {output,audit};
 }

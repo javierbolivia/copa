@@ -209,6 +209,62 @@ describe("Product Studio physical assets and exports", () => {
     return download.rawPayload;
   }
 
+  it("detecta marcadores reales sin confundirlos con texto normal en español", async () => {
+    const project = (
+      await app.inject({ method: "POST", url: "/api/demo/projects" })
+    ).json<{ project: Project }>().project;
+    const document = await createExportableDocument(project, "ebook");
+    const content = document.version.blocks.map((block) =>
+      block.type === "paragraph"
+        ? { ...block, content: "El método permite completar todo el registro y revisar el resultado." }
+        : block,
+    );
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/autosave`,
+      payload: {
+        baseVersionNumber: document.version.versionNumber,
+        idempotencyKey: "placeholder-validation-spanish-001",
+        blocks: content,
+      },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    const validate = async () =>
+      app.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/product-documents/${document.id}/validate`,
+        payload: {},
+      });
+
+    let validation = await validate();
+    expect(validation.statusCode, validation.body).toBe(200);
+    expect(validation.json<{ warnings: string[] }>().warnings).not.toContainEqual(
+      expect.stringContaining("contiene un placeholder"),
+    );
+
+    const current = saved.json<ProductDocument>();
+    const withMarker = current.version.blocks.map((block) =>
+      block.type === "paragraph"
+        ? { ...block, content: "TODO: completar este campo antes de publicar." }
+        : block,
+    );
+    const markerSaved = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/autosave`,
+      payload: {
+        baseVersionNumber: current.version.versionNumber,
+        idempotencyKey: "placeholder-validation-marker-002",
+        blocks: withMarker,
+      },
+    });
+    expect(markerSaved.statusCode, markerSaved.body).toBe(200);
+    validation = await validate();
+    expect(validation.statusCode, validation.body).toBe(200);
+    expect(validation.json<{ warnings: string[] }>().warnings).toContainEqual(
+      expect.stringContaining("contiene un placeholder"),
+    );
+  });
+
   it("deriva una presentación ebook estructurada en HTML, DOCX y PDF sin mutar la versión", async () => {
     const project = (
       await app.inject({ method: "POST", url: "/api/demo/projects" })

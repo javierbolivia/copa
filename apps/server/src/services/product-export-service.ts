@@ -288,7 +288,11 @@ export class ProductExportService {
     }
     for (const block of document.version.blocks) {
       const text = flatten(block.content);
-      if (/\b(TODO|LOREM|PLACEHOLDER|COMPLETAR)\b/i.test(text))
+      if (
+        /(?<![\p{L}\p{N}_])(?:TODO\s*:|LOREM(?:\s+IPSUM)?|PLACEHOLDER|COMPLETAR\s+AQU[IÍ])(?![\p{L}\p{N}_])/iu.test(
+          text,
+        )
+      )
         warnings.push(
           `El bloque ${block.id.slice(0, 8)} contiene un placeholder.`,
         );

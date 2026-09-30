@@ -150,6 +150,7 @@ export async function createApp(
     knowledge,
     settings,
     openAI,
+    deepSeek,
   );
   const productExports = new ProductExportService(
     database,

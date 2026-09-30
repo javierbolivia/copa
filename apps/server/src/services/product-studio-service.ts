@@ -14,6 +14,7 @@ import type { JobRepository } from "../repositories/job-repository.js";
 import type { KnowledgeRepository } from "../repositories/knowledge-repository.js";
 import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
+import type { DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import {
   ProductDocumentRepository,
   DEFAULT_PRODUCT_THEME,
@@ -34,6 +35,7 @@ export class ProductStudioService {
     private readonly knowledge: KnowledgeRepository,
     private readonly settings: ProjectSettingsRepository,
     private readonly openAI: OpenAIProvider,
+    private readonly deepSeek: DeepSeekProvider,
   ) {}
 
   list(projectId: string): ProductDocument[] {
@@ -55,12 +57,11 @@ export class ProductStudioService {
         chapters.reduce((sum, item) => sum + item.targetWords, 0) * 1.4,
       ),
       inputTokens = chapters.length * 2300,
-      provider = this.useOpenAI(projectId) ? "openai" : "mock",
+      llm = this.generationProvider(projectId),
+      provider = llm?.name ?? "mock",
       estimatedCost =
-        provider === "openai"
-          ? Number(
-              ((inputTokens * 1.25 + outputTokens * 10) / 1_000_000).toFixed(4),
-            )
+        llm
+          ? Number(((inputTokens * 1.25 + outputTokens * 10) / 1_000_000).toFixed(4))
           : 0,
       maxBudget = this.settings.get(projectId)?.maxBudget ?? null,
       spent = (
@@ -72,10 +73,7 @@ export class ProductStudioService {
       ).total;
     return {
       provider,
-      model:
-        provider === "openai"
-          ? this.powerfulModel(projectId)
-          : "demo-deterministic-v1",
+      model: llm ? this.generationModel(projectId, llm) : "demo-deterministic-v1",
       chapters: chapters.length,
       inputTokens,
       outputTokens,
@@ -228,7 +226,8 @@ export class ProductStudioService {
       selectedGlobalIds(current),
     );
     let outline: ProductOutlineItem[], generation: RecordedGeneration;
-    if (this.useOpenAI(projectId)) {
+    const llm = this.generationProvider(projectId);
+    if (llm) {
       const input = {
         document: {
           title: current.title,
@@ -246,16 +245,16 @@ export class ProductStudioService {
         })),
       };
       const startedAt = Date.now(),
-        model = this.powerfulModel(projectId);
+        model = this.generationModel(projectId, llm);
       this.assertRequestBudget(projectId, JSON.stringify(input), 4000);
-      const result = await this.openAI.generate<{
+      const result = await llm.generate<{
           chapters: Array<{
             title: string;
             objective: string;
             targetWords: number;
           }>;
         }>({
-          provider: "openai",
+          provider: llm.name,
           model,
           systemInstructions:
             "Diseña el índice y la estructura de un Ebook completo, vendible y fundamentado. Usa la investigación y contexto aprobado del proyecto, organizando la obra en introducción, capítulos temáticos prácticos, accionables y con sustancia, y conclusión. No inventes fuentes y devuelve JSON estructurado.",
@@ -263,6 +262,7 @@ export class ProductStudioService {
           structuredOutput: {
             name: "product_outline",
             jsonSchema: OUTLINE_OUTPUT_SCHEMA,
+            retryOnInvalidSchema: false,
           },
           maxOutputTokens: 4000,
         });
@@ -274,10 +274,12 @@ export class ProductStudioService {
         input,
         outline,
         used,
-        "product-outline-openai-v1",
+        `product-outline-${llm.name}-v1`,
         model,
         result,
         Date.now() - startedAt,
+        [],
+        llm.name,
       );
     } else {
       outline = titles.map((title, index): ProductOutlineItem => ({
@@ -472,7 +474,8 @@ export class ProductStudioService {
       ];
       const evidence = this.retrieveEvidence(projectId, query);
       let blocks: ProductBlock[], generation: RecordedGeneration;
-      if (this.useOpenAI(projectId)) {
+      const llm = this.generationProvider(projectId);
+      if (llm) {
         const input = {
           document: {
             title: current.title,
@@ -495,33 +498,35 @@ export class ProductStudioService {
           })),
         };
         const startedAt = Date.now(),
-          model = this.powerfulModel(projectId),
+          model = this.generationModel(projectId, llm),
           maxOutputTokens = Math.min(
             12_000,
-            Math.max(2500, chapter.targetWords * 3),
+            Math.max(5000, chapter.targetWords * 4),
           );
         this.assertRequestBudget(
           projectId,
           JSON.stringify(input),
           maxOutputTokens,
         );
-        const result = await this.openAI.generate<{
+        const result = await llm.generate<{
             blocks: Array<{
               type: ProductBlock["type"];
               content: ProductBlock["content"];
               provenance?: string;
               evidenceId?: string;
+              evidenceIds?: string[];
               referenceId?: string;
             }>;
           }>({
-            provider: "openai",
+            provider: llm.name,
             model,
             systemInstructions:
-              "Escribe un capítulo práctico y desarrollado de este Ebook como bloques de contenido real y sustancia profunda. No inventes fuentes. Las afirmaciones sustentadas deben referir evidenceId o referenceId entregados; lo demás es AI_INFERENCE. Nunca incluyas HTML ejecutable.",
+              "Escribe un capítulo práctico y desarrollado de este Ebook como bloques de contenido real y sustancia profunda. No inventes fuentes. Para evidencia usa únicamente el UUID exacto del campo evidenceId entregado en la entrada, en evidenceId/evidenceIds del bloque; no uses alias como item-1 o E1 en campos ni en el texto. Si no puedes asociar con seguridad una afirmación a ese UUID, omite la cita y marca el bloque AI_INFERENCE. Para conocimiento usa solo el referenceId exacto entregado. Nunca incluyas HTML ejecutable.",
             input: JSON.stringify(input),
             structuredOutput: {
               name: "product_chapter",
               jsonSchema: CHAPTER_OUTPUT_SCHEMA,
+              retryOnInvalidSchema: false,
             },
             maxOutputTokens,
           });
@@ -544,11 +549,12 @@ export class ProductStudioService {
           { documentId, chapterId, ...input },
           blocks,
           used,
-          "product-chapter-openai-v1",
+          `product-chapter-${llm.name}-v3`,
           model,
           result,
           Date.now() - startedAt,
           evidence.map((item) => item.id),
+          llm.name,
         );
       } else {
         blocks = mockChapterBlocks(
@@ -1062,11 +1068,28 @@ export class ProductStudioService {
       chunkId: `video_transcript:${row.segmentId}`,
     }));
   }
-  private useOpenAI(projectId: string): boolean {
-    return (
-      this.openAI.configured &&
-      this.settings.get(projectId)?.preferredLlmProvider === "openai"
-    );
+  private generationProvider(projectId: string): OpenAIProvider | DeepSeekProvider | undefined {
+    const preferred = this.settings.get(projectId)?.preferredLlmProvider;
+    if (preferred === "mock") return undefined;
+    if (preferred === "openai") {
+      if (!this.openAI.configured) throw new ProductStudioConflictError("OpenAI fue seleccionado pero no está configurado.");
+      return this.openAI;
+    }
+    if (preferred === "deepseek") {
+      if (!this.deepSeek.configured) throw new ProductStudioConflictError("DeepSeek fue seleccionado pero no está configurado.");
+      return this.deepSeek;
+    }
+    if (preferred && preferred !== "") {
+      throw new ProductStudioConflictError(`Product Studio no admite el proveedor seleccionado: ${preferred}.`);
+    }
+    // Match the application-wide default provider order; legacy/demo projects
+    // with no configured LLM retain their deterministic demo behavior.
+    if (this.deepSeek.configured) return this.deepSeek;
+    if (this.openAI.configured) return this.openAI;
+    return undefined;
+  }
+  private generationModel(projectId: string, provider: OpenAIProvider | DeepSeekProvider): string {
+    return provider.name === "deepseek" ? provider.effectiveModel : this.powerfulModel(projectId);
   }
   private powerfulModel(projectId: string): string {
     return (
@@ -1179,6 +1202,7 @@ export class ProductStudioService {
     result: LlmGenerateResult<unknown>,
     durationMs: number,
     evidenceIds: string[] = [],
+    providerName = "openai",
   ): RecordedGeneration {
     const generationId = uuidv7(),
       now = new Date().toISOString(),
@@ -1196,9 +1220,9 @@ export class ProductStudioService {
     this.assertBudget(projectId, estimatedCost);
     const db=this.database.connection,ownsTransaction=!db.isTransaction;if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
     try{
-      db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,created_at,completed_at) VALUES(?,?,?,?,?,'COMPLETED',?,?,?,?,?,?,?,?,?)`).run(generationId,projectId,agentKey,"openai",result.reportedModel??model,JSON.stringify({...asRecord(inputSnapshot),query,evidenceIds,knowledgeUsed:used}),JSON.stringify(output),promptVersion,inputTokens,outputTokens,estimatedCost,durationMs,now,now);
-      db.prepare(`INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,currency,is_estimate,recorded_at) VALUES(?,?,?,?,?,?,?,?, 'USD',?,?)`).run(uuidv7(),projectId,generationId,"openai",result.reportedModel??model,inputTokens,outputTokens,estimatedCost,result.usage.estimatedCost!==undefined&&result.usage.usageKind==="provider_reported"?0:1,now);
-      const retrieval=this.recordRetrieval(projectId,generationId,agentKey,query,used);if(ownsTransaction)db.exec("COMMIT");return{generationId,...retrieval,provider:"openai",model:result.reportedModel??model,promptVersion};
+      db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,created_at,completed_at) VALUES(?,?,?,?,?,'COMPLETED',?,?,?,?,?,?,?,?,?)`).run(generationId,projectId,agentKey,providerName,result.reportedModel??model,JSON.stringify({...asRecord(inputSnapshot),query,evidenceIds,knowledgeUsed:used}),JSON.stringify(output),promptVersion,inputTokens,outputTokens,estimatedCost,durationMs,now,now);
+      db.prepare(`INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,currency,is_estimate,recorded_at) VALUES(?,?,?,?,?,?,?,?, 'USD',?,?)`).run(uuidv7(),projectId,generationId,providerName,result.reportedModel??model,inputTokens,outputTokens,estimatedCost,result.usage.estimatedCost!==undefined&&result.usage.usageKind==="provider_reported"?0:1,now);
+      const retrieval=this.recordRetrieval(projectId,generationId,agentKey,query,used);if(ownsTransaction)db.exec("COMMIT");return{generationId,...retrieval,provider:providerName,model:result.reportedModel??model,promptVersion};
     }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   private recordRetrieval(
@@ -1359,7 +1383,7 @@ interface StudioContextItem {
 interface RecordedGeneration {
   generationId: string;
   retrievalLogId?: string;
-  provider: "mock" | "openai";
+  provider: string;
   model: string;
   promptVersion: string;
 }
@@ -1425,6 +1449,7 @@ const CHAPTER_OUTPUT_SCHEMA = {
             enum: ["AI_INFERENCE", "EVIDENCE_BACKED", "KNOWLEDGE"],
           },
           evidenceId: { type: "string" },
+          evidenceIds: { type: "array", items: { type: "string" }, maxItems: 20 },
           referenceId: { type: "string" },
         },
       },
@@ -1459,6 +1484,7 @@ function normalizeGeneratedBlocks(
     content: ProductBlock["content"];
     provenance?: string;
     evidenceId?: string;
+    evidenceIds?: string[];
     referenceId?: string;
   }>,
   chapter: ProductOutlineItem,
@@ -1468,10 +1494,11 @@ function normalizeGeneratedBlocks(
   const now = new Date().toISOString();
   const blocks = items.slice(0, 100).map((item, index): ProductBlock => {
     const type = BLOCK_TYPES.includes(item.type) ? item.type : "paragraph",
-      evidenceId =
-        item.evidenceId && evidenceIds.has(item.evidenceId)
-          ? item.evidenceId
-          : undefined,
+      validEvidenceIds = [...new Set([
+        ...(item.evidenceIds ?? []),
+        ...(item.evidenceId ? [item.evidenceId] : []),
+      ].filter((id) => evidenceIds.has(id)))].slice(0, 20),
+      evidenceId = validEvidenceIds[0],
       referenceId =
         item.referenceId && referenceIds.has(item.referenceId)
           ? item.referenceId
@@ -1490,6 +1517,7 @@ function normalizeGeneratedBlocks(
         chapterId: chapter.id,
         provenance,
         ...(evidenceId ? { evidenceId } : {}),
+        ...(validEvidenceIds.length ? { evidenceIds: validEvidenceIds } : {}),
         ...(referenceId ? { referenceId } : {}),
       },
       createdAt: now,

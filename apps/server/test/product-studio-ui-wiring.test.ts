@@ -3,6 +3,16 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Product Studio export UI wiring", () => {
+  it("no presenta como mock una generación sin metadatos cargados", () => {
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../../web/src/features/product-studio/ProductStudio.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain("Selecciona un capítulo generado para ver proveedor y costo.");
+    expect(source).not.toContain("Mock: $0 Demo.");
+  });
+
   it("invoca la operación real desde cada botón y expone su resultado", () => {
     const source = readFileSync(
       resolve(

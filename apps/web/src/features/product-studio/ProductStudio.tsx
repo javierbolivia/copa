@@ -659,17 +659,21 @@ export function ProductStudio({ projectId }: { projectId: string }) {
             <section>
               <strong>Evidence</strong>
               {visible.flatMap((block) =>
-                typeof block.metadata.evidenceId === "string"
-                  ? [String(block.metadata.evidenceId)]
-                  : [],
+                Array.isArray(block.metadata.evidenceIds)
+                  ? block.metadata.evidenceIds.filter((id): id is string => typeof id === "string")
+                  : typeof block.metadata.evidenceId === "string"
+                    ? [block.metadata.evidenceId]
+                    : [],
               ).length ? (
-                visible.map((block) =>
-                  typeof block.metadata.evidenceId === "string" ? (
-                    <code key={block.id}>
-                      {String(block.metadata.evidenceId)}
-                    </code>
-                  ) : null,
-                )
+                [...new Set(visible.flatMap((block) =>
+                  Array.isArray(block.metadata.evidenceIds)
+                    ? block.metadata.evidenceIds.filter((id): id is string => typeof id === "string")
+                    : typeof block.metadata.evidenceId === "string"
+                      ? [block.metadata.evidenceId]
+                      : [],
+                ))].map((evidenceId) => (
+                  <code key={evidenceId}>{evidenceId}</code>
+                ))
               ) : (
                 <p>No hay Evidence enlazada en este capítulo.</p>
               )}
@@ -705,7 +709,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
               <p>
                 {generation
                   ? `${generation.provider} · ${generation.model} · ${generation.promptVersion ?? "prompt sin versión"} · $${generation.estimatedCost.toFixed(4)}`
-                  : "Las inferencias requieren revisión humana. Mock: $0 Demo."}
+                  : "Las inferencias requieren revisión humana. Selecciona un capítulo generado para ver proveedor y costo."}
               </p>
             </section>
             <button

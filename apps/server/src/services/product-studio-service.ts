@@ -485,7 +485,7 @@ export class ProductStudioService {
           },
           chapter,
           outline: current.version.outline,
-          parents: this.parentContext(projectId, current),
+          parents: compactChapterParents(this.parentContext(projectId, current)),
           evidence: evidence.map((item, index) => ({
             citationId: `E${index + 1}`,
             evidenceId: item.id,
@@ -1461,6 +1461,55 @@ function asRecord(value: unknown): Record<string, unknown> {
     ? (value as Record<string, unknown>)
     : { input: value };
 }
+
+/**
+ * Chapter prompts need a small project brief, not every raw upstream record.
+ * In particular, Problems artifacts can embed hundreds of full comments per
+ * item. Sending those verbatim costs tokens without helping chapter drafting.
+ */
+export function compactChapterParents(
+  parents: Record<string, unknown>,
+): Record<string, unknown> {
+  const omitKey = /^(?:evidence|evidenceIds|quotes?|comments?|rawText|transcript)$/iu;
+  const compact = (
+    value: unknown,
+    stringLimit: number,
+    arrayLimit: number,
+    depth: number,
+    key = "",
+  ): unknown => {
+    if (omitKey.test(key) || depth > 6) return undefined;
+    if (typeof value === "string") return value.slice(0, stringLimit);
+    if (value === null || typeof value === "number" || typeof value === "boolean")
+      return value;
+    if (Array.isArray(value))
+      return value.slice(0, arrayLimit).map((item) =>
+        compact(item, stringLimit, arrayLimit, depth + 1),
+      );
+    if (typeof value !== "object") return undefined;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .slice(0, 20)
+        .flatMap(([childKey, child]) => {
+          const result = compact(child, stringLimit, arrayLimit, depth + 1, childKey);
+          return result === undefined ? [] : [[childKey, result]];
+        }),
+    );
+  };
+
+  const result: Record<string, unknown> = {};
+  for (const [stage, value] of Object.entries(parents)) {
+    for (const [stringLimit, arrayLimit] of [[400, 5], [180, 3], [80, 2]] as const) {
+      const candidate = compact(value, stringLimit, arrayLimit, 0);
+      if (JSON.stringify(candidate).length <= 1_600) {
+        result[stage] = candidate;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 function normalizeOutline(
   items: Array<{ title: string; objective: string; targetWords: number }>,
   fallbackTarget: number,

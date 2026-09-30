@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { DEEPSEEK_DEFAULT_MODEL } from "../src/integrations/deepseek-provider.js";
-import { normalizeGeneratedBlocks } from "../src/services/product-studio-service.js";
+import { compactChapterParents, normalizeGeneratedBlocks } from "../src/services/product-studio-service.js";
 
 describe("Product Studio rechaza atribuciones no verificadas", () => {
   const chapter = { id: "chapter-1", title: "Prueba", objective: "", order: 0, targetWords: 300, status: "PENDING" as const };
@@ -20,6 +20,28 @@ describe("Product Studio rechaza atribuciones no verificadas", () => {
     expect(() => normalizeGeneratedBlocks([
       { type: "quote", content: "Una cita sin referencia." },
     ], chapter, evidence, references)).toThrow("sin referencia verificable");
+  });
+});
+
+describe("Product Studio limita el contexto de padres en cada capítulo", () => {
+  it("omite comentarios y evidencia crudos y mantiene un resumen acotado", () => {
+    const parents = {
+      problems: {
+        items: [{
+          name: "Reacciones durante el paseo",
+          summary: "El tutor describe reacciones observables en cruces.",
+          evidenceIds: ["evidence-id"],
+          quotes: ["comentario extenso ".repeat(500)],
+          evidence: [{ quote: "comentario sin procesar ".repeat(20_000) }],
+        }],
+      },
+    };
+    const compacted = compactChapterParents(parents);
+    expect(JSON.stringify(compacted).length).toBeLessThanOrEqual(1_600);
+    expect(JSON.stringify(compacted)).not.toContain("comentario sin procesar");
+    expect(JSON.stringify(compacted)).not.toContain("evidence-id");
+    expect(JSON.stringify(compacted)).toContain("Reacciones durante el paseo");
+    expect(parents.problems.items[0]!.evidence).toHaveLength(1);
   });
 });
 

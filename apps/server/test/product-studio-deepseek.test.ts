@@ -3,6 +3,25 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { DEEPSEEK_DEFAULT_MODEL } from "../src/integrations/deepseek-provider.js";
+import { normalizeGeneratedBlocks } from "../src/services/product-studio-service.js";
+
+describe("Product Studio rechaza atribuciones no verificadas", () => {
+  const chapter = { id: "chapter-1", title: "Prueba", objective: "", order: 0, targetWords: 300, status: "PENDING" as const };
+
+  it("rechaza alias de evidencia y citas sin referencias incluidas", () => {
+    const evidence = new Set<string>();
+    const references = new Set<string>();
+    expect(() => normalizeGeneratedBlocks([
+      { type: "paragraph", content: "Como muestra item-1, esto queda probado." },
+    ], chapter, evidence, references)).toThrow("alias de evidencia");
+    expect(() => normalizeGeneratedBlocks([
+      { type: "paragraph", content: "Un tutor relata una experiencia personal durante el paseo." },
+    ], chapter, evidence, references)).toThrow("sin referencia verificable");
+    expect(() => normalizeGeneratedBlocks([
+      { type: "quote", content: "Una cita sin referencia." },
+    ], chapter, evidence, references)).toThrow("sin referencia verificable");
+  });
+});
 
 describe("Product Studio usa DeepSeek sin fallback a mock", () => {
   it("genera outline y un capítulo con dos llamadas explícitas al proveedor configurado", async () => {
@@ -82,7 +101,8 @@ describe("Product Studio usa DeepSeek sin fallback a mock", () => {
       expect(outputLimits).toEqual([4000, 5000]);
       const chapterRequest = JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body));
       expect(chapterRequest.messages[0].content).toContain("UUID exacto");
-      expect(chapterRequest.messages[0].content).toContain("no uses alias como item-1 o E1");
+      expect(chapterRequest.messages[0].content).toContain("nunca alias como item-1 o E1");
+      expect(chapterRequest.messages[0].content).toContain("No incluyas citas directas");
       for (const [, init] of fetchMock.mock.calls) {
         const request = JSON.parse(String((init as RequestInit).body));
         expect(request).toMatchObject({

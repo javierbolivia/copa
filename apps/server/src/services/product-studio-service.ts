@@ -521,7 +521,7 @@ export class ProductStudioService {
             provider: llm.name,
             model,
             systemInstructions:
-              "Escribe un capítulo práctico y desarrollado de este Ebook como bloques de contenido real y sustancia profunda. No inventes fuentes. Para evidencia usa únicamente el UUID exacto del campo evidenceId entregado en la entrada, en evidenceId/evidenceIds del bloque; no uses alias como item-1 o E1 en campos ni en el texto. Si no puedes asociar con seguridad una afirmación a ese UUID, omite la cita y marca el bloque AI_INFERENCE. Para conocimiento usa solo el referenceId exacto entregado. Nunca incluyas HTML ejecutable.",
+              "Escribe un capítulo práctico y desarrollado de este Ebook. No inventes casos ni atribuciones. No incluyas citas directas ni frases entrecomilladas reconstruidas; solo puedes citar literalmente un texto entregado en la entrada y enlazarlo con su UUID exacto. Para evidencia usa únicamente el UUID exacto del campo evidenceId entregado, en evidenceId/evidenceIds del bloque; nunca alias como item-1 o E1 en campos ni texto. Si no puedes asociar una afirmación con seguridad, omite la cita y marca el bloque AI_INFERENCE. No atribuyas afirmaciones a 'muchos tutores' ni al corpus sin UUID válido. Para conocimiento usa solo el referenceId exacto entregado. Nunca incluyas HTML ejecutable.",
             input: JSON.stringify(input),
             structuredOutput: {
               name: "product_chapter",
@@ -549,7 +549,7 @@ export class ProductStudioService {
           { documentId, chapterId, ...input },
           blocks,
           used,
-          `product-chapter-${llm.name}-v3`,
+          `product-chapter-${llm.name}-v4`,
           model,
           result,
           Date.now() - startedAt,
@@ -1478,7 +1478,7 @@ function normalizeOutline(
       status: "PENDING",
     }));
 }
-function normalizeGeneratedBlocks(
+export function normalizeGeneratedBlocks(
   items: Array<{
     type: ProductBlock["type"];
     content: ProductBlock["content"];
@@ -1503,15 +1503,25 @@ function normalizeGeneratedBlocks(
         item.referenceId && referenceIds.has(item.referenceId)
           ? item.referenceId
           : undefined,
+      content = typeof item.content === "string" ? item.content : "",
+      hasVerifiedReference = validEvidenceIds.length > 0 || Boolean(referenceId),
       provenance = evidenceId
         ? "EVIDENCE_BACKED"
         : referenceId
           ? "KNOWLEDGE"
           : "AI_INFERENCE";
+    if (/\bitem-\d+\b|\bitems?\s+\d+(?:\s*[,;]\s*\d+)+/iu.test(content))
+      throw new Error("La salida incluye alias de evidencia no permitidos.");
+    if (!hasVerifiedReference && (
+      type === "quote" || type === "sourceReference" ||
+      /["“][^"”\n]{25,}["”]/u.test(content) ||
+      /\b(?:un|una|otro|otra|muchos|varios)\s+(?:tutor(?:es)?|dueñ[oa]s?|personas?|usuarios?)\s+(?:describe|describen|reporta|reportan|relata|relatan|explica|explican|pregunta|preguntan|comenta|comentan)\b|\b(?:los relatos|se reporta|como menciona un tutor)\b/iu.test(content)
+    ))
+      throw new Error("La salida incluye una cita o atribución sin referencia verificable.");
     return {
       id: uuidv7(),
       type,
-      content: typeof item.content === "string" ? item.content : "",
+      content,
       order: index,
       metadata: {
         chapterId: chapter.id,

@@ -46,18 +46,41 @@ Se completó la auditoría integral y resolución de hallazgos en las 4 seccione
     - Todos los patrones sólidos alcanzan de forma comprobable el rango objetivo de **90-95/100**.
 
 ### D. Oportunidades (Opportunities)
-- **Estado**: Aprobado (`approved`, versión 5, `01a0ebc6-5522-755e-9437-7b4cdc21dd69`), `fresh`.
+- **Estado**: Aprobado (`approved`, versión 6, `01a0ebfa-a70d-72ba-96b0-39a4ff11f7c2`), `fresh`.
 - **Estructura y contrato**:
   - `selectedId`: `"opp-p1-guia-paseo-reactividad"` (válido y presente en `items`).
   - Totales deterministas: Los 9 items cumplen exactamente la fórmula autoritativa del backend (`total = round(Σ peso * score)`).
   - Integridad referencial: Cada oportunidad referencia entre 2 y 5 IDs de evidencia que pertenecen estrictamente a su problema padre.
   - Justificaciones completas: Todos los items contienen `rationale`, los 9 `scoreRationales`, `missingData` y `validationPlan`.
 
+### E. Producto (Product)
+- **Estado**: Aprobado (`approved`, versión 9, `01a0ec13-d04e-70cb-88c4-8c4779769c94`), `fresh`.
+- **Estructura**: Oferta formativa y solución estructurada anclada a la oportunidad ganadora `opp-p1-guia-paseo-reactividad`. Cumple la validación canónica de producto con grounding estricto.
+
+### F. Avatar (Avatar)
+- **Estado**: Aprobado (`approved`, versión 3, `01a0ec23-1847-76a8-af42-cf49223821c0`), `fresh`.
+- **Hallazgo y corrección de validación**:
+  - El validador determinista `avatar-output-validator.ts` rechazaba citas de lenguaje textual (`language`) si el LLM capitalizaba la primera letra (ej. `"Cuando..."` vs `"... pero cuando..."` en la evidencia).
+  - Se corrigió normalizando la búsqueda insensible a mayúsculas/minúsculas y tolerando signos de puntuación iniciales y finales, manteniendo el rechazo estricto de paráfrasis o invenciones.
+  - El borrador fue guardado como revisión de usuario y aprobado formalmente en el workflow, eliminando cualquier borrador provisional.
+
+### G. Mecanismo (Mechanism) - PUNTO ACTUAL
+- **Estado en Workflow**: `PENDING` (listo / `READY` para generación).
+- **Dependencias upstream**: Cumplidas al 100% (`product` v9 y `avatar` v3 aprobados y vigentes).
+- **Siguiente acción para Codex**: Generar el módulo de Mecanismo (`mechanism`) mediante API, UI o script controlado, verificar coherencia de la causa raíz (`rootCauseHypothesis`) y solución operativa (`solutionMechanism`), y revisar/aprobar para avanzar a Creencias (`beliefs`).
+
 ---
 
-## 2. Pruebas Reales de APIs (Proveedores LLM)
+## 2. Robustecimiento de Estrategia y Pruebas Reales de APIs
 
-Se ejecutó una prueba de integración en vivo con llamada real controlada (presupuesto mínimo, 1 única llamada de validación con JSON estructurado) para cada una de las APIs configuradas:
+### A. Mejoras en Pipeline de Estrategia (Mecanismo, Creencias, Oferta)
+- **Contratos canónicos**: Esquemas JSON enriquecidos y sincronizados en `module-output-schema.ts`.
+- **Validadores deterministas**: Robustecidos con validación estricta de estructura y referencias en `mechanism-output-validator.ts`, `beliefs-output-validator.ts` y `offer-output-validator.ts`.
+- **Integración DeepSeek**: Manejo defensivo de tipos de unión y objetos de dominio en `deepseek-provider.ts` para evitar fallos de schema y truncamiento.
+- **Auditoría Open Source**: Comparativa exhaustiva documentada en `docs/STRATEGY_PRODUCT_OPEN_SOURCE_AUDIT.md`.
+
+### B. Pruebas Reales de APIs (Proveedores LLM)
+Se ejecutó una prueba de integración en vivo con llamada real controlada para cada una de las APIs configuradas:
 
 | Proveedor | Modelo probado | Latencia real | Estado | Resultado |
 | :--- | :--- | :--- | :--- | :--- |
@@ -66,16 +89,11 @@ Se ejecutó una prueba de integración en vivo con llamada real controlada (pres
 | **Groq** | `qwen/qwen3.8-27b` | 572 ms | **SUCCESS** | Salida JSON válida `{"status":"ok"}` |
 | **OpenRouter** | `openrouter/free` | 2.207 ms | **SUCCESS** | Salida JSON válida `{"status":"ok"}` |
 
-### Hallazgos de API corregidos en el código:
-1. **`DeepSeekProvider`**: `canonicalModel` intentaba hacer `.trim()` sobre `request.model` sin validar si era `undefined`, provocando `TypeError: Cannot read properties of undefined (reading 'trim')` en llamadas donde no se especificaba el modelo por petición. Corregido con guardia de tipo segura.
-2. **`GeminiProvider`**: Cuando `request.model` era omitido, enviaba `undefined` en la URL (`models/undefined:generateContent`), devolviendo error HTTP 404 de Google. Se añadió `defaultModel` inicializado con `options.model?.trim() || GEMINI_ANALYSIS_MODEL` (`gemini-3.5-flash-lite`), resolviendo la llamada de forma limpia.
-3. **`test/market-research-flow.test.ts`**: Actualizada la aserción obsoleta que esperaba `deepseek-v4-flash` a `deepseek-flash`.
-
 ---
 
 ## 3. Verificación Automatizada
 
-- **Pruebas unitarias e integración**: **116 archivos de prueba pasados, 950 tests en verde (100% PASS)**.
+- **Pruebas unitarias e integración**: **119 archivos de prueba pasados, 971 tests en verde (100% PASS)**.
 - **Typecheck**: `npm run typecheck` en los 3 workspaces (`@our-platform/shared`, `@our-platform/server`, `@our-platform/web`) limpio con 0 errores.
-- **Build**: `npm run build --workspace @our-platform/server` exitoso.
+- **Build**: `npm run build` exitoso.
 - **Calidad de formato**: `git diff --check` limpio sin errores de whitespace.

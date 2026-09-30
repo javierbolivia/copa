@@ -24,10 +24,30 @@ export const ProductBlockTypeSchema = Type.Union([
 const JsonScalarSchema = Type.Union([Type.String({ maxLength: 200_000 }), Type.Number(), Type.Boolean(), Type.Null()]);
 const JsonListSchema = Type.Array(JsonScalarSchema, { maxItems: 2_000 });
 const SafeObjectSchema = Type.Record(Type.String({ maxLength: 100 }), Type.Union([JsonScalarSchema, JsonListSchema]));
+type SafeJsonScalar = string | number | boolean | null;
+const ProductBlockMetadataSchema = Type.Unsafe<
+  Record<string, SafeJsonScalar | SafeJsonScalar[]>
+>({
+  type: "object",
+  propertyNames: { maxLength: 100 },
+  properties: {
+    evidenceIds: {
+      anyOf: [
+        {
+          type: "array",
+          items: { type: "string", minLength: 1, maxLength: 200 },
+          maxItems: 20,
+        },
+        { type: "string", minLength: 1, maxLength: 200 },
+      ],
+    },
+  },
+  additionalProperties: Type.Union([JsonScalarSchema, JsonListSchema]),
+});
 export const ProductBlockSchema = Type.Object({
   id: Type.String({ format: "uuid" }), type: ProductBlockTypeSchema,
   content: Type.Union([JsonScalarSchema, JsonListSchema, SafeObjectSchema]),
-  order: Type.Integer({ minimum: 0 }), metadata: SafeObjectSchema,
+  order: Type.Integer({ minimum: 0 }), metadata: ProductBlockMetadataSchema,
   createdAt: Type.String({ format: "date-time" }), updatedAt: Type.String({ format: "date-time" }),
 }, { additionalProperties: false });
 

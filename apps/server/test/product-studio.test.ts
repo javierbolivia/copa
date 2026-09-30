@@ -211,7 +211,10 @@ describe("Product Studio backend", () => {
       type: "paragraph",
       content: "Edición humana",
       order: 0,
-      metadata: {},
+      metadata: {
+        evidenceId: "00000000-0000-4000-8000-000000000001",
+        evidenceIds: ["00000000-0000-4000-8000-000000000001"],
+      },
       createdAt: now,
       updatedAt: now,
     };
@@ -226,7 +229,19 @@ describe("Product Studio backend", () => {
       payload,
     });
     expect(first.statusCode, first.body).toBe(200);
-    const firstVersion = first.json<ProductDocument>().version.versionNumber;
+    const savedDocument = first.json<ProductDocument>();
+    expect(savedDocument.version.blocks[0]?.metadata.evidenceIds).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+    ]);
+    const loaded = await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/product-documents/${document.id}`,
+    });
+    expect(loaded.statusCode, loaded.body).toBe(200);
+    expect(
+      loaded.json<ProductDocument>().version.blocks[0]?.metadata.evidenceIds,
+    ).toEqual(["00000000-0000-4000-8000-000000000001"]);
+    const firstVersion = savedDocument.version.versionNumber;
     const replay = await app.inject({
       method: "PUT",
       url: `/api/projects/${project.id}/product-documents/${document.id}/autosave`,

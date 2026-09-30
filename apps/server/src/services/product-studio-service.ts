@@ -15,6 +15,7 @@ import type { KnowledgeRepository } from "../repositories/knowledge-repository.j
 import type { ProjectSettingsRepository } from "../repositories/project-settings-repository.js";
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { DeepSeekProvider } from "../integrations/deepseek-provider.js";
+import type { GeminiProvider } from "../integrations/gemini-provider.js";
 import {
   ProductDocumentRepository,
   DEFAULT_PRODUCT_THEME,
@@ -36,6 +37,7 @@ export class ProductStudioService {
     private readonly settings: ProjectSettingsRepository,
     private readonly openAI: OpenAIProvider,
     private readonly deepSeek: DeepSeekProvider,
+    private readonly gemini: GeminiProvider,
   ) {}
 
   list(projectId: string): ProductDocument[] {
@@ -1068,7 +1070,7 @@ export class ProductStudioService {
       chunkId: `video_transcript:${row.segmentId}`,
     }));
   }
-  private generationProvider(projectId: string): OpenAIProvider | DeepSeekProvider | undefined {
+  private generationProvider(projectId: string): OpenAIProvider | DeepSeekProvider | GeminiProvider | undefined {
     const preferred = this.settings.get(projectId)?.preferredLlmProvider;
     if (preferred === "mock") return undefined;
     if (preferred === "openai") {
@@ -1079,6 +1081,10 @@ export class ProductStudioService {
       if (!this.deepSeek.configured) throw new ProductStudioConflictError("DeepSeek fue seleccionado pero no está configurado.");
       return this.deepSeek;
     }
+    if (preferred === "gemini") {
+      if (!this.gemini.configured) throw new ProductStudioConflictError("Gemini fue seleccionado pero no está configurado.");
+      return this.gemini;
+    }
     if (preferred && preferred !== "") {
       throw new ProductStudioConflictError(`Product Studio no admite el proveedor seleccionado: ${preferred}.`);
     }
@@ -1088,8 +1094,10 @@ export class ProductStudioService {
     if (this.openAI.configured) return this.openAI;
     return undefined;
   }
-  private generationModel(projectId: string, provider: OpenAIProvider | DeepSeekProvider): string {
-    return provider.name === "deepseek" ? provider.effectiveModel : this.powerfulModel(projectId);
+  private generationModel(projectId: string, provider: OpenAIProvider | DeepSeekProvider | GeminiProvider): string {
+    if (provider.name === "deepseek") return provider.effectiveModel;
+    if (provider.name === "gemini") return provider.defaultModel;
+    return this.powerfulModel(projectId);
   }
   private powerfulModel(projectId: string): string {
     return (
@@ -1563,8 +1571,8 @@ export function normalizeGeneratedBlocks(
       throw new Error("La salida incluye alias de evidencia no permitidos.");
     if (!hasVerifiedReference && (
       type === "quote" || type === "sourceReference" ||
-      /["“][^"”\n]{25,}["”]/u.test(content) ||
-      /\b(?:un|una|otro|otra|muchos|varios)\s+(?:tutor(?:es)?|dueñ[oa]s?|personas?|usuarios?)\s+(?:describe|describen|reporta|reportan|relata|relatan|explica|explican|pregunta|preguntan|comenta|comentan)\b|\b(?:los relatos|se reporta|como menciona un tutor)\b/iu.test(content)
+      /["“][^"”\n]{25,}["”]|(?<!\p{L})['‘][^'’\n]{25,}['’](?!\p{L})/u.test(content) ||
+      /\b(?:en|seg[uú]n)\s+(?:(?:los|las|el|la)\s+)?(?:relatos|testimonios|comentarios|corpus|experiencias)\b|\b(?:un|una|otro|otra|muchos|varios)\s+(?:tutor(?:es)?|dueñ[oa]s?|personas?|usuarios?|comentarios?|relatos?|testimonios?|casos?)\s+(?:describe|describen|reporta|reportan|relata|relatan|explica|explican|pregunta|preguntan|comenta|comentan|señala|señalan|menciona|mencionan|recoge|recogen)\b|\b(?:los relatos|se reporta|se recoge|como menciona un tutor)\b/iu.test(content)
     ))
       throw new Error("La salida incluye una cita o atribución sin referencia verificable.");
     return {

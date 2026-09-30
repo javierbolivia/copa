@@ -20,6 +20,12 @@ describe("Product Studio rechaza atribuciones no verificadas", () => {
     expect(() => normalizeGeneratedBlocks([
       { type: "quote", content: "Una cita sin referencia." },
     ], chapter, evidence, references)).toThrow("sin referencia verificable");
+    expect(() => normalizeGeneratedBlocks([
+      { type: "paragraph", content: "En los relatos recogidos aparecen experiencias del paseo." },
+    ], chapter, evidence, references)).toThrow("sin referencia verificable");
+    expect(() => normalizeGeneratedBlocks([
+      { type: "paragraph", content: "Una frase atribuida 'a un comentario del corpus sin respaldo verificable'" },
+    ], chapter, evidence, references)).toThrow("sin referencia verificable");
   });
 });
 

@@ -151,6 +151,7 @@ export async function createApp(
     settings,
     openAI,
     deepSeek,
+    gemini,
   );
   const productExports = new ProductExportService(
     database,

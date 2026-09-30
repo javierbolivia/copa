@@ -1417,23 +1417,23 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
      ],
      evidenceIds:offer?.evidenceIds??ids
    },
-   funnel:{schemaVersion:1,landingVersion:landing?.title??"Landing principal",offerName:offer?.name??"Oferta principal",
-     tracking:{metaPixelId:"982341058201",events:[{stepId:"landing",event:"ViewContent"},{stepId:"checkout",event:"InitiateCheckout"},{stepId:"thanks",event:"Purchase"}]},
-     externalCheckout:{platform:"hotmart",url:"https://pay.hotmart.com/example"},
+  funnel:{schemaVersion:1,landingVersion:landing?.title??"Landing principal",offerName:offer?.name??"Oferta principal",
+     tracking:{events:[]},
+     externalCheckout:{platform:"none"},
      nodes:[
-     {id:"landing",type:"landing",label:landing?.title??"Página de ventas",description:"Página principal de ventas del Ebook con los 15 bloques canónicos.",active:true,linkedArtifact:"landing",trackingEvent:"ViewContent"},
-     {id:"checkout",type:"checkout_placeholder",label:`Checkout externo (Hotmart) · ${offer?.name??"Oferta"}`,description:`Pasarela de pago externa en Hotmart. Precio base: ${offer?.pricingSuggestion?.amount??27} ${offer?.pricingSuggestion?.currency??"USD"}.`,active:true,linkedArtifact:"offer",price:offer?.pricingSuggestion?.amount?`${offer.pricingSuggestion.amount} ${offer.pricingSuggestion.currency??"USD"}`:null,externalPlatform:"hotmart",externalCheckoutUrl:"https://pay.hotmart.com/example",trackingEvent:"InitiateCheckout"},
-     {id:"bump",type:"order_bump",label:offer?.orderBump??"Workbook complementario",description:"Workbook de ejercicios prácticos añadido en el checkout con un clic.",active:Boolean(offer?.orderBump),linkedArtifact:"offer",externalPlatform:"hotmart"},
-     {id:"upsell",type:"upsell",label:offer?.upsell??"Guía avanzada de implementación",description:"Guía complementaria digital ofrecida inmediatamente tras el pago.",active:Boolean(offer?.upsell),linkedArtifact:"offer",externalPlatform:"hotmart"},
-     {id:"downsell",type:"downsell",label:offer?.downsell??"Checklist esencial",description:"Checklist de acción rápida ofrecida si se declina el upsell.",active:Boolean(offer?.downsell),linkedArtifact:"offer",externalPlatform:"hotmart"},
-     {id:"thanks",type:"thank_you",label:"Página de confirmación y entrega",description:"Instrucciones de descarga inmediata del Ebook y bienvenida.",active:true,trackingEvent:"Purchase"}
+     {id:"landing",type:"landing",label:landing?.title??"Landing principal",description:"Página propuesta; revisar antes de publicar.",active:true,linkedArtifact:"landing"},
+     {id:"checkout",type:"checkout_placeholder",label:"Checkout pendiente de configurar",description:"Placeholder inactivo. Plataforma, URL y precio requieren una decisión explícita.",active:false,linkedArtifact:"offer",price:null,externalPlatform:"none"},
+     {id:"bump",type:"order_bump",label:"Order bump no configurado",description:"Etapa opcional inactiva; requiere una oferta aprobada.",active:false,linkedArtifact:"offer",externalPlatform:"none"},
+     {id:"upsell",type:"upsell",label:"Upsell no configurado",description:"Etapa opcional inactiva; requiere una oferta aprobada.",active:false,linkedArtifact:"offer",externalPlatform:"none"},
+     {id:"downsell",type:"downsell",label:"Downsell no configurado",description:"Etapa opcional inactiva; requiere una oferta aprobada.",active:false,linkedArtifact:"offer",externalPlatform:"none"},
+     {id:"thanks",type:"thank_you",label:"Confirmación pendiente de configurar",description:"Etapa inactiva hasta definir y validar el proceso de entrega.",active:false}
    ],edges:[
-     {from:"landing",to:"checkout",event:"continue",label:"Clic en botón de compra"},
-     {from:"checkout",to:"bump",event:"continue",label:"Selección de complementos"},
-     {from:"bump",to:"upsell",event:"accept",label:"Transacción inicial aprobada"},
-     {from:"upsell",to:"thanks",event:"accept",label:"Upsell aceptado"},
-     {from:"upsell",to:"downsell",event:"decline",label:"Upsell declinado"},
-     {from:"downsell",to:"thanks",event:"complete",label:"Recorrido finalizado"}
+     {from:"landing",to:"checkout",event:"continue",label:"Continuar solo si se aprueba la oferta y se configura un checkout"},
+     {from:"checkout",to:"bump",event:"continue",label:"Evaluar un complemento solo si se aprueba"},
+     {from:"bump",to:"upsell",event:"accept",label:"Evaluar una oferta adicional, si existe y se aprueba"},
+     {from:"upsell",to:"thanks",event:"accept",label:"Definir entrega antes de activar esta etapa"},
+     {from:"upsell",to:"downsell",event:"decline",label:"Alternativa opcional, pendiente de decisión"},
+     {from:"downsell",to:"thanks",event:"complete",label:"Finalizar solo tras definir el proceso de entrega"}
    ],paymentsEnabled:false,evidenceIds:offer?.evidenceIds??ids},
   content:{schemaVersion:1,offerName:offer?.name,audience:avatar?.name,mechanism:mechanism?.mechanism,centralThesis:beliefs?.centralThesis,calendar:[{day:1,type:"educational",channel:"Facebook",hook:`El primer paso para ${offer?.promise??niche}`,body:mechanism?.simpleExplanation??"Empieza por definir un resultado observable.",cta:`Descubre ${offer?.name??"el Ebook"}`},{day:3,type:"objection",channel:"Facebook",hook:(beliefs?.objections??[])[0]??"No necesitas resolver todo hoy",body:(beliefs?.arguments??[])[0]??"Elige una acción acotada y revísala.",cta:`Conoce el enfoque de ${offer?.name??"el Ebook"}`}],hooks:[beliefs?.centralThesis??`Una forma más clara de abordar ${niche}`],channels:["Facebook"],evidenceIds:offer?.evidenceIds??ids},
   final_product:{schemaVersion:1,files:[],guide:{title:selectedProduct?.name??offer?.name??`Ebook: ${niche}`,chapters:selectedProduct?.modules??["Capítulo 1: Diagnóstico","Capítulo 2: Plan","Capítulo 3: Implementación","Capítulo 4: Casos Prácticos"]},checklist:["Definir resultado","Revisar evidencia","Elegir acción","Registrar avance"],workbook:["Situación actual","Objetivo","Plan de acción del libro"],miniTool:{title:`Planificador del Ebook: ${niche}`,fields:["Objetivo","Próxima acción","Fecha de revisión"]},evidenceIds:selectedProduct?.evidenceIds??offer?.evidenceIds??ids},

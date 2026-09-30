@@ -158,4 +158,37 @@ describe("Funnel review contract", () => {
     expect(approveRes.statusCode).toBe(200);
     expect(approveRes.json().status).toBe("approved");
   });
+
+  it("keeps contextual funnel integrations, prices, and payment steps unconfigured", async () => {
+    const { projectId } = await setup();
+    // Keep the complete in-memory parent lineage, but exercise the non-demo contextual generator.
+    const renameResponse = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${projectId}`,
+      payload: { name: "Contextual QA" },
+    });
+    expect(renameResponse.statusCode).toBe(200);
+
+    const runResponse = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/modules/funnel/run`,
+      payload: { provider: "mock" },
+    });
+    expect(runResponse.statusCode, JSON.stringify(runResponse.json())).toBe(200);
+    const output = runResponse.json().outputData;
+
+    expect(output.paymentsEnabled).toBe(false);
+    expect(output.funnelValidationAudit.ok).toBe(true);
+    expect(output.externalCheckout).toEqual({ platform: "none" });
+    expect(output.tracking).toEqual({ events: [] });
+    expect(JSON.stringify(output)).not.toMatch(/982341058201|pay\.hotmart\.com/i);
+    expect(JSON.stringify(output)).not.toMatch(/clic en botón de compra|transacción inicial aprobada|upsell aceptado/i);
+    for (const id of ["checkout", "bump", "upsell", "downsell", "thanks"]) {
+      expect(output.nodes.find((node: any) => node.id === id).active).toBe(false);
+    }
+    expect(output.nodes.find((node: any) => node.id === "checkout")).toMatchObject({
+      price: null,
+      externalPlatform: "none",
+    });
+  });
 });

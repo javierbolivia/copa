@@ -1,6 +1,6 @@
 # Traspaso para Antigravity
 
-Última actualización: 2026-09-29
+Última actualización: 2026-09-30
 Repositorio: `C:\Users\user23\Downloads\copa 2`
 Rama: `codex/fix-20.7d-relevance-regression`
 
@@ -64,10 +64,13 @@ Se completó la auditoría integral y resolución de hallazgos en las 4 seccione
   - Se corrigió normalizando la búsqueda insensible a mayúsculas/minúsculas y tolerando signos de puntuación iniciales y finales, manteniendo el rechazo estricto de paráfrasis o invenciones.
   - El borrador fue guardado como revisión de usuario y aprobado formalmente en el workflow, eliminando cualquier borrador provisional.
 
-### G. Mecanismo (Mechanism) - PUNTO ACTUAL
-- **Estado en Workflow**: `PENDING` (listo / `READY` para generación).
-- **Dependencias upstream**: Cumplidas al 100% (`product` v9 y `avatar` v3 aprobados y vigentes).
-- **Siguiente acción para Codex**: Generar el módulo de Mecanismo (`mechanism`) mediante API, UI o script controlado, verificar coherencia de la causa raíz (`rootCauseHypothesis`) y solución operativa (`solutionMechanism`), y revisar/aprobar para avanzar a Creencias (`beliefs`).
+### G. Mecanismo (Mechanism)
+- **Estado actual**: aprobado (`approved`, versión 2, `01a0f3b9-e6c2-708f-8761-eafc300f1079`), `fresh`; workflow `COMPLETED`.
+- **Linaje comprobado**: Problemas v7 (`01a0ebf9-c18e-709b-a71d-161f2961cab3`), Producto v9 (`01a0ec13-d04e-70cb-88c4-8c4779769c94`) y Avatar v3 (`01a0ec23-1847-76a8-af42-cf49223821c0`), todos aprobados y vigentes al aprobar. La versión 1 quedó `superseded`; el historial se conserva.
+- **Validación**: `mechanismValidationAudit.ok: true`, sin errores; linaje persistido con las tres aristas `derived_from`; integridad SQLite `ok`.
+- **Contenido**: “Ruta de paseo: Observar, Ajustar, Practicar y Revisar”. Separa observaciones de hipótesis, identifica la causa raíz como hipótesis no diagnóstica, propone manejo individualizado con prioridad de seguridad y derivación profesional cuando corresponde. Declara límites y no promete eficacia.
+- **Procedencia de esta ejecución**: base local `mock` v1 y borrador revisado por API canónica como v2. No hubo llamada externa a proveedores.
+- **Siguiente paso**: continuar con Emails (`emails`); verificar primero que Funnel y todos sus padres estén aprobados y `fresh`.
 
 ---
 
@@ -97,3 +100,27 @@ Se ejecutó una prueba de integración en vivo con llamada real controlada para 
 - **Typecheck**: `npm run typecheck` en los 3 workspaces (`@our-platform/shared`, `@our-platform/server`, `@our-platform/web`) limpio con 0 errores.
 - **Build**: `npm run build` exitoso.
 - **Calidad de formato**: `git diff --check` limpio sin errores de whitespace.
+
+## 4. Continuación del proyecto (2026-09-30)
+
+Proyecto: **Perros Reactivos – Seed QA** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`). Verificar siempre la API y el workflow antes de continuar; no confiar solo en esta nota.
+
+### Módulos de estrategia completados después de Mecanismo
+
+- **Creencias v2** (`01a0f3c4-65d4-72a9-ba5b-0ecb92316de5`): `approved/fresh`, `beliefsValidationAudit.ok=true`; padre activo Mecanismo v2. La v1 mock está superseded y se conserva en el historial.
+- **Oferta v2** (`01a0f3c7-6e48-7569-a006-d56cdd59e0c9`): `approved/fresh`, validación correcta y padres aprobados. Precio nulo, condiciones sin decidir, sin garantía habilitada ni order bump/upsell/downsell aprobados. Atención: la v1 mock superseded conserva `$27 USD` y una garantía inventada; no reutilizarla ni presentarla como actual.
+- **Landing v2** (`01a0f3ce-acfd-76b7-aed5-04104e81f65c`): `approved/fresh`, `landingValidationAudit.ok=true`, 15 secciones y referencias dentro del snapshot de padres. La v1 mock permanece como borrador histórico no aprobado; contiene copy inseguro y referencias inválidas, no reutilizarlo.
+
+### Funnel v4 activo
+
+- Artefacto `01a0f3d7-0378-75fd-bdf1-4bf8694b2420`, versión activa `01a0f3db-0133-756c-ad6b-f482a1a1bf42`; `approved/fresh`, `funnelValidationAudit.ok=true`, `paymentsEnabled=false`.
+- Se pidió no usar mock para la generación final. Se hizo **una sola generación real con DeepSeek** (proveedor predeterminado configurado), sin fallback ni reintento. La salida DeepSeek v2 marcaba varias etapas activas pese al texto propuesto; se conservó en historial como superseded y se guardó/revisó v4 mediante API canónica.
+- En v4 solo Landing está activa. Captación, checkout, complementos, upsell, downsell y entrega están inactivos; no hay precio, URL, plataforma comercial ni eventos/ID de tracking. Las sugerencias de ofertas adicionales se etiquetan como no aprobadas y no incluidas en la oferta vigente. Pagos siguen deshabilitados.
+- **Historial**: Funnel v1 se generó con mock antes de que el usuario indicara “no uses mock”; queda superseded, no es el Funnel actual. Funnel v3 quedó borrador y fue superseded por v4. No borrar historial.
+- **Cambio de código**: `createContextOutput()` ya no inserta Pixel, Hotmart, precio `$27` ni eventos Purchase ni complementos descriptivos marcados activos; el flujo contextual deja checkout y etapas opcionales inactivos, tracking vacío y labels de transiciones condicionados a aprobación. Prueba `apps/server/test/funnel-contract.test.ts`: 4/4 GREEN; `npm.cmd run typecheck --workspace @our-platform/server`: GREEN.
+
+### Próximo paso y límites
+
+- Workflow verificado al completar Funnel: Research, Sources, Problems, Opportunities, Product, Avatar, Mechanism, Beliefs, Offer, Landing y Funnel `COMPLETED`; **Emails** es el siguiente paso `PENDING` (reconfirmar en runtime antes de actuar). Content y Final Product aún pendientes.
+- El usuario indicó explícitamente **“no uses mock”**. Para cualquier generación real futura, usar una sola llamada con el proveedor configurado elegido; inspeccionar provider/status antes, no hacer fallback/reintento salvo autorización, y revisar salida antes de aprobar. No usar datos mock en los artefactos activos.
+- Sin deploy. No afirmar inspección visual global.

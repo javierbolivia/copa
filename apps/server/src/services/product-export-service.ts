@@ -628,7 +628,7 @@ export class ProductExportService {
         return `<figure class="block"><img class="${block.type}" src="data:${asset.mimeType};base64,${data}" alt="${text}"><figcaption>${text}</figcaption></figure>`;
       }
       case "sourceReference":
-        return `<p class="block"><small>Fuente: ${text}</small></p>`;
+        return `<p class="block"><small>Fuente: ${sourceReferenceHtml(block.content)}</small></p>`;
       case "CTA":
         return `<p class="block"><strong>${text}</strong></p>`;
       default:
@@ -931,6 +931,35 @@ function escapeHtml(value: unknown) {
         char
       ]!,
   );
+}
+function sourceReferenceHtml(value: ProductBlock["content"]): string {
+  const source = flatten(value);
+  const pattern = /https?:\/\/[^\s<>"']+/gi;
+  let cursor = 0;
+  let html = "";
+  for (const match of source.matchAll(pattern)) {
+    const rawUrl = match[0];
+    const start = match.index ?? 0;
+    const trailing = rawUrl.match(/[.,;:!?]+$/)?.[0] ?? "";
+    const candidate = rawUrl.slice(0, rawUrl.length - trailing.length);
+    html += escapeHtml(source.slice(cursor, start));
+    let rendered = escapeHtml(rawUrl);
+    try {
+      const url = new URL(candidate);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password
+      ) {
+        rendered = `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(candidate)}</a>${escapeHtml(trailing)}`;
+      }
+    } catch {
+      // Keep malformed URLs as escaped text rather than emitting an unsafe link.
+    }
+    html += rendered;
+    cursor = start + rawUrl.length;
+  }
+  return html + escapeHtml(source.slice(cursor));
 }
 function assetId(block: ProductBlock): string | null {
   const candidate =

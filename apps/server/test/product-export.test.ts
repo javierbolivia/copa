@@ -312,6 +312,16 @@ describe("Product Studio physical assets and exports", () => {
         createdAt: now,
         updatedAt: now,
       },
+      {
+        id: crypto.randomUUID(),
+        type: "sourceReference",
+        content:
+          "PDSA. Example resource: https://example.com/dog?first=one&second=two. Credential URL: https://user:pass@example.com/private",
+        order: 4,
+        metadata: { provenance: "KNOWLEDGE" },
+        createdAt: now,
+        updatedAt: now,
+      },
     ];
     const saved = await app.inject({
       method: "PUT",
@@ -376,6 +386,13 @@ describe("Product Studio physical assets and exports", () => {
       ebookHtml.indexOf("Contenido sin capítulo B."),
     );
     expect(ebookHtml).toContain("Contenido adicional");
+    expect(ebookHtml).toContain(
+      '<a href="https://example.com/dog?first=one&amp;second=two" target="_blank" rel="noopener noreferrer">https://example.com/dog?first=one&amp;second=two</a>.',
+    );
+    expect(ebookHtml).toContain("https://user:pass@example.com/private");
+    expect(ebookHtml).not.toContain(
+      'href="https://user:pass@example.com/private"',
+    );
     expect(
       ebookHtml.match(/class="page-break ebook-page-break"/g),
     ).toHaveLength(chapters.length - 1);

@@ -39,7 +39,7 @@ function toProject(row: ProjectRow): Project {
     archivedAt: row.archived_at,
     workflowStage: "Investigación",
     workflowCompletedSteps: 0,
-    workflowTotalSteps: 14,
+    workflowTotalSteps: 13,
   };
 }
 
@@ -248,7 +248,7 @@ export class ProjectRepository {
   private withWorkflow(project: Project): Project {
     const rows = this.database.connection
       .prepare(
-        `SELECT label, state FROM workflow_steps WHERE project_id=? ORDER BY position`,
+        `SELECT label, state FROM workflow_steps WHERE project_id=? AND step_key<>'emails' ORDER BY position`,
       )
       .all(project.id) as unknown as Array<{ label: string; state: string }>;
     const completed = rows.filter((row) => row.state === "COMPLETED").length;
@@ -258,7 +258,7 @@ export class ProjectRepository {
       ...project,
       workflowStage: current,
       workflowCompletedSteps: completed,
-      workflowTotalSteps: rows.length || 14,
+      workflowTotalSteps: rows.length || 13,
     };
   }
 

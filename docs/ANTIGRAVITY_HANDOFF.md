@@ -70,7 +70,7 @@ Se completó la auditoría integral y resolución de hallazgos en las 4 seccione
 - **Validación**: `mechanismValidationAudit.ok: true`, sin errores; linaje persistido con las tres aristas `derived_from`; integridad SQLite `ok`.
 - **Contenido**: “Ruta de paseo: Observar, Ajustar, Practicar y Revisar”. Separa observaciones de hipótesis, identifica la causa raíz como hipótesis no diagnóstica, propone manejo individualizado con prioridad de seguridad y derivación profesional cuando corresponde. Declara límites y no promete eficacia.
 - **Procedencia de esta ejecución**: base local `mock` v1 y borrador revisado por API canónica como v2. No hubo llamada externa a proveedores.
-- **Siguiente paso**: continuar con Emails (`emails`); verificar primero que Funnel y todos sus padres estén aprobados y `fresh`.
+- **Workflow activo**: 13 etapas; Emails está retirado del flujo activo. Las filas heredadas `emails` se ocultan sin borrarse.
 
 ---
 
@@ -121,6 +121,6 @@ Proyecto: **Perros Reactivos – Seed QA** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35
 
 ### Próximo paso y límites
 
-- Workflow verificado al completar Funnel: Research, Sources, Problems, Opportunities, Product, Avatar, Mechanism, Beliefs, Offer, Landing y Funnel `COMPLETED`; **Emails** es el siguiente paso `PENDING` (reconfirmar en runtime antes de actuar). Content y Final Product aún pendientes.
+- Workflow reconciliado: 13 etapas activas. Emails fue retirado del producto el 2026-09-16; una fila heredada `emails` permanece intacta en la base de datos, pero no aparece en el workflow ni en sus totales. Content v2 está aprobado/fresh. Final Product v1 aparece aprobado en el workflow, pero su `guide.md` contiene títulos y texto placeholder, no el Ebook completo; Product Studio aún no tiene documentos. No declarar el Ebook terminado.
 - El usuario indicó explícitamente **“no uses mock”**. Para cualquier generación real futura, usar una sola llamada con el proveedor configurado elegido; inspeccionar provider/status antes, no hacer fallback/reintento salvo autorización, y revisar salida antes de aprobar. No usar datos mock en los artefactos activos.
 - Sin deploy. No afirmar inspección visual global.

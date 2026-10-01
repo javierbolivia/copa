@@ -322,6 +322,24 @@ describe("Product Studio physical assets and exports", () => {
         createdAt: now,
         updatedAt: now,
       },
+      {
+        id: crypto.randomUUID(),
+        type: "table",
+        content: "Fecha | Hora\n08:00 | 08:30",
+        order: 5,
+        metadata: { chapterId: chapters[0]!.id },
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: crypto.randomUUID(),
+        type: "table",
+        content: { rows: ["Pregunta | Dato pendiente & contexto"] },
+        order: 6,
+        metadata: {},
+        createdAt: now,
+        updatedAt: now,
+      },
     ];
     const saved = await app.inject({
       method: "PUT",
@@ -334,6 +352,14 @@ describe("Product Studio physical assets and exports", () => {
     });
     expect(saved.statusCode, saved.body).toBe(200);
     ebook = saved.json<ProductDocument>();
+    expect(
+      ebook.version.blocks
+        .filter((block) => block.type === "table")
+        .map((block) => block.content),
+    ).toEqual([
+      "Fecha | Hora\n08:00 | 08:30",
+      { rows: "Pregunta | Dato pendiente & contexto" },
+    ]);
     const ebookBefore = structuredClone(ebook.version);
     expect(projectExportProfileInput(ebook)).toEqual({
       documentType: ebook.documentType,
@@ -387,6 +413,12 @@ describe("Product Studio physical assets and exports", () => {
     );
     expect(ebookHtml).toContain("Contenido adicional");
     expect(ebookHtml).toContain(
+      "<tr><td>Fecha</td><td>Hora</td></tr><tr><td>08:00</td><td>08:30</td></tr>",
+    );
+    expect(ebookHtml).toContain(
+      "<tr><td>Pregunta</td><td>Dato pendiente &amp; contexto</td></tr>",
+    );
+    expect(ebookHtml).toContain(
       '<a href="https://example.com/dog?first=one&amp;second=two" target="_blank" rel="noopener noreferrer">https://example.com/dog?first=one&amp;second=two</a>.',
     );
     expect(ebookHtml).toContain("https://user:pass@example.com/private");
@@ -414,6 +446,19 @@ describe("Product Studio physical assets and exports", () => {
     expect(ebookDocxHtml).toContain(`2. ${chapters[1]!.title}`);
     expect(ebookDocxHtml).toContain("Contenido sin capítulo A.");
     expect(ebookDocxHtml).toContain("Contenido adicional");
+    expect(ebookDocxHtml).toContain("<td><p>Fecha</p></td>");
+    expect(ebookDocxHtml).toContain("<td><p>08:00</p></td>");
+    expect(ebookDocxHtml).toContain("<td><p>Pregunta</p></td>");
+    expect(ebookDocxHtml).toContain(
+      "<td><p>Dato pendiente &amp; contexto</p></td>",
+    );
+    expect(ebookDocxHtml).toContain(
+      '<a href="https://example.com/dog?first=one&amp;second=two">https://example.com/dog?first=one&amp;second=two</a>.',
+    );
+    expect(ebookDocxHtml).toContain("https://user:pass@example.com/private");
+    expect(ebookDocxHtml).not.toContain(
+      '<a href="https://user:pass@example.com/private">',
+    );
     expect(
       docxDocumentXml(ebookDocx).match(/<w:br\b[^>]*w:type="page"/g),
     ).toHaveLength(chapters.length + 1);

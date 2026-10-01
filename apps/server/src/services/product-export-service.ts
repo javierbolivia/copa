@@ -6,6 +6,7 @@ import type {
 import {
   AlignmentType,
   Document,
+  ExternalHyperlink,
   Footer,
   Header,
   HeadingLevel,
@@ -791,6 +792,19 @@ export class ProductExportService {
     const text = flatten(block.content);
     if (block.type === "heading")
       return [new Paragraph({ text, heading: HeadingLevel.HEADING_1 })];
+    if (block.type === "sourceReference")
+      return [
+        new Paragraph({
+          children: sourceReferenceSegments(block.content).map((segment) =>
+            segment.href
+              ? new ExternalHyperlink({
+                  link: segment.href,
+                  children: [new TextRun({ text: segment.text })],
+                })
+              : new TextRun({ text: segment.text }),
+          ),
+        }),
+      ];
     if (
       block.type === "bulletList" ||
       block.type === "numberedList" ||
@@ -933,17 +947,29 @@ function escapeHtml(value: unknown) {
   );
 }
 function sourceReferenceHtml(value: ProductBlock["content"]): string {
+  return sourceReferenceSegments(value)
+    .map((segment) =>
+      segment.href
+        ? `<a href="${escapeHtml(segment.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(segment.text)}</a>`
+        : escapeHtml(segment.text),
+    )
+    .join("");
+}
+function sourceReferenceSegments(
+  value: ProductBlock["content"],
+): Array<{ text: string; href?: string }> {
   const source = flatten(value);
   const pattern = /https?:\/\/[^\s<>"']+/gi;
   let cursor = 0;
-  let html = "";
+  const segments: Array<{ text: string; href?: string }> = [];
   for (const match of source.matchAll(pattern)) {
     const rawUrl = match[0];
     const start = match.index ?? 0;
     const trailing = rawUrl.match(/[.,;:!?]+$/)?.[0] ?? "";
     const candidate = rawUrl.slice(0, rawUrl.length - trailing.length);
-    html += escapeHtml(source.slice(cursor, start));
-    let rendered = escapeHtml(rawUrl);
+    const prefix = source.slice(cursor, start);
+    if (prefix) segments.push({ text: prefix });
+    let href: string | undefined;
     try {
       const url = new URL(candidate);
       if (
@@ -951,15 +977,18 @@ function sourceReferenceHtml(value: ProductBlock["content"]): string {
         !url.username &&
         !url.password
       ) {
-        rendered = `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(candidate)}</a>${escapeHtml(trailing)}`;
+        href = url.href;
       }
     } catch {
       // Keep malformed URLs as escaped text rather than emitting an unsafe link.
     }
-    html += rendered;
+    segments.push(href ? { text: candidate, href } : { text: candidate });
+    if (trailing) segments.push({ text: trailing });
     cursor = start + rawUrl.length;
   }
-  return html + escapeHtml(source.slice(cursor));
+  const remainder = source.slice(cursor);
+  if (remainder) segments.push({ text: remainder });
+  return segments;
 }
 function assetId(block: ProductBlock): string | null {
   const candidate =
@@ -975,12 +1004,21 @@ function assetId(block: ProductBlock): string | null {
     : null;
 }
 function tableRows(value: ProductBlock["content"]): string[] {
-  return value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Array.isArray(value.rows)
-    ? value.rows.map(String)
-    : [];
+  const rawRows =
+    typeof value === "string"
+      ? value
+      : Array.isArray(value)
+        ? value
+        : value !== null && typeof value === "object"
+          ? value.rows
+          : null;
+  const rows =
+    typeof rawRows === "string"
+      ? rawRows.split(/\r?\n/)
+      : Array.isArray(rawRows)
+        ? rawRows
+        : [];
+  return rows.map(String).map((row) => row.trim()).filter(Boolean);
 }
 function tableHtml(value: ProductBlock["content"]) {
   const rows = tableRows(value);
@@ -994,8 +1032,9 @@ function tableHtml(value: ProductBlock["content"]) {
     )
     .join("")}</table>`;
 }
-function docxTable(value: ProductBlock["content"]) {
+function docxTable(value: ProductBlock["content"]): Table | Paragraph {
   const rows = tableRows(value);
+  if (!rows.length) return new Paragraph("");
   return new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: rows.map(

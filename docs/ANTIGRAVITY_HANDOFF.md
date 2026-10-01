@@ -8,7 +8,7 @@ Rama: `codex/fix-20.7d-relevance-regression`
 
 Se completó la auditoría integral y resolución de hallazgos en las 4 secciones del proyecto **"Perros Reactivos – Seed QA"** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`): **Investigación**, **Fuentes**, **Problemas** y **Oportunidades**, así como la verificación real de todas las APIs configuradas y la optimización rigurosa de solidez en patrones sólidos (90-95/100).
 
-> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v63”** al final; no asumas que los checkpoints anteriores son actuales.
+> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v64”** al final; no asumas que los checkpoints anteriores son actuales.
 
 ---
 
@@ -226,10 +226,18 @@ Verificado contra la API local en v52. Las v46 y v47 fueron autosaves temporales
 - Revisión visual sigue sin verificarse por `ERR_BLOCKED_BY_CLIENT`; el Ebook permanece sin aprobación profesional independiente y no debe declararse terminado.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f598-7473-756d-b8a5-7fcafecf15c5/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f598-74a3-71eb-aeea-7b78ab6a5a48/download).
 
-## Checkpoint vigente Product Studio — v63 (2026-10-01)
+## Checkpoint histórico Product Studio — v63 (2026-10-01)
 
 - En el capítulo 2 se añadió una fórmula rellenable que convierte una etiqueta en una secuencia de observación («situación/estímulo → conducta → decisión → resultado»), con campos desconocidos en blanco. Mejora manual puntual por autosave canónico; no añade ejemplos ficticios, diagnósticos ni llamadas a proveedores. El capítulo sigue `DRAFT`.
 - Validación v63: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; documento `IN_PROGRESS`, 264 bloques, 1 capítulo `APPROVED` y 9 `DRAFT`.
 - Exportaciones descargadas y verificadas contra los registros (bytes y SHA-256): HTML `perros-reactivos-en-el-paseo-guia-practica-v63-20261001035724468-eab8b0.html`, 75.021 bytes, SHA-256 `a3f554061337c2879963e07a86712c38cdd0e11f43fbf0541f5d44afc7eedd0a`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v63-20261001035724484-6c3058.docx`, 32.115 bytes, SHA-256 `3682678610e0351ea6c3cf0bd5add5bd06e85e466e54049f184ea42ce6ae5c2d`. Ambos contienen la nueva fórmula.
 - Revisión visual sigue sin verificarse por `ERR_BLOCKED_BY_CLIENT`; el Ebook permanece sin aprobación profesional independiente y no debe declararse terminado.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f59c-1e76-72d3-aded-82a33a5d16e6/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f59c-1ea4-75ba-96f9-592fb1b64e0b/download).
+
+## Checkpoint vigente Product Studio — v64 (2026-10-01)
+
+- En el capítulo 6 se aclaró que el plan del capítulo es de observación y manejo ambiental, no una prueba de tolerancia ni un protocolo de exposición; una salida sin reacción no demuestra por sí sola más comodidad con el desencadenante. Se indica no acercar ni repetir un encuentro para probarlo y consultar para un plan conductual individual. Se agregó referencia AVSAB sobre manejo ambiental como apoyo junto al entrenamiento; se conserva la referencia Dogs Trust ya asociada. Edición manual por autosave canónico, sin llamada a proveedor ni cambio de aprobaciones.
+- Validación v64: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; documento `IN_PROGRESS`, 265 bloques, 1 capítulo `APPROVED` y 9 `DRAFT`.
+- Exportaciones descargadas y verificadas contra los registros (bytes y SHA-256): HTML `perros-reactivos-en-el-paseo-guia-practica-v64-20261001040222053-034c45.html`, 76.027 bytes, SHA-256 `2ddd4aa80136bde274cf040b1f97fc6e42aa380b244da0b96cbd8ea7da46a8e2`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v64-20261001040222071-c0327a.docx`, 32.481 bytes, SHA-256 `1df513ac9cae1496d46e3c6f77d677768406efbf5ca24f30d7692de7729eef94`. Ambos contienen la aclaración y referencia AVSAB.
+- Revisión visual sigue sin verificarse por `ERR_BLOCKED_BY_CLIENT`; el Ebook permanece sin aprobación profesional independiente y no debe declararse terminado.
+- Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f5a0-a8e7-73da-a109-74668cab9067/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f5a0-a925-701f-9fa1-1bd9e2396205/download).

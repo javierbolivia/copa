@@ -8,7 +8,7 @@ Rama: `codex/fix-20.7d-relevance-regression`
 
 Se completó la auditoría integral y resolución de hallazgos en las 4 secciones del proyecto **"Perros Reactivos – Seed QA"** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`): **Investigación**, **Fuentes**, **Problemas** y **Oportunidades**, así como la verificación real de todas las APIs configuradas y la optimización rigurosa de solidez en patrones sólidos (90-95/100).
 
-> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v61”** al final; no asumas que los checkpoints anteriores son actuales.
+> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v62”** al final; no asumas que los checkpoints anteriores son actuales.
 
 ---
 
@@ -210,10 +210,18 @@ Verificado contra la API local en v52. Las v46 y v47 fueron autosaves temporales
 - Conteo mecánico aproximado v60: 7.820 palabras de contenido excluidas las referencias frente a 9.400 del outline; capítulo 3 queda en 852/1.000. Mantener el criterio de utilidad, no rellenar por cuota. Revisión visual sigue sin confirmar por el bloqueo del navegador registrado para v57; no intentar eludirlo.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58a-052e-7637-9b7d-3f560b2fd7c6/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58a-0563-772d-abd5-790c37af7ee5/download). Ebook aún sin aprobación profesional independiente.
 
-## Checkpoint vigente Product Studio — v61 (2026-10-01)
+## Checkpoint histórico Product Studio — v61 (2026-10-01)
 
 - Edición manual del capítulo 9 (ficha de paseo), sin llamadas a Gemini/DeepSeek ni cambios de aprobación: se aclaró que no hace falta registrar todos los encuentros, se puede dejar lo desconocido sin adivinar, se añadió orientación para anotar condiciones observables/distancias aproximadas sin acercarse a medir y una revisión semanal con preguntas concretas y señales para no esperar ante riesgos relevantes.
 - Validación v61: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; documento `IN_PROGRESS`, 264 bloques, 1 capítulo `APPROVED` y 9 `DRAFT`.
 - Exportaciones descargadas y verificadas contra los registros (bytes y SHA-256): HTML `perros-reactivos-en-el-paseo-guia-practica-v61-20261001034402067-f99770.html`, 74.568 bytes, SHA-256 `fbe1a7ce5efd9f230e678dc2247c63a126058ad2df394cfbcaee9b9f9cbca5c6`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v61-20261001034402103-7ecf02.docx`, 31.937 bytes, SHA-256 `221216f4e84b9feee74c363a28a83e1409712df1208877ea5f7225b38c41a5c4`. Se confirmó que ambos contienen las nuevas instrucciones del capítulo 9.
 - Revisión visual aún no verificada por `ERR_BLOCKED_BY_CLIENT`; no intentar eludirlo. El Ebook sigue sin aprobación profesional independiente y no debe declararse terminado.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58f-e016-733f-b635-0026f2a0ff0e/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58f-e05e-713a-b4c6-568f1721e343/download).
+
+## Checkpoint vigente Product Studio — v62 (2026-10-01)
+
+- En el workbook del capítulo 9 se aclaró que, si la persona pudo observarlo sin distraerse del entorno, puede anotar de forma aproximada cuánto tardó el perro en volver a una conducta tranquila; si no lo sabe, deja el espacio vacío. Edición manual puntual por autosave canónico; no se cambió ninguna aprobación ni se hicieron llamadas a proveedores en esta edición.
+- Validación v62: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; documento `IN_PROGRESS`, 264 bloques, 1 capítulo `APPROVED` y 9 `DRAFT`.
+- Exportaciones descargadas y verificadas contra los registros (bytes y SHA-256): HTML `perros-reactivos-en-el-paseo-guia-practica-v62-20261001035324338-9c035a.html`, 74.744 bytes, SHA-256 `ff4e2dfa3fddd8a89230b1b2022b9a960d96dd182595dfa9c82e7b1fa6add8eb`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v62-20261001035324353-b8170e.docx`, 31.975 bytes, SHA-256 `2c98bc7026abdef7cd7ed24a7b60f459b531eea80584ceb3c40c65ee5c680468`. Se confirmó que ambos contienen la nota opcional de recuperación.
+- Revisión visual sigue sin verificarse por `ERR_BLOCKED_BY_CLIENT`; el Ebook permanece sin aprobación profesional independiente y no debe declararse terminado.
+- Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f598-7473-756d-b8a5-7fcafecf15c5/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f598-74a3-71eb-aeea-7b78ab6a5a48/download).

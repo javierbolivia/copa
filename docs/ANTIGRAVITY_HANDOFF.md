@@ -8,7 +8,7 @@ Rama: `codex/fix-20.7d-relevance-regression`
 
 Se completó la auditoría integral y resolución de hallazgos en las 4 secciones del proyecto **"Perros Reactivos – Seed QA"** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`): **Investigación**, **Fuentes**, **Problemas** y **Oportunidades**, así como la verificación real de todas las APIs configuradas y la optimización rigurosa de solidez en patrones sólidos (90-95/100).
 
-> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v59”** al final; no asumas que los checkpoints anteriores son actuales.
+> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v60”** al final; no asumas que los checkpoints anteriores son actuales.
 
 ---
 
@@ -194,10 +194,18 @@ Verificado contra la API local en v52. Las v46 y v47 fueron autosaves temporales
 - Conteo mecánico aproximado de bloques activos v58, excluidas las referencias bibliográficas e incluidas las cabeceras: 7.698 palabras frente al objetivo agregado del outline de 9.400. Capítulos (actual/objetivo): 1 804/600; 2 750/1.000; 3 781/1.000; 4 1.195/1.200; 5 1.037/1.200; 6 908/1.400; 7 662/900; 8 777/700; 9 420/900; 10 364/500. No rellenar automáticamente por alcanzar el objetivo: priorizar brechas útiles; el capítulo 6 ya cubre su ciclo observar–registrar–ajustar y fue revisado sin añadir contenido redundante.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f581-5900-741c-b3f8-1c2a7938863a/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f581-593b-72fc-83dc-2b816031379b/download). Ebook continúa sin aprobación profesional independiente.
 
-## Checkpoint vigente Product Studio — v59 (2026-10-01)
+## Checkpoint histórico Product Studio — v59 (2026-10-01)
 
 - En el capítulo 7 se reforzó el escenario de perro suelto: si ya empezó una pelea, no intentar separar ni meter manos/cuerpo entre los perros; priorizar distancia y ayuda. Tras mordida/lesión, la persona busca atención médica y el perro valoración veterinaria pronta, aunque la herida parezca pequeña. Se actualizó la descripción de la referencia PDSA. Edición manual, sin llamadas a modelos ni cambios de estado/aprobación.
 - Validación v59: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; 263 bloques; documento `IN_PROGRESS`, con 1 capítulo `APPROVED` y 9 `DRAFT`.
 - Exportaciones descargadas y verificadas: HTML `perros-reactivos-en-el-paseo-guia-practica-v59-20261001033343940-4030c3.html`, 72.655 bytes, SHA-256 `e4bb3b268c60182e69c2334d611e4e70029760f9a4214f675ba7be02a1d82d82`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v59-20261001033343962-db3c48.docx`, 31.332 bytes, SHA-256 `9f30f9e54e3c7c80d962c1f5bcd62b475a861272d06d66e919a44ba74a0662f5`. Checksums y contenido descargado coinciden; ambos incluyen las medidas de seguridad y el enlace PDSA.
 - Conteo mecánico actual aproximado: 7.749 palabras de contenido excluidas las referencias (objetivo outline 9.400); el capítulo 7 queda en 713/900. Mantener el criterio de añadir solo contenido útil, no completar palabras por cuota. Revisión visual aún no verificada por `ERR_BLOCKED_BY_CLIENT`; no intentar eludirlo.
 - Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f586-7188-71cb-8cb1-ad2b3c7f04a2/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f586-71bf-7597-b7c1-3c74db70fd8f/download). Ebook aún sin aprobación profesional independiente.
+
+## Checkpoint vigente Product Studio — v60 (2026-10-01)
+
+- El capítulo 3 ahora explica un posible mecanismo de aprendizaje: en algunos casos de miedo, ladrar/lanzarse puede coincidir con que el otro perro se aleje, haciendo más probable que se repita la respuesta. Se delimita como hipótesis —no causa automática para un perro concreto— y se indica registrar el resultado sin provocar encuentros para comprobarla. Se enlazó Dogs Trust, fuente que describe ese mecanismo en casos de miedo. Edición manual, sin Gemini/DeepSeek ni cambios de aprobación.
+- Validación v60: `errors=[]`, `warnings=[]`, `claimWarnings=[]`, `canExport=true`; documento `IN_PROGRESS`, 264 bloques, 1 capítulo `APPROVED` y 9 `DRAFT`.
+- Exportaciones descargadas y verificadas: HTML `perros-reactivos-en-el-paseo-guia-practica-v60-20261001033738348-ad1428.html`, 73.614 bytes, SHA-256 `2f1de4eda805de3f60487e9ef02c1d05e77199eb77b66bbfec21e13e4edd7040`; DOCX `perros-reactivos-en-el-paseo-guia-practica-v60-20261001033738370-d4b5e0.docx`, 31.617 bytes, SHA-256 `94a73f7f0d195bab658d01504fdc15176665ac543098b8d350338f2b5075dd54`. Ambos incluyen la explicación y el enlace Dogs Trust; checksums descargados coinciden con el registro.
+- Conteo mecánico aproximado v60: 7.820 palabras de contenido excluidas las referencias frente a 9.400 del outline; capítulo 3 queda en 852/1.000. Mantener el criterio de utilidad, no rellenar por cuota. Revisión visual sigue sin confirmar por el bloqueo del navegador registrado para v57; no intentar eludirlo.
+- Enlaces locales: [HTML](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58a-052e-7637-9b7d-3f560b2fd7c6/download) y [DOCX](http://127.0.0.1:4310/api/projects/01a0289f-9377-70b0-b9ac-a0eb5a9dd35a/files/01a0f58a-0563-772d-abd5-790c37af7ee5/download). Ebook aún sin aprobación profesional independiente.

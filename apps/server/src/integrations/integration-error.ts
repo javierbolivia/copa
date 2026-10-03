@@ -1,3 +1,4 @@
+import type { LlmPhysicalRequestUsage } from "@our-platform/shared";
 import type { JsonSchemaValidationIssue } from "./structured-output.js";
 
 export type IntegrationErrorCode =
@@ -29,6 +30,7 @@ export interface IntegrationErrorOptions {
   readonly cause?: unknown;
   readonly validationIssues?: readonly JsonSchemaValidationIssue[];
   readonly attemptCount?: number;
+  readonly physicalRequests?: readonly LlmPhysicalRequestUsage[];
 }
 
 export class IntegrationError extends Error {
@@ -37,6 +39,7 @@ export class IntegrationError extends Error {
   readonly retryable: boolean;
   readonly validationIssues: readonly JsonSchemaValidationIssue[] | undefined;
   readonly attemptCount: number | undefined;
+  readonly physicalRequests: readonly LlmPhysicalRequestUsage[] | undefined;
 
   constructor(code: IntegrationErrorCode, message: string, options: IntegrationErrorOptions = {}) {
     super(message, { cause: options.cause });
@@ -46,6 +49,7 @@ export class IntegrationError extends Error {
     this.retryable = options.retryable ?? false;
     this.validationIssues = options.validationIssues;
     this.attemptCount = options.attemptCount;
+    this.physicalRequests = options.physicalRequests;
   }
 }
 

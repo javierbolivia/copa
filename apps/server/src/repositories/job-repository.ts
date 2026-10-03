@@ -4,9 +4,9 @@ import type { AppDatabase } from "../database/database.js";
 
 interface JobRow {id:string;project_id:string;job_type:string;status:Job["status"];progress:number;message:string|null;created_at:string;completed_at:string|null}
 export interface JobRecord extends Job {sourceId:string|null;payload:Record<string,unknown>;attempts:number;maxAttempts:number;cancelRequested:boolean}
-interface GenerationRow {id:string;project_id:string;agent_key:string;provider:string;model:string;status:string;input_tokens:number;output_tokens:number;estimated_cost:number;duration_ms:number;created_at:string;prompt_version:string|null;output_data:string|null;artifact_version_id:string|null;version_number:number|null}
+interface GenerationRow {id:string;project_id:string;agent_key:string;provider:string;model:string;status:string;input_tokens:number;output_tokens:number;estimated_cost:number;duration_ms:number;created_at:string;prompt_version:string|null;output_data:string|null;artifact_version_id:string|null;version_number:number|null;error_code:string|null}
 const toJob=(r:JobRow):Job=>({id:r.id,projectId:r.project_id,jobType:r.job_type,status:r.status,progress:r.progress,message:r.message,createdAt:r.created_at,completedAt:r.completed_at});
-const toGeneration=(r:GenerationRow):Generation=>({id:r.id,projectId:r.project_id,agentKey:r.agent_key,provider:r.provider,model:r.model,status:r.status,inputTokens:r.input_tokens,outputTokens:r.output_tokens,estimatedCost:r.estimated_cost,durationMs:r.duration_ms,createdAt:r.created_at,promptVersion:r.prompt_version,outputData:parseJson(r.output_data),artifactVersionId:r.artifact_version_id,versionNumber:r.version_number});
+const toGeneration=(r:GenerationRow):Generation=>({id:r.id,projectId:r.project_id,agentKey:r.agent_key,provider:r.provider,model:r.model,status:r.status,inputTokens:r.input_tokens,outputTokens:r.output_tokens,estimatedCost:r.estimated_cost,durationMs:r.duration_ms,createdAt:r.created_at,promptVersion:r.prompt_version,outputData:parseJson(r.output_data),artifactVersionId:r.artifact_version_id,versionNumber:r.version_number,errorCode:r.error_code});
 
 export class JobRepository {
   constructor(private readonly database:AppDatabase){}

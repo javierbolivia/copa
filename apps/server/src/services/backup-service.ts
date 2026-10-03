@@ -1,6 +1,6 @@
 import type { BackupInfo } from "@our-platform/shared";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
@@ -40,6 +40,7 @@ export class BackupService {
   }
 
   async restore(filename: string): Promise<{ restored: BackupInfo; safetyBackup: BackupInfo }> {
+    if (this.database.path === ":memory:") throw new Error("No se puede restaurar una base en memoria.");
     const safe = basename(filename);
     if (safe !== filename) throw new Error("Nombre de backup inválido.");
     const restored = this.inspect(safe);
@@ -49,13 +50,57 @@ export class BackupService {
     this.validateGenerated(backupPath, generatedSidecar);
     this.validateKnowledge(backupPath, knowledgeSidecar);
     this.validateAssets(backupPath, assetsSidecar);
-    const safetyBackup = await this.create("pre-restore");
-    this.database.restoreFrom(backupPath);
     const dataRoot = dirname(this.database.path);
-    this.replaceDirectory(generatedSidecar, join(dataRoot, "generated"));
-    this.replaceDirectory(knowledgeSidecar, join(dataRoot, "knowledge"));
-    this.replaceDirectory(assetsSidecar, join(dataRoot, "assets"));
-    return { restored, safetyBackup };
+    // Copy and validate everything before touching the live database or directories.
+    // Retain the old directories by rename; rollback does not need more disk space.
+    const stage = mkdtempSync(join(dataRoot, ".restore-stage-"));
+    const stagedDatabase = join(stage, "candidate.sqlite");
+    const directories = ["generated", "knowledge", "assets"].map((name, index) => ({
+      source: [generatedSidecar, knowledgeSidecar, assetsSidecar][index]!,
+      prepared: join(stage, name), target: join(dataRoot, name), previous: join(stage, `${name}.previous`),
+      movedPrevious: false, installed: false,
+    }));
+    let preserveRecoveryFiles = false;
+    try {
+      copyFileSync(backupPath, stagedDatabase);
+      for (const directory of directories) {
+        mkdirSync(directory.prepared);
+        this.copyDirectoryIfPresent(directory.source, directory.prepared);
+      }
+      this.validateGenerated(stagedDatabase, directories[0]!.prepared);
+      this.validateKnowledge(stagedDatabase, directories[1]!.prepared);
+      this.validateAssets(stagedDatabase, directories[2]!.prepared);
+      const safetyBackup = await this.create("pre-restore");
+      try {
+        // No awaits from the first swap until commit/rollback is complete.
+        for (const directory of directories) {
+          if (existsSync(directory.target)) {
+            renameSync(directory.target, directory.previous);
+            directory.movedPrevious = true;
+          }
+          renameSync(directory.prepared, directory.target);
+          directory.installed = true;
+        }
+        this.database.restoreFrom(stagedDatabase);
+      } catch (error) {
+        const rollbackErrors: unknown[] = [];
+        for (const directory of [...directories].reverse()) {
+          try {
+            if (directory.installed) renameSync(directory.target, directory.prepared);
+            if (directory.movedPrevious) renameSync(directory.previous, directory.target);
+          } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+        }
+        if (rollbackErrors.length) {
+          preserveRecoveryFiles = true;
+          throw new AggregateError([error, ...rollbackErrors], `Restauración interrumpida. Se conservan los originales en ${stage} y el backup ${safetyBackup.filename}.`);
+        }
+        throw error;
+      }
+      return { restored, safetyBackup };
+    } finally {
+      // A failed cleanup must not turn a successful restore into a false failure.
+      if (!preserveRecoveryFiles) { try { rmSync(stage, { recursive: true, force: true }); } catch { /* Retain staged files for later cleanup. */ } }
+    }
   }
 
   private inspect(filename: string): BackupInfo {
@@ -104,8 +149,4 @@ export class BackupService {
     if (existsSync(source)) cpSync(source, target, { recursive: true });
   }
 
-  private replaceDirectory(source: string, target: string): void {
-    rmSync(target, { recursive: true, force: true });
-    if (existsSync(source)) cpSync(source, target, { recursive: true });
-  }
 }

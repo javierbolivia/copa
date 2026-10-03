@@ -1,4 +1,5 @@
 import type {
+  ModuleResult,
   ProductBlock,
   ProductDocument,
   Project,
@@ -59,18 +60,80 @@ describe("Product Studio backend", () => {
     expect(snapshot).toMatchObject({ product: document.productArtifactVersionId });
     expect(snapshot).toHaveProperty("avatar");
 
+    const outline = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/outline/generate`,
+      payload: {},
+    });
+    expect(outline.statusCode, outline.body).toBe(200);
+    const revisedDocument = outline.json<ProductDocument>();
+    const traceability = await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/versions/${revisedDocument.artifactVersionId}/traceability`,
+    });
+    expect(traceability.statusCode, traceability.body).toBe(200);
+    expect(traceability.json().edges).toContainEqual({
+      from: snapshot.avatar,
+      to: revisedDocument.artifactVersionId,
+      relation: "derived_from",
+    });
+
     const replacement = await app.inject({
       method: "POST",
       url: `/api/projects/${project.id}/modules/avatar/run`,
       payload: { provider: "mock" },
     });
     expect(replacement.statusCode, replacement.body).toBe(200);
+    const pendingAvatar = replacement.json<ModuleResult>();
+    expect(pendingAvatar.status).toBe("draft");
+
+    // A pending interpretation does not replace the active parent. The
+    // document becomes stale only when that reviewed Avatar is activated.
+    const beforeApproval = (await app.inject({
+      method: "GET",
+      url: `/api/projects/${project.id}/product-documents/${document.id}`,
+    })).json<ProductDocument>();
+    expect(beforeApproval.freshness).toBe("fresh");
+
+    const approval = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/modules/avatar/versions/${pendingAvatar.versionId}/approve`,
+    });
+    expect(approval.statusCode, approval.body).toBe(200);
 
     const stale = (await app.inject({
       method: "GET",
       url: `/api/projects/${project.id}/product-documents/${document.id}`,
     })).json<ProductDocument>();
     expect(stale).toMatchObject({ freshness: "stale", status: "STALE" });
+  });
+
+  it("blocks Product Studio while a current Avatar draft awaits review", async () => {
+    const project = await demo();
+    const avatar = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/modules/avatar/run`,
+      payload: { provider: "mock" },
+    });
+    expect(avatar.statusCode, avatar.body).toBe(200);
+    expect(avatar.json<ModuleResult>().status).toBe("draft");
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents`,
+      payload: {
+        documentType: "ebook",
+        language: "es",
+        length: "short",
+        level: "beginner",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: "product_document_blocked",
+      message: expect.stringContaining("Avatar tiene un borrador vigente pendiente de aprobación"),
+    });
   });
 
   it("crea wizard persistente, edita outline, genera por lote y aprueba", async () => {

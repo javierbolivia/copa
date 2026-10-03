@@ -34,7 +34,11 @@ export function registerDemoRoutes(
       sources.createDemo(project.id, "Comentarios DEMO · organización de fotografías");
       for (const definition of MODULES) {
         if (definition.key === "research") continue;
-        results.push(await modules.run(project.id, definition.key, "mock"));
+        const generated=await modules.run(project.id, definition.key, "mock");
+        if(definition.key==="avatar"||definition.key==="mechanism"||definition.key==="beliefs"||definition.key==="offer"||definition.key==="landing"||definition.key==="funnel"||definition.key==="content"){
+          // Demo strategy fixtures are synthetic; a manuscript still requires substantive content.
+          results.push(modules.approve(project.id,definition.key,generated.versionId)??generated);
+        }else results.push(generated);
       }
       return reply.code(201).send({ project: projects.get(project.id)!, results });
     },

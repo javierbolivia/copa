@@ -3,6 +3,7 @@ import type {
   LlmGenerateRequest,
   LlmGenerateResult,
   LlmProvider,
+  LlmUsage,
 } from "@our-platform/shared";
 import {
   IntegrationError,
@@ -72,19 +73,44 @@ export class OpenAIProvider implements LlmProvider {
   }
 
   async generate<TOutput = string>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
+    if (!this.configured) throw new IntegrationError("missing_api_key", "OpenAI no está configurado.");
+    const attempts: LlmUsage[] = [];
+    const invoke = async (input: LlmGenerateRequest) => {
+      let observed: LlmUsage = { usageKind: "unknown" };
+      try { return await this.requestOnce<TOutput>(input, usage => { observed = usage; }); }
+      finally { attempts.push(observed); }
+    };
+    const physicalRequests = () => attempts.map((usage, index) => ({ attempt: index + 1, ...usage }));
     try {
-      return await this.requestOnce<TOutput>(request);
+      let result: LlmGenerateResult<TOutput>;
+      try { result = await invoke(request); }
+      catch (error) {
+        if (!(error instanceof IntegrationError) || error.code !== "schema_mismatch" || !request.structuredOutput
+          || request.structuredOutput.retryOnInvalidSchema === false) throw error;
+        result = await invoke({
+          ...request,
+          input: `${request.input}\n\nREPARACION DE FORMATO (unico reintento): la respuesta anterior no cumplio el JSON Schema. Devuelve solamente un objeto JSON valido que cumpla exactamente el schema solicitado. No agregues markdown ni comentarios.`,
+        });
+      }
+      const usage: LlmUsage = {
+        usageKind: attempts.every(item => item.usageKind === "provider_reported") ? "provider_reported"
+          : attempts.every(item => item.usageKind === "unknown") ? "unknown" : "estimated",
+        ...Object.fromEntries((["inputTokens", "outputTokens", "cachedTokens"] as const).flatMap(key => {
+          const values = attempts.flatMap(item => item[key] === undefined ? [] : [item[key]!]);
+          return values.length ? [[key, values.reduce((sum, value) => sum + value, 0)]] : [];
+        })),
+      };
+      return { ...result, usage, structuredOutputDiagnostics: { attemptCount: attempts.length, recoveredAfterInvalidSchema: attempts.length > 1, physicalRequests: physicalRequests() } };
     } catch (error) {
-      if (!(error instanceof IntegrationError) || error.code !== "schema_mismatch" || !request.structuredOutput
-        || request.structuredOutput.retryOnInvalidSchema === false) throw error;
-      return this.requestOnce<TOutput>({
-        ...request,
-        input: `${request.input}\n\nREPARACION DE FORMATO (unico reintento): la respuesta anterior no cumplio el JSON Schema. Devuelve solamente un objeto JSON valido que cumpla exactamente el schema solicitado. No agregues markdown ni comentarios.`,
+      if (!(error instanceof IntegrationError)) throw error;
+      throw new IntegrationError(error.code, error.message, {
+        ...(error.status === undefined ? {} : { status: error.status }), retryable: error.retryable,
+        cause: error, attemptCount: attempts.length, physicalRequests: physicalRequests(),
       });
     }
   }
 
-  private async requestOnce<TOutput>(request: LlmGenerateRequest): Promise<LlmGenerateResult<TOutput>> {
+  private async requestOnce<TOutput>(request: LlmGenerateRequest, onUsage: (usage: LlmUsage) => void): Promise<LlmGenerateResult<TOutput>> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "OpenAI no está configurado.");
     const text = request.structuredOutput ? {
       format: {
@@ -132,6 +158,16 @@ export class OpenAIProvider implements LlmProvider {
       }
       return { response, body };
     });
+    const inputTokens = numberOrUndefined(body.usage?.input_tokens);
+    const outputTokens = numberOrUndefined(body.usage?.output_tokens);
+    const cachedTokens = numberOrUndefined(body.usage?.input_tokens_details?.cached_tokens);
+    const usage: LlmUsage = {
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      ...(cachedTokens === undefined ? {} : { cachedTokens }),
+      usageKind: body.usage === undefined ? "unknown" : "provider_reported",
+    };
+    onUsage(usage);
     const outputText = extractOutputText(body.output);
     if (outputText === undefined) {
       throw new IntegrationError("invalid_response", "OpenAI no devolvió texto de salida.");
@@ -146,9 +182,6 @@ export class OpenAIProvider implements LlmProvider {
       }
     }
 
-    const inputTokens = numberOrUndefined(body.usage?.input_tokens);
-    const outputTokens = numberOrUndefined(body.usage?.output_tokens);
-    const cachedTokens = numberOrUndefined(body.usage?.input_tokens_details?.cached_tokens);
     const finishReason = typeof body.incomplete_details?.reason === "string"
       ? body.incomplete_details.reason
       : typeof body.status === "string" ? body.status : undefined;
@@ -157,12 +190,7 @@ export class OpenAIProvider implements LlmProvider {
       requestedModel: request.model,
       ...(typeof body.model === "string" ? { reportedModel: body.model } : {}),
       output: output as TOutput,
-      usage: {
-        ...(inputTokens === undefined ? {} : { inputTokens }),
-        ...(outputTokens === undefined ? {} : { outputTokens }),
-        ...(cachedTokens === undefined ? {} : { cachedTokens }),
-        usageKind: body.usage === undefined ? "unknown" : "provider_reported",
-      },
+      usage,
       ...(finishReason === undefined ? {} : { finishReason }),
     };
   }

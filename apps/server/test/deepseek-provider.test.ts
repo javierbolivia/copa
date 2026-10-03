@@ -116,6 +116,10 @@ describe("DeepSeekProvider", () => {
     await expect(invalid.generate({provider:"deepseek",model:invalid.effectiveModel,systemInstructions:"JSON",input:"{}",structuredOutput:{name:"check",jsonSchema:schema}})).rejects.toMatchObject({
       code:"invalid_schema",
       attemptCount: 2,
+      physicalRequests: [
+        { attempt: 1, inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" },
+        { attempt: 2, inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" },
+      ],
       validationIssues: [{ path: "$.ok", expected: "boolean", actual: "missing", missingRequiredProperties: ["ok"] }],
       message: expect.stringContaining("$.ok"),
     });
@@ -134,10 +138,15 @@ describe("DeepSeekProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       output: { ok: true },
+      usage: { inputTokens: 24, outputTokens: 8, usageKind: "provider_reported" },
       structuredOutputDiagnostics: {
         attemptCount: 2,
         recoveredAfterInvalidSchema: true,
         firstAttemptIssues: [{ path: "$.ok", expected: "boolean", actual: "missing", missingRequiredProperties: ["ok"] }],
+        physicalRequests: [
+          { attempt: 1, inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" },
+          { attempt: 2, inputTokens: 12, outputTokens: 4, usageKind: "provider_reported" },
+        ],
       },
     });
     const [, retryInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
@@ -193,6 +202,21 @@ describe("DeepSeekProvider", () => {
       input:"{}",
       structuredOutput:{name:"check",jsonSchema:schema,retryOnInvalidSchema:false},
     })).rejects.toMatchObject({ code:"invalid_schema", attemptCount:1 });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("no repite solicitudes cuando el transporte falla, aunque el error sea retryable", async () => {
+    const fetchMock = vi.fn(async () => { throw new TypeError("fetch failed"); });
+    const provider = new DeepSeekProvider({ apiKey: "deepseek-test-key", fetch: fetchMock as typeof fetch });
+
+    await expect(provider.generate({
+      provider:"deepseek",
+      model:provider.effectiveModel,
+      systemInstructions:"JSON",
+      input:"{}",
+      structuredOutput:{name:"check",jsonSchema:{type:"object",required:["ok"],properties:{ok:{type:"boolean"}}}},
+    })).rejects.toMatchObject({ code:"transport_error", retryable:true });
+
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 

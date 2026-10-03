@@ -32,8 +32,8 @@ export class ProductDocumentRepository {
     blocks?:readonly ProductBlock[]; outline?:readonly ProductOutlineItem[]; theme?:ProductTheme;
     metadata?:Record<string,unknown>;
   }):ProductDocument {
-    const db=this.database.connection,now=new Date().toISOString(),versionId=uuidv7();
-    db.exec("BEGIN IMMEDIATE");
+    const db=this.database.connection,now=new Date().toISOString(),versionId=uuidv7(),ownsTransaction=!db.isTransaction;
+    if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`INSERT INTO product_documents
         (id,project_id,document_artifact_id,product_artifact_version_id,opportunity_artifact_version_id,
@@ -51,9 +51,9 @@ export class ProductDocumentRepository {
           JSON.stringify(input.metadata??{}),now,
         );
       db.prepare("UPDATE product_documents SET active_version_id=? WHERE id=?").run(versionId,input.id);
-      db.exec("COMMIT");
+      if(ownsTransaction)db.exec("COMMIT");
       return this.get(input.projectId,input.id)!;
-    } catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
+    } catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
 
   list(projectId:string):ProductDocument[]{

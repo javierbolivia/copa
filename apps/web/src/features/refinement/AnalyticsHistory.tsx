@@ -21,6 +21,7 @@ export interface GenerationHistoryItem {
   estimatedCost: number;
   durationMs: number;
   versionNumber?: number;
+  errorCode?: string | null;
   result?: HistoryResult;
 }
 
@@ -84,13 +85,30 @@ export function AnalyticsHistory({ generations, demoMode = false, onOpenGenerati
   </section>;
 }
 
-function HistoryResultPanel({ item, demoMode }: { item: GenerationHistoryItem | undefined; demoMode: boolean }) {
+export function HistoryResultPanel({ item, demoMode }: { item: GenerationHistoryItem | undefined; demoMode: boolean }) {
   if (!item) return <aside className="refinement-history-result"><div className="refinement-empty">Selecciona una generación para ver su resultado histórico.</div></aside>;
   return <aside className="refinement-history-result">
-    <header><span>RESULTADO HISTÓRICO</span><h3>{item.result?.title ?? item.moduleName}</h3><p>{item.result?.summary ?? "Esta generación no incluye una vista previa estructurada."}</p></header>
+    <header><span>{item.status === "FAILED" ? "EJECUCIÓN FALLIDA" : "RESULTADO HISTÓRICO"}</span><h3>{item.result?.title ?? item.moduleName}</h3><p {...(item.status === "FAILED" ? { role: "alert" } : {})}>{summaryFor(item)}</p></header>
     <dl><div><dt>Proyecto</dt><dd>{item.projectName}</dd></div>{item.versionNumber&&<div><dt>Versión</dt><dd>v{item.versionNumber}</dd></div>}<div><dt>Proveedor</dt><dd>{item.provider}</dd></div><div><dt>Modelo</dt><dd>{item.model}</dd></div><div><dt>Duración</dt><dd>{formatDuration(item.durationMs)}</dd></div><div><dt>Tokens</dt><dd>{(item.inputTokens + item.outputTokens).toLocaleString("es")}</dd></div><div><dt>Coste</dt><dd>{formatCost(demoMode ? 0 : item.estimatedCost)}</dd></div></dl>
-    {item.result && item.result.fields.length > 0 && <div className="refinement-result-fields">{item.result.fields.map((field) => <section key={field.label}><span>{field.label}</span><p>{field.value}</p></section>)}</div>}
+    {item.status === "FAILED" && item.errorCode && <div className="refinement-result-fields"><section><span>Código de error</span><p>{item.errorCode}</p></section></div>}
+    {item.status === "COMPLETED" && item.result && item.result.fields.length > 0 && <div className="refinement-result-fields">{item.result.fields.map((field) => <section key={field.label}><span>{field.label}</span><p>{field.value}</p></section>)}</div>}
   </aside>;
+}
+
+function summaryFor(item: GenerationHistoryItem): string {
+  if (item.status === "FAILED") {
+    if (item.errorCode === "transport_error" || item.errorCode === "network_error") {
+      return `No se pudo establecer conexión con ${providerLabel(item.provider)}. No se guardó un resultado.`;
+    }
+    return `La ejecución falló y no se guardó un resultado${item.errorCode ? ` (código: ${item.errorCode})` : ""}.`;
+  }
+  if (item.status === "RUNNING") return "La ejecución sigue en curso; todavía no hay un resultado final.";
+  if (item.status === "CANCELLED") return "La ejecución se canceló; no hay un resultado final guardado.";
+  return item.result?.summary ?? "No hay una vista previa estructurada disponible para esta ejecución.";
+}
+
+function providerLabel(value: string): string {
+  return ({ deepseek: "DeepSeek", gemini: "Gemini", openai: "OpenAI", groq: "Groq", openrouter: "OpenRouter" } as Record<string, string>)[value.toLowerCase()] ?? value;
 }
 
 function Metric({ label, value, hint }: { label: string; value: string; hint: string }) { return <article><span>{label}</span><strong>{value}</strong><small>{hint}</small></article>; }

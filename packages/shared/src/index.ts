@@ -18,3 +18,4 @@ export * from "./avatar-module.js";
 
 export * from "./landing-document.js";
 export * from "./funnel-document.js";
+export * from "./factual-review.js";

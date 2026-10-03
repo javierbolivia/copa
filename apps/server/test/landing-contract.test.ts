@@ -6,12 +6,14 @@ describe("Landing review contract",()=>{
   afterEach(async()=>{await app?.close();});
   async function setup(){app=await createApp({databasePath:":memory:",serveFrontend:false});const {project}=(await app.inject({method:"POST",url:"/api/demo/projects"})).json();const base=`/api/projects/${project.id}/modules/landing`;return {base,result:(await app.inject({method:"GET",url:base})).json().results[0],projectId:project.id};}
   it("rejects an empty document and incomplete FAQ",async()=>{const {base,result}=await setup();for(const sections of [[],[{type:"faq",items:[{q:"Pregunta",a:""}]}]])expect((await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:{...result.outputData,sections}}})).statusCode).toBe(409);});
-  it("does not approve a draft based on a superseded landing",async()=>{const {base,result}=await setup();const draft=(await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:result.outputData}})).json();expect((await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).statusCode).toBe(200);expect((await app.inject({method:"POST",url:`${base}/versions/${draft.versionId}/approve`})).statusCode).toBe(409);});
+  it("keeps generated landing copy in review and blocks dependent Funnel generation",async()=>{const {base,projectId}=await setup();const generated=(await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).json();expect(generated).toMatchObject({status:"draft",outputData:{landingValidationAudit:{ok:true}}});const blocked=await app.inject({method:"POST",url:`/api/projects/${projectId}/modules/funnel/run`,payload:{provider:"mock"}});expect(blocked.statusCode).toBe(409);expect(blocked.json()).toMatchObject({error:"module_blocked",message:expect.stringContaining("Landing tiene un borrador vigente pendiente de aprobación")});});
+  it("does not approve a draft based on a superseded landing",async()=>{const {base,result}=await setup();const draft=(await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:result.outputData}})).json();const generated=(await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).json();expect(generated.status).toBe("draft");expect((await app.inject({method:"POST",url:`${base}/versions/${generated.versionId}/approve`})).statusCode).toBe(200);expect((await app.inject({method:"POST",url:`${base}/versions/${draft.versionId}/approve`})).statusCode).toBe(409);});
   it("generates all 15 canonical blocks in contextual landing output and exports HTML and React",async()=>{
     const {base,result,projectId}=await setup();
     const runRes=await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock",instructions:"Crea una landing de alta conversión"}});
     expect(runRes.statusCode).toBe(200);
     const newVersion=runRes.json();
+    expect(newVersion.status).toBe("draft");
     const types=newVersion.outputData.sections.map((s:any)=>s.type);
     const canonical=[
       "hero","problem","agitation","mechanism","benefits",
@@ -21,7 +23,9 @@ describe("Landing review contract",()=>{
     for(const block of canonical){
       expect(types).toContain(block);
     }
-    // Verify files created automatically upon generation
+    expect((await app.inject({method:"POST",url:`${base}/versions/${newVersion.versionId}/approve`})).statusCode).toBe(200);
+
+    // Verify files are created only after the draft is explicitly approved.
     const filesRes=await app.inject({method:"GET",url:`/api/projects/${projectId}/files`});
     expect(filesRes.statusCode).toBe(200);
     const files=filesRes.json().files;

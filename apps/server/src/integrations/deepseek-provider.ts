@@ -1,5 +1,5 @@
 import { withIntegrationTimeout } from "./request-timeout.js";
-import type { LlmGenerateRequest, LlmGenerateResult, LlmProvider } from "@our-platform/shared";
+import type { LlmGenerateRequest, LlmGenerateResult, LlmPhysicalRequestUsage, LlmProvider, LlmUsage } from "@our-platform/shared";
 import {
   IntegrationError,
   readErrorType,
@@ -123,11 +123,28 @@ const jsonShapeExample = (schema: unknown, depth = 0, keyName = ""): unknown => 
 const invalidStructuredOutput = (
   issues: readonly JsonSchemaValidationIssue[],
   attemptCount: number,
+  physicalRequests: readonly LlmPhysicalRequestUsage[],
 ): IntegrationError => new IntegrationError(
   "invalid_schema",
   `La salida estructurada de DeepSeek no cumple el schema: ${validationSummary(issues)}.`,
-  { validationIssues: compactValidationIssues(issues), attemptCount },
+  { validationIssues: compactValidationIssues(issues), attemptCount, physicalRequests },
 );
+
+function sumReportedUsage(first: LlmUsage, second: LlmUsage): LlmUsage {
+  const inputTokens = [first.inputTokens, second.inputTokens].filter((value): value is number => value !== undefined);
+  const outputTokens = [first.outputTokens, second.outputTokens].filter((value): value is number => value !== undefined);
+  const usageKind = first.usageKind === "provider_reported" && second.usageKind === "provider_reported"
+    ? "provider_reported"
+    : first.usageKind === "unknown" && second.usageKind === "unknown"
+      ? "unknown"
+      : "estimated";
+  return {
+    ...second,
+    ...(inputTokens.length ? { inputTokens: inputTokens.reduce((sum, value) => sum + value, 0) } : {}),
+    ...(outputTokens.length ? { outputTokens: outputTokens.reduce((sum, value) => sum + value, 0) } : {}),
+    usageKind,
+  };
+}
 
 /**
  * The provider can be invoked through loaders that do not preserve a shared
@@ -266,13 +283,44 @@ export class DeepSeekProvider implements LlmProvider {
         || !request.structuredOutput
         || request.structuredOutput.retryOnInvalidSchema === false
       ) throw error;
-      const result = await this.generateStructuredResponseOnce<TOutput>(request, model, 2, firstAttemptIssues);
+      const firstAttemptUsage = error instanceof IntegrationError
+        ? error.physicalRequests ?? [{ attempt: 1, usageKind: "unknown" as const }]
+        : [{ attempt: 1, usageKind: "unknown" as const }];
+      let result: LlmGenerateResult<TOutput>;
+      try {
+        result = await this.generateStructuredResponseOnce<TOutput>(request, model, 2, firstAttemptIssues);
+      } catch (retryError) {
+        if (retryError instanceof IntegrationError) {
+          const retryPhysicalRequests = retryError.physicalRequests ?? [{ attempt: 2, usageKind: "unknown" as const }];
+          throw new IntegrationError(retryError.code, retryError.message, {
+            ...(retryError.status === undefined ? {} : { status: retryError.status }),
+            retryable: retryError.retryable,
+            ...(retryError.validationIssues === undefined ? {} : { validationIssues: retryError.validationIssues }),
+            attemptCount: 2,
+            physicalRequests: [...firstAttemptUsage, ...retryPhysicalRequests],
+            cause: retryError,
+          });
+        }
+        throw retryError;
+      }
+      const retryPhysicalRequests = result.structuredOutputDiagnostics?.physicalRequests ?? [{ attempt: 2, usageKind: result.usage.usageKind }];
       return {
         ...result,
+        usage: sumReportedUsage(
+          firstAttemptUsage.reduce<LlmUsage>((sum, attempt) => ({
+            inputTokens: (sum.inputTokens ?? 0) + (attempt.inputTokens ?? 0),
+            outputTokens: (sum.outputTokens ?? 0) + (attempt.outputTokens ?? 0),
+            usageKind: sum.usageKind === "provider_reported" && attempt.usageKind === "provider_reported"
+              ? "provider_reported"
+              : sum.usageKind === "unknown" && attempt.usageKind === "unknown" ? "unknown" : "estimated",
+          }), { usageKind: "provider_reported" }),
+          result.usage,
+        ),
         structuredOutputDiagnostics: {
           attemptCount: 2,
           recoveredAfterInvalidSchema: true,
           firstAttemptIssues,
+          physicalRequests: [...firstAttemptUsage, ...retryPhysicalRequests],
         },
       };
     }
@@ -329,6 +377,14 @@ export class DeepSeekProvider implements LlmProvider {
     const choice = body.choices[0] as DeepSeekChoice;
     const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : undefined;
     const text = choice.message?.content;
+    const inputTokens = number(body.usage?.prompt_tokens);
+    const outputTokens = number(body.usage?.completion_tokens);
+    const physicalRequest: LlmPhysicalRequestUsage = {
+      attempt: attemptCount,
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      usageKind: body.usage === undefined ? "unknown" : "provider_reported",
+    };
     // `content` is documented as nullable: in thinking mode the chain of thought
     // consumes the same completion budget, so a small max_tokens can return
     // HTTP 200 with finish_reason=length and no final answer.
@@ -348,13 +404,11 @@ export class DeepSeekProvider implements LlmProvider {
             "DeepSeek truncó la salida al alcanzar el límite de tokens (finish_reason=length).",
           );
         }
-        throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount);
+        throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount, [physicalRequest]);
       }
       const validationIssues = validateJsonSchema(request.structuredOutput.jsonSchema, output);
-      if (validationIssues.length > 0) throw invalidStructuredOutput(validationIssues, attemptCount);
+      if (validationIssues.length > 0) throw invalidStructuredOutput(validationIssues, attemptCount, [physicalRequest]);
     }
-    const inputTokens = number(body.usage?.prompt_tokens);
-    const outputTokens = number(body.usage?.completion_tokens);
     return {
       provider: this.name,
       requestedModel: model,
@@ -370,6 +424,7 @@ export class DeepSeekProvider implements LlmProvider {
         structuredOutputDiagnostics: {
           attemptCount,
           recoveredAfterInvalidSchema: false,
+          physicalRequests: [physicalRequest],
         },
       } : {}),
     };
@@ -444,13 +499,19 @@ export class DeepSeekProvider implements LlmProvider {
       throw new IntegrationError("empty_completion", "DeepSeek no devolvió texto en el reintento estructurado.");
     }
     const output = parseStructuredJson(text);
-    if (output === undefined) {
-      throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount);
-    }
-    const validationIssues = validateJsonSchema(structuredOutput.jsonSchema, output);
-    if (validationIssues.length > 0) throw invalidStructuredOutput(validationIssues, attemptCount);
     const inputTokens = number(body.usage?.input_tokens);
     const outputTokens = number(body.usage?.output_tokens);
+    const physicalRequest: LlmPhysicalRequestUsage = {
+      attempt: attemptCount,
+      ...(inputTokens === undefined ? {} : { inputTokens }),
+      ...(outputTokens === undefined ? {} : { outputTokens }),
+      usageKind: body.usage === undefined ? "unknown" : "provider_reported",
+    };
+    if (output === undefined) {
+      throw invalidStructuredOutput([{ path: "$", expected: "valid JSON object", actual: "non-JSON text" }], attemptCount, [physicalRequest]);
+    }
+    const validationIssues = validateJsonSchema(structuredOutput.jsonSchema, output);
+    if (validationIssues.length > 0) throw invalidStructuredOutput(validationIssues, attemptCount, [physicalRequest]);
     return {
       provider: this.name,
       requestedModel: model,
@@ -465,6 +526,7 @@ export class DeepSeekProvider implements LlmProvider {
       structuredOutputDiagnostics: {
         attemptCount,
         recoveredAfterInvalidSchema: false,
+        physicalRequests: [physicalRequest],
       },
     };
   }

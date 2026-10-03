@@ -81,6 +81,24 @@ export async function createApp(
   const artifacts = new ArtifactRepository(database);
   const sources = new SourceRepository(database);
   const jobs = new JobRepository(database);
+  // Restore spans an asynchronous safety backup. Keep new requests out and do
+  // not begin while a mutation or background job can still publish old context.
+  const activeMutations = new Set<string>();
+  let restoringRequestId: string | undefined;
+  app.addHook("onRequest", async (request, reply) => {
+    if (restoringRequestId) return reply.code(503).send({ error: "restore_in_progress", message: "Restauración en curso; vuelve a intentarlo cuando termine." });
+    const restoring = request.method === "POST" && request.url.split("?")[0] === "/api/backups/restore";
+    if (restoring) {
+      const busyJob = database.connection.prepare("SELECT 1 FROM jobs WHERE status IN ('QUEUED','RUNNING') LIMIT 1").get();
+      if (activeMutations.size || busyJob) return reply.code(409).send({ error: "restore_busy", message: "Espera a que terminen las operaciones y trabajos activos antes de restaurar." });
+      restoringRequestId = request.id;
+    }
+    if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) activeMutations.add(request.id);
+  });
+  app.addHook("onResponse", async (request) => {
+    activeMutations.delete(request.id);
+    if (restoringRequestId === request.id) restoringRequestId = undefined;
+  });
   const backups = new BackupService(database);
   const dataRoot =
     options.databasePath === ":memory:"
@@ -207,7 +225,7 @@ export async function createApp(
   if (options.serveFrontend ?? true) {
     const webDirectory = resolve(import.meta.dirname, "../../web/dist");
     if (existsSync(resolve(webDirectory, "index.html"))) {
-      await app.register(fastifyStatic, { root: webDirectory });
+      await app.register(fastifyStatic, { root: webDirectory, preCompressed: true });
       app.setNotFoundHandler(async (request, reply) => {
         if (request.url.startsWith("/api/")) {
           return reply.code(404).send({ error: "Not found" });

@@ -6,21 +6,38 @@ import { matchesJsonSchema, parseStructuredJson } from "./structured-output.js";
 export interface GeminiProviderOptions { readonly apiKey?: string; readonly model?: string; readonly fetch?: typeof fetch; readonly timeoutMs?: number; readonly endpoint?: string; }
 const number = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const GEMINI_TYPES: Readonly<Record<string, string>> = { string: "STRING", number: "NUMBER", integer: "INTEGER", boolean: "BOOLEAN", object: "OBJECT", array: "ARRAY" };
+const GEMINI_TYPES: Readonly<Record<string, string>> = { string: "STRING", number: "NUMBER", integer: "INTEGER", boolean: "BOOLEAN", object: "OBJECT", array: "ARRAY", null: "NULL" };
 
-/** Convert the app's JSON Schema subset to the Schema format accepted by generateContent. */
+/** Convert the app's supported JSON Schema subset for Gemini's responseFormat schema. */
 export function toGeminiResponseSchema(schema: unknown): Record<string, unknown> {
   if (!isRecord(schema)) return {};
   const converted: Record<string, unknown> = {};
-  if (typeof schema.type === "string" && GEMINI_TYPES[schema.type]) converted.type = GEMINI_TYPES[schema.type];
   if (typeof schema.description === "string") converted.description = schema.description;
   if (typeof schema.title === "string") converted.title = schema.title;
-  if (Array.isArray(schema.required)) converted.required = schema.required.filter((item): item is string => typeof item === "string");
   if (Array.isArray(schema.enum)) converted.enum = schema.enum.filter((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean");
-  if (typeof schema.minimum === "number") converted.minimum = schema.minimum;
-  if (typeof schema.maximum === "number") converted.maximum = schema.maximum;
-  if (isRecord(schema.properties)) converted.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, toGeminiResponseSchema(value)]));
-  if (schema.items !== undefined) converted.items = toGeminiResponseSchema(schema.items);
+  const type=schema.type;
+  if(Array.isArray(type)){
+    converted.anyOf=type.filter((item):item is string=>typeof item==="string"&&Boolean(GEMINI_TYPES[item])).map((item)=>{
+      const branch:Record<string,unknown>={...schema,type:item};
+      if(item!=="object")for(const key of ["properties","required","additionalProperties","propertyOrdering"])delete branch[key];
+      if(item!=="array")for(const key of ["items","minItems","maxItems","prefixItems"])delete branch[key];
+      if(item!=="number"&&item!=="integer")for(const key of ["minimum","maximum"])delete branch[key];
+      if(item!=="string")for(const key of ["format","minLength","maxLength","pattern"])delete branch[key];
+      return toGeminiResponseSchema(branch);
+    });
+    return converted;
+  }
+  if (typeof type === "string" && GEMINI_TYPES[type]) converted.type = type;
+  if(type==="object"){
+    if (Array.isArray(schema.required)) converted.required = schema.required.filter((item): item is string => typeof item === "string");
+    if (isRecord(schema.properties)) converted.properties = Object.fromEntries(Object.entries(schema.properties).map(([key, value]) => [key, toGeminiResponseSchema(value)]));
+    if(typeof schema.additionalProperties==="boolean"||isRecord(schema.additionalProperties))converted.additionalProperties=isRecord(schema.additionalProperties)?toGeminiResponseSchema(schema.additionalProperties):schema.additionalProperties;
+  }
+  if(type==="array"){
+    if (schema.items !== undefined) converted.items = toGeminiResponseSchema(schema.items);
+    for(const key of ["minItems","maxItems"])if(typeof schema[key]==="number")converted[key]=schema[key];
+  }
+  if(type==="number"||type==="integer")for(const key of ["minimum","maximum"])if(typeof schema[key]==="number")converted[key]=schema[key];
   return converted;
 }
 
@@ -110,7 +127,7 @@ export class GeminiProvider implements LlmProvider {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Gemini no está configurado.");
     const model = request.model?.trim() || this.defaultModel;
     const generationConfig: Record<string, unknown> = { ...(request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens }) };
-    if (request.structuredOutput) Object.assign(generationConfig, { responseMimeType: "application/json", responseSchema: toGeminiResponseSchema(request.structuredOutput.jsonSchema) });
+    if (request.structuredOutput) Object.assign(generationConfig, { responseFormat: { text: { mimeType: "APPLICATION_JSON", schema: toGeminiResponseSchema(request.structuredOutput.jsonSchema) } } });
     const { body } = await withIntegrationTimeout("Gemini", this.timeoutMs, async signal => {
       let response: Response;
       try {

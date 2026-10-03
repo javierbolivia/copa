@@ -97,10 +97,21 @@ describe("Funnel review contract", () => {
     ).json();
 
     // Run new version which supersedes the base
-    expect((await app.inject({ method: "POST", url: `${base}/run`, payload: { provider: "mock" } })).statusCode).toBe(200);
+    const generated = (await app.inject({ method: "POST", url: `${base}/run`, payload: { provider: "mock" } })).json();
+    expect(generated.status).toBe("draft");
+    expect((await app.inject({ method: "POST", url: `${base}/versions/${generated.versionId}/approve` })).statusCode).toBe(200);
 
     // Attempting to approve draft should fail with 409
     expect((await app.inject({ method: "POST", url: `${base}/versions/${draft.versionId}/approve` })).statusCode).toBe(409);
+  });
+
+  it("keeps generated funnels in review and blocks optional dependents until approval", async () => {
+    const { base, projectId } = await setup();
+    const generated = (await app.inject({ method: "POST", url: `${base}/run`, payload: { provider: "mock" } })).json();
+    expect(generated).toMatchObject({ status: "draft", outputData: { paymentsEnabled: false, funnelValidationAudit: { ok: true } } });
+    const blocked = await app.inject({ method: "POST", url: `/api/projects/${projectId}/modules/content/run`, payload: { provider: "mock" } });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ error: "module_blocked", message: expect.stringContaining("Funnel tiene un borrador vigente pendiente de aprobación") });
   });
 
   it("runs contextual funnel, validates 6-node DAG with grounded prices, and exports funnel.md", async () => {
@@ -112,6 +123,7 @@ describe("Funnel review contract", () => {
     });
     expect(runRes.statusCode).toBe(200);
     const newVersion = runRes.json();
+    expect(newVersion.status).toBe("draft");
 
     expect(newVersion.outputData.paymentsEnabled).toBe(false);
     expect(newVersion.outputData.funnelValidationAudit.ok).toBe(true);
@@ -126,6 +138,8 @@ describe("Funnel review contract", () => {
 
     // Verify edges exist and connect the journey
     expect(newVersion.outputData.edges.length).toBeGreaterThanOrEqual(5);
+
+    expect((await app.inject({ method: "POST", url: `${base}/versions/${newVersion.versionId}/approve` })).statusCode).toBe(200);
 
     // Verify exported funnel.md file
     const filesRes = await app.inject({ method: "GET", url: `/api/projects/${projectId}/files` });
@@ -145,6 +159,7 @@ describe("Funnel review contract", () => {
           strategyRationale: "Estrategia editada por el usuario en borrador",
         },
         expectedBaseVersionId: newVersion.versionId,
+        sourceVersionId: newVersion.versionId,
       },
     });
     expect(draftRes.statusCode).toBe(201);

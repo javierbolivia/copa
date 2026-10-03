@@ -18,8 +18,31 @@ describe("Mechanism draft contract",()=>{
   it("rejects approval of an older mechanism after a newer interpretation",async()=>{
     const {base,result}=await setup();
     const draft=(await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:result.outputData}})).json();
-    expect((await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).statusCode).toBe(200);
+    const generated=await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}});
+    expect(generated.statusCode).toBe(200);
+    expect(generated.json()).toMatchObject({status:"draft"});
+    expect((await app.inject({method:"POST",url:`${base}/versions/${generated.json<{versionId:string}>().versionId}/approve`})).statusCode).toBe(200);
     expect((await app.inject({method:"POST",url:`${base}/versions/${draft.versionId}/approve`})).statusCode).toBe(409);
+  });
+  it("keeps generated mechanisms in review until explicitly approved",async()=>{
+    const {base}=await setup();
+    const generated=await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}});
+    expect(generated.statusCode).toBe(200);
+    expect(generated.json()).toMatchObject({status:"draft",outputData:{mechanismValidationAudit:{ok:true}}});
+    const versionId=generated.json<{versionId:string}>().versionId;
+    expect((await app.inject({method:"POST",url:`${base}/versions/${versionId}/approve`})).statusCode).toBe(200);
+  });
+  it("blocks dependent generations while the current mechanism has an unapproved draft",async()=>{
+    const {base,result}=await setup();
+    const saved=await app.inject({method:"POST",url:`${base}/drafts`,payload:{sourceVersionId:result.versionId,expectedBaseVersionId:result.versionId,outputData:result.outputData}});
+    expect(saved.statusCode).toBe(201);
+    const projectId=base.split("/")[3]!;
+    const before=(await app.inject({method:"GET",url:`/api/projects/${projectId}/generations`})).json<{generations:unknown[]}>().generations.length;
+    const blocked=await app.inject({method:"POST",url:`/api/projects/${projectId}/modules/beliefs/run`,payload:{provider:"mock"}});
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({error:"module_blocked",message:expect.stringContaining("Mecanismo tiene un borrador vigente")});
+    const after=(await app.inject({method:"GET",url:`/api/projects/${projectId}/generations`})).json<{generations:unknown[]}>().generations.length;
+    expect(after).toBe(before);
   });
   it("persists separate explanations and optional steps through approval and reload",async()=>{
     const {base,result}=await setup();

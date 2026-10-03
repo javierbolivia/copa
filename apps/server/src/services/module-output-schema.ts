@@ -110,11 +110,11 @@ export const MODULE_OUTPUT_SCHEMAS: Readonly<Record<ModuleKey, JsonSchema>> = {
     "schemaVersion", "name", "promise", "benefits", "deliverables", "bonuses",
     "cta", "provenance", "evidenceIds"
   ]),
-  landing: object({ schemaVersion: { type: "integer" }, title: string, sections: { type: "array", items: object({ type: string }, ["type"]) }, evidenceIds }),
+  landing: object({ schemaVersion: { type: "integer" }, title: string, sections: { type: "array", items: object({ type: string, headline: string, body: string }, ["type", "headline", "body"]) }, evidenceIds }),
   funnel: object({ schemaVersion: { type: "integer" }, nodes: { type: "array", items: object({ id: string, type: string, label: string }) }, edges: { type: "array", items: object({ from: string, to: string, event: string }) }, paymentsEnabled: { type: "boolean" } }),
   emails: object({ schemaVersion: { type: "integer" }, sequences: { type: "array", items: object({ type: string, emails: { type: "array", items: object({ subject: string, body: string, cta: string }) } }) }, evidenceIds }),
   content: object({ schemaVersion: { type: "integer" }, calendar: { type: "array", items: object({ day: { type: "integer" }, type: string, channel: string, hook: string, body: string, cta: string }) }, hooks: stringArray, channels: stringArray, evidenceIds }),
-  final_product: object({ schemaVersion: { type: "integer" }, files: { type: "array", items: string }, guide: object({ title: string, chapters: stringArray }), checklist: stringArray, workbook: stringArray, miniTool: object({ title: string, fields: stringArray }), evidenceIds }),
+  final_product: object({ schemaVersion: { type: "integer" }, files: { type: "array", items: string }, guide: object({ title: string, introduction: string, chapters: { type: "array", items: object({ title: string, content: string, evidenceIds }, ["title", "content"]) }, conclusion: string, references: { type: "array", items: object({ id: string, organization: string, title: string, url: string }) } }), checklist: stringArray, workbook: stringArray, miniTool: object({ title: string, fields: stringArray }), evidenceIds }),
 };
 
 export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
@@ -144,7 +144,15 @@ export function isCanonicalModuleOutput(key:ModuleKey,value:unknown):boolean{
       const piece=item as Record<string,unknown>;
       return Number.isInteger(piece.day)&&typeof piece.type==="string"&&piece.type.trim().length>0&&typeof piece.channel==="string"&&piece.channel.trim().length>0&&typeof piece.hook==="string"&&piece.hook.trim().length>0&&typeof piece.body==="string"&&piece.body.trim().length>0&&typeof piece.cta==="string"&&piece.cta.trim().length>0;
     });
-    case "final_product":return typeof output.guide==="object"&&Array.isArray(output.checklist)&&Array.isArray(output.workbook);
+    case "final_product":{
+      const guide=typeof output.guide==="object"&&output.guide!==null&&!Array.isArray(output.guide)?output.guide as Record<string,unknown>:undefined;
+      return !!guide&&typeof guide.title==="string"&&Array.isArray(guide.chapters)
+        // Accept historical title-only drafts for repair, but new provider output uses
+        // structured chapter content (enforced by the provider JSON Schema above).
+        &&guide.chapters.every((chapter)=>typeof chapter==="string"||(typeof chapter==="object"&&chapter!==null&&!Array.isArray(chapter)&&typeof (chapter as Record<string,unknown>).title==="string"&&typeof (chapter as Record<string,unknown>).content==="string"))
+        &&(guide.references===undefined||(Array.isArray(guide.references)&&guide.references.every((reference)=>typeof reference==="object"&&reference!==null&&!Array.isArray(reference)&&typeof (reference as Record<string,unknown>).id==="string"&&typeof (reference as Record<string,unknown>).title==="string"&&typeof (reference as Record<string,unknown>).organization==="string"&&typeof (reference as Record<string,unknown>).url==="string")))
+        &&Array.isArray(output.checklist)&&Array.isArray(output.workbook);
+    }
   }
 }
 

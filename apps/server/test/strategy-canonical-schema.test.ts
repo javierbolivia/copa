@@ -70,6 +70,12 @@ describe("Strategy & Product canonical schemas and output contracts", () => {
   });
 
   describe("MODULE_OUTPUT_SCHEMAS compliance via validateJsonSchema", () => {
+    it("requires every generated landing block to contain a headline and copy", () => {
+      const schema = MODULE_OUTPUT_SCHEMAS.landing;
+      expect(validateJsonSchema(schema, { schemaVersion: 1, title: "Guía", sections: [{ type: "hero" }] })).not.toHaveLength(0);
+      expect(validateJsonSchema(schema, { schemaVersion: 1, title: "Guía", sections: [{ type: "hero", headline: "Paseos con más criterio", body: "Una guía educativa." }], evidenceIds: [] })).toHaveLength(0);
+    });
+
     it("validates full mechanism schema with optional steps and validationPlan", () => {
       const schema = MODULE_OUTPUT_SCHEMAS.mechanism;
       const richMechanism = {

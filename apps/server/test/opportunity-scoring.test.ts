@@ -1,4 +1,4 @@
-import type { ModuleResult, Project } from "@our-platform/shared";
+import type { ArtifactVersion, ModuleResult, Project } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -113,6 +113,88 @@ describe("scoring determinista de Opportunities (provider scores -> backend tota
     const item = (response.json<ModuleResult>().outputData as { items: Array<Record<string, unknown>> }).items[0]!;
     expect(item.total).toBe(EXPECTED_TOTAL_FOR_VALID_SCORES);
     expect(item.scores).toMatchObject(VALID_SCORES);
+  });
+
+  it("registra si las citas de una oportunidad vinieron del provider o del fallback del backend", async () => {
+    const fetchMock = vi.fn();
+    const project = await projectWithFreshProblems(fetchMock as unknown as typeof fetch);
+    const problems = (await app!.inject({
+      method: "GET", url: `/api/projects/${project.id}/modules/problems`,
+    })).json<{ results: ModuleResult[] }>().results;
+    const parentProblem = (problems[0]!.outputData as { items: Array<{ id: string; evidenceIds: string[] }> }).items[0]!;
+    const providerEvidenceId = parentProblem.evidenceIds[0]!;
+    fetchMock.mockImplementation(async () => deepSeekResponse(opportunitiesOutput(VALID_SCORES, { evidenceIds: [providerEvidenceId] })));
+
+    const selectedResponse = await app!.inject({
+      method: "POST", url: `/api/projects/${project.id}/modules/opportunities/run`, payload: { provider: "deepseek" },
+    });
+    expect(selectedResponse.statusCode).toBe(200);
+
+    const selectedVersions = (await app!.inject({
+      method: "GET", url: `/api/projects/${project.id}/artifacts`,
+    })).json<{ versions: ArtifactVersion[] }>().versions;
+    const selectedSnapshot = selectedVersions.find((version) => version.artifactType === "opportunities")!.inputSnapshot as Record<string, unknown>;
+    expect(selectedSnapshot.opportunityEvidenceResolution).toMatchObject({
+      version: 1,
+      generationProvider: "deepseek",
+      items: [{
+        opportunityId: "opp-1",
+        problemId: parentProblem.id,
+        providerEvidenceIds: [providerEvidenceId],
+        acceptedProviderEvidenceIds: [providerEvidenceId],
+        rejectedProviderEvidenceIds: [],
+        persistedEvidenceIds: [providerEvidenceId],
+        resolution: "provider_selected",
+      }],
+    });
+
+    fetchMock.mockImplementation(async () => deepSeekResponse(opportunitiesOutput(VALID_SCORES, { evidenceIds: [providerEvidenceId, "foreign-evidence"] })));
+    const filteredResponse = await app!.inject({
+      method: "POST", url: `/api/projects/${project.id}/modules/opportunities/run`, payload: { provider: "deepseek" },
+    });
+    expect(filteredResponse.statusCode).toBe(200);
+    const filteredVersions = (await app!.inject({
+      method: "GET", url: `/api/projects/${project.id}/artifacts`,
+    })).json<{ versions: ArtifactVersion[] }>().versions;
+    const filteredSnapshot = filteredVersions.find((version) => version.artifactType === "opportunities" && version.versionNumber === 2)!.inputSnapshot as Record<string, unknown>;
+    expect(filteredSnapshot.opportunityEvidenceResolution).toMatchObject({
+      version: 1,
+      generationProvider: "deepseek",
+      items: [{
+        opportunityId: "opp-1",
+        problemId: parentProblem.id,
+        providerEvidenceIds: [providerEvidenceId, "foreign-evidence"],
+        acceptedProviderEvidenceIds: [providerEvidenceId],
+        rejectedProviderEvidenceIds: ["foreign-evidence"],
+        persistedEvidenceIds: [providerEvidenceId],
+        resolution: "provider_selected",
+      }],
+    });
+
+    fetchMock.mockImplementation(async () => deepSeekResponse(opportunitiesOutput(VALID_SCORES)));
+    const fallbackResponse = await app!.inject({
+      method: "POST", url: `/api/projects/${project.id}/modules/opportunities/run`, payload: { provider: "deepseek" },
+    });
+    expect(fallbackResponse.statusCode).toBe(200);
+
+    const fallbackVersions = (await app!.inject({
+      method: "GET", url: `/api/projects/${project.id}/artifacts`,
+    })).json<{ versions: ArtifactVersion[] }>().versions;
+    const fallbackSnapshot = fallbackVersions.find((version) => version.artifactType === "opportunities" && version.versionNumber === 3)!.inputSnapshot as Record<string, unknown>;
+    expect(fallbackSnapshot.opportunityEvidenceResolution).toMatchObject({
+      version: 1,
+      generationProvider: "deepseek",
+      items: [{
+        opportunityId: "opp-1",
+        problemId: parentProblem.id,
+        providerEvidenceIds: [],
+        acceptedProviderEvidenceIds: [],
+        rejectedProviderEvidenceIds: [],
+        persistedEvidenceIds: [providerEvidenceId],
+        resolution: "backend_fallback_first_parent_ids",
+      }],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("A2. recupera Oportunidades cuando Chat no devuelve JSON usando Responses JSON Schema", async () => {

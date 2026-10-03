@@ -19,6 +19,27 @@ describe("Overview truthful project state",()=>{
     expect(html).toContain("0/1");
     expect(html).not.toContain("100%");
   });
+  it("counts every workflow state, including the active in-progress step",()=>{
+    const states=["COMPLETED","IN_PROGRESS","READY","STALE","PENDING","BLOCKED"];
+    const allStates={steps:states.map((state,index)=>({...workflow.steps[0],id:`step-${index}`,position:index+1,state,staleReason:state==="STALE"?"Dependencia reemplazada.":null}))};
+    const html=render({workflow:allStates});
+    expect(html).toContain("1 ejecutadas");
+    expect(html).toContain("1 en curso");
+    expect(html).toContain("1 listas");
+    expect(html).toContain("1 requieren revisión");
+    expect(html).toContain("1 pendientes");
+    expect(html).toContain("1 bloqueadas");
+  });
+  it("numbers only the visible workflow steps without gaps from retired stages",()=>{
+    const visibleSteps={steps:[
+      {...workflow.steps[0],id:"research",stepKey:"research",position:1},
+      {...workflow.steps[0],id:"content",stepKey:"content",label:"Contenido",position:13},
+      {...workflow.steps[0],id:"final",stepKey:"final_product",label:"Producto final",position:14},
+    ]};
+    const html=render({workflow:visibleSteps});
+    const numbers=[...html.matchAll(/workflow-node-position">(\d+)<\/span>/g)].map(([,number])=>number);
+    expect(numbers).toEqual(["01","02","03"]);
+  });
   it("explains the current blocker outside a tooltip",()=>{
     const html=render();
     expect(html).toContain("<p>Cambió la evidencia original.</p>");

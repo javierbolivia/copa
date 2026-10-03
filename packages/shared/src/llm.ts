@@ -25,6 +25,13 @@ export interface LlmUsage {
   readonly usageKind: "provider_reported" | "estimated" | "unknown";
 }
 
+export interface LlmPhysicalRequestUsage {
+  readonly attempt: number;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly usageKind: "provider_reported" | "estimated" | "unknown";
+}
+
 export interface LlmGenerateResult<TOutput = string> {
   readonly provider: LlmProviderName;
   readonly requestedModel: string;
@@ -43,6 +50,8 @@ export interface LlmGenerateResult<TOutput = string> {
       readonly actual: string;
       readonly missingRequiredProperties?: readonly string[];
     }[];
+    /** Token usage observed for each physical provider request, including schema recovery. */
+    readonly physicalRequests?: readonly LlmPhysicalRequestUsage[];
   };
 }
 

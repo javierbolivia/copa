@@ -151,23 +151,26 @@ export class ProductStudioService {
     });
     const parentIds = [...new Set(Object.values(upstreamParents))];
     const documentId = uuidv7();
-    const artifact = this.artifacts.createVersion({
-      projectId,
-      artifactType: "product_document",
-      name: title,
-      inputSnapshot: {
-        source: "product_studio_wizard",
-        documentId,
-        parentVersionIds: parentIds,
-        upstreamParentVersionIds: upstreamParents,
-        selectedGlobalLibraryIds: input.selectedGlobalLibraryIds ?? [],
-      },
-      outputData: { documentId, title, documentType: input.documentType },
-      parentVersionIds: parentIds,
-      status: "draft",
-    });
+    const db = this.database.connection;
+    db.exec("BEGIN IMMEDIATE");
     try {
-      return this.documents.create({
+      this.assertUpstreamContextCurrent(projectId, upstreamParents);
+      const artifact = this.artifacts.createVersion({
+        projectId,
+        artifactType: "product_document",
+        name: title,
+        inputSnapshot: {
+          source: "product_studio_wizard",
+          documentId,
+          parentVersionIds: parentIds,
+          upstreamParentVersionIds: upstreamParents,
+          selectedGlobalLibraryIds: input.selectedGlobalLibraryIds ?? [],
+        },
+        outputData: { documentId, title, documentType: input.documentType },
+        parentVersionIds: parentIds,
+        status: "draft",
+      });
+      const document = this.documents.create({
         id: documentId,
         projectId,
         documentArtifactId: artifact.artifactId,
@@ -189,10 +192,10 @@ export class ProductStudioService {
           upstreamParentVersionIds: JSON.stringify(upstreamParents),
         },
       });
+      db.exec("COMMIT");
+      return document;
     } catch (error) {
-      this.database.connection
-        .prepare("DELETE FROM artifacts WHERE id=? AND project_id=?")
-        .run(artifact.artifactId, projectId);
+      if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -825,6 +828,8 @@ export class ProductStudioService {
       ownsTransaction = !db.isTransaction;
     if (ownsTransaction) db.exec("BEGIN IMMEDIATE");
     try {
+      const upstreamParents = this.documentUpstreamParents(current, metadata);
+      this.assertUpstreamContextCurrent(current.projectId, upstreamParents);
       const artifactRow = db
         .prepare(
           "SELECT document_artifact_id id FROM product_documents WHERE id=? AND project_id=?",
@@ -839,6 +844,7 @@ export class ProductStudioService {
           documentId: current.id,
           revisionKind,
           sourceVersionId: current.artifactVersionId,
+          upstreamParentVersionIds: upstreamParents,
           ...(typeof metadata.generationId === "string"
             ? { generationId: metadata.generationId }
             : {}),
@@ -850,13 +856,7 @@ export class ProductStudioService {
           theme,
           metadata,
         },
-        parentVersionIds: [
-          current.productArtifactVersionId,
-          ...[
-            current.opportunityArtifactVersionId,
-            current.mechanismArtifactVersionId,
-          ].filter((id): id is string => Boolean(id)),
-        ],
+        parentVersionIds: [...new Set(Object.values(upstreamParents))],
         status: "draft",
       });
       const version = this.documents.appendVersion({
@@ -906,7 +906,78 @@ export class ProductStudioService {
       throw new ProductStudioConflictError(
         "El documento está obsoleto; conserva sus datos pero requiere revisión.",
       );
+    this.assertUpstreamContextCurrent(
+      projectId,
+      this.documentUpstreamParents(current, current.version.metadata),
+    );
     return current;
+  }
+
+  private documentUpstreamParents(
+    document: ProductDocument,
+    metadata: Record<string, unknown>,
+  ): Record<string, string> {
+    const stored = recordValue(metadata).upstreamParentVersionIds;
+    const snapshot = recordValue(
+      typeof stored === "string" ? safeJson(stored) : stored,
+    );
+    const parents = Object.fromEntries(
+      Object.entries(snapshot).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && entry[1].length > 0,
+      ),
+    );
+    if (Object.keys(parents).length) return parents;
+    // Legacy documents predate the complete lineage snapshot.
+    return Object.fromEntries(
+      [
+        ["product", document.productArtifactVersionId],
+        ["opportunities", document.opportunityArtifactVersionId],
+        ["mechanism", document.mechanismArtifactVersionId],
+      ].filter((entry): entry is [string, string] => Boolean(entry[1])),
+    );
+  }
+
+  private assertUpstreamContextCurrent(
+    projectId: string,
+    parents: Record<string, string>,
+  ): void {
+    const db = this.database.connection;
+    const labels: Record<string, string> = {
+      avatar: "Avatar",
+      beliefs: "Creencias",
+      mechanism: "Mecanismo",
+      offer: "Oferta",
+      landing: "Landing",
+      funnel: "Funnel",
+      content: "Contenido",
+    };
+    for (const [stage, versionId] of Object.entries(parents)) {
+      const parent = db.prepare(`SELECT version.freshness,artifact.active_version_id activeVersionId
+        FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id
+        WHERE version.id=? AND version.project_id=? AND artifact.artifact_type=?`)
+        .get(versionId, projectId, stage) as { freshness: string; activeVersionId: string | null } | undefined;
+      if (!parent || parent.freshness !== "fresh" || parent.activeVersionId !== versionId) {
+        throw new ProductStudioConflictError(
+          `La etapa ${labels[stage] ?? stage} cambió o quedó obsoleta; actualiza el contexto del documento.`,
+        );
+      }
+      const drafts = db.prepare(`SELECT version.input_snapshot inputSnapshot
+        FROM artifact_versions version JOIN artifacts artifact ON artifact.id=version.artifact_id
+        WHERE version.project_id=? AND artifact.artifact_type=?
+          AND version.status='draft' AND version.freshness='fresh'`).all(projectId, stage) as unknown as Array<{ inputSnapshot: string }>;
+      for (const draft of drafts) {
+        const snapshot = recordValue(JSON.parse(draft.inputSnapshot));
+        const expected = snapshot.source === "user"
+          ? snapshot.editedFromVersionId
+          : snapshot.activeVersionIdAtStart;
+        if (expected === undefined || expected === versionId) {
+          throw new ProductStudioConflictError(
+            `${labels[stage] ?? stage} tiene un borrador vigente pendiente de aprobación; revísalo antes de crear o generar el documento.`,
+          );
+        }
+      }
+    }
   }
   private validateSelectedLibraries(
     projectId: string,

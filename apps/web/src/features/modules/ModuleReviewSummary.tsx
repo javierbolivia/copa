@@ -4,10 +4,13 @@ export const reviewStateLabel=(value:string)=>({approved:"Aprobada",draft:"Borra
 export function ModuleReviewSummary({moduleKey,selected,versionCount,evidenceCount}:{moduleKey:ModuleKey;selected:ModuleResult;versionCount:number;evidenceCount:number}){
   const output=record(selected.outputData),audit=record(output[moduleKey==="research"?"validationAudit":`${moduleKey}ValidationAudit`]);
   const items=Array.isArray(output.items)?output.items:[];
-  const auditLabel=audit.ok===true?"Contrato verificado":audit.ok===false?"Requiere corrección":moduleKey==="problems"?`${items.length} problemas admitidos`:moduleKey==="opportunities"?(items.every(item=>Object.keys(record(record(item).scores)).length===9)&&items.length?"9 criterios disponibles":"Histórico sin scores completos"):"Sin auditoría registrada";
+  const auditLabel=moduleKey==="avatar"
+    ?audit.ok===true?"Formato y citas válidos; sentido por revisar":audit.ok===false?"Citas o estructura por corregir":"Sin auditoría registrada"
+    :audit.ok===true?"Contrato verificado":audit.ok===false?"Requiere corrección":moduleKey==="problems"?`${items.length} problemas admitidos`:moduleKey==="opportunities"?(items.every(item=>Object.keys(record(record(item).scores)).length===9)&&items.length?"9 criterios disponibles":"Histórico sin scores completos"):"Sin auditoría registrada";
   return <section className={`review-summary ${selected.freshness==="stale"?"needs-review":""}`} aria-label="Estado y trazabilidad de la versión">
     <div className="review-summary-heading"><div><span className="eyebrow">ESTADO DEL DOCUMENTO</span><h2>Versión {selected.versionNumber} <span className={`status-pill ${selected.freshness}`}>{reviewStateLabel(selected.freshness)}</span></h2></div><div><strong>{reviewStateLabel(selected.status)}</strong><time dateTime={selected.createdAt}>Fecha de la versión: {new Date(selected.createdAt).toLocaleString("es")}</time></div></div>
-    <dl className="review-summary-metrics"><div><dt>Historial conservado</dt><dd>{versionCount} {versionCount===1?"versión":"versiones"}</dd></div><div><dt>Referencias vinculadas</dt><dd>{evidenceCount} {evidenceCount===1?"cita":"citas"}</dd></div><div><dt>Revisión del contenido</dt><dd>{auditLabel}</dd></div></dl>
+    <dl className="review-summary-metrics"><div><dt>Historial conservado</dt><dd>{versionCount} {versionCount===1?"versión":"versiones"}</dd></div><div><dt>Referencias vinculadas</dt><dd>{evidenceCount} {evidenceCount===1?"cita":"citas"}</dd></div><div><dt>{moduleKey==="avatar"?"Alcance de auditoría":"Revisión del contenido"}</dt><dd>{auditLabel}</dd></div></dl>
+    {moduleKey==="avatar"&&<p className="review-next-step"><strong>Revisión necesaria:</strong> esta auditoría comprueba el formato y que las citas pertenezcan a la muestra; no determina si cada cita respalda semánticamente su afirmación. Revisa el borrador antes de aprobarlo.</p>}
     {selected.freshness==="stale"&&<p className="review-next-step"><strong>Antes de continuar:</strong> revisa las fuentes y dependencias anteriores. Esta versión conserva sus datos y su fecha original.</p>}
   </section>;
 }

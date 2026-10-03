@@ -278,6 +278,9 @@ describe("Product completeness and grounding validator", () => {
       { name: "English private community", field: "format", claim: "Comes with a private community", category: "COMMUNITY_ACCESS" },
       { name: "English certification", field: "format", claim: "Includes certification", category: "CERTIFICATION" },
       { name: "English live sessions", field: "format", claim: "Includes live sessions", category: "LIVE_SESSIONS" },
+      { name: "professional consultations", field: "concept", claim: "Incluye consultas profesionales individuales", category: "COACHING_OR_SESSIONS" },
+      { name: "personalized consultation", field: "concept", claim: "Incluye una consulta personalizada", category: "COACHING_OR_SESSIONS" },
+      { name: "English consultation", field: "concept", claim: "Includes professional consultations", category: "COACHING_OR_SESSIONS" },
       { name: "English guaranteed result", field: "promise", claim: "Guaranteed results", category: "GUARANTEE_OR_ASSURED_RESULT" },
       { name: "English proven efficacy", field: "promise", claim: "Scientifically proven method", category: "EFFICACY_OR_PROOF" },
       { name: "English committed duration", field: "promise", claim: "Results within 30 days", category: "TIME_BOUND_RESULT" },
@@ -303,6 +306,18 @@ describe("Product completeness and grounding validator", () => {
       ]));
       expect(audit.ok).toBe(true);
     }
+  });
+
+  it("does not classify a reference guide as a professional consultation", () => {
+    const audit = validateProductOutput(complete({
+      concept: "Una publicación digital de manejo seguro con guías rápidas de consulta.",
+      deliverables: ["Guía rápida de consulta sobre uso de correa y arnés."],
+    })).audit;
+
+    expect(audit.unsupportedClaims).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ category: "COACHING_OR_SESSIONS" }),
+    ]));
+    expect(audit.ok).toBe(true);
   });
 
   it("continues to classify real human delivery as HUMAN_SUPPORT", () => {

@@ -17,7 +17,7 @@ describe("recorrido E2E del proyecto Demo", () => {
     for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
   });
 
-  it("completa todos los módulos, exporta archivos y persiste tras reiniciar", async () => {
+  it("mantiene el manuscrito Demo en revisión y persiste tras reiniciar", async () => {
     const directory = mkdtempSync(join(tmpdir(), "our-platform-demo-"));
     directories.push(directory);
     const databasePath = join(directory, "demo.db");
@@ -29,19 +29,22 @@ describe("recorrido E2E del proyecto Demo", () => {
     expect(body.project.name).toMatch(/^DEMO/);
     expect(body.results).toHaveLength(13);
     expect(body.results.at(-1)?.moduleKey).toBe("final_product");
+    expect(body.results.at(-1)?.status).toBe("draft");
+    expect((body.results.at(-1)?.outputData as {finalProductValidationAudit?:{ok:boolean;complete:boolean}}).finalProductValidationAudit).toMatchObject({ok:false,complete:false});
 
     const workflow = (await app.inject({
       method: "GET",
       url: `/api/projects/${body.project.id}/workflow`,
     })).json<Workflow>();
-    expect(workflow.steps.every((step) => step.state === "COMPLETED")).toBe(true);
+    expect(workflow.steps.filter((step) => step.stepKey !== "final_product").every((step) => step.state === "COMPLETED")).toBe(true);
+    expect(workflow.steps.find((step) => step.stepKey === "final_product")?.state).toBe("IN_PROGRESS");
 
     const generations = (await app.inject({
       method: "GET",
       url: `/api/projects/${body.project.id}/generations`,
     })).json<{ generations: unknown[] }>();
     expect(generations.generations).toHaveLength(13);
-    expect(readdirSync(join(directory, "generated", body.project.id))).toHaveLength(3);
+    expect(readdirSync(join(directory, "generated", body.project.id))).toHaveLength(2);
     const backup=(await app.inject({method:"POST",url:"/api/backups"})).json<{filename:string}>();
     const sidecar=join(directory,"backups",`${backup.filename}.files`);expect(existsSync(sidecar)).toBe(true);
     rmSync(sidecar,{recursive:true,force:true});
@@ -102,7 +105,7 @@ describe("recorrido E2E del proyecto Demo", () => {
     const product=(await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/product/run`,payload:{provider:"mock",demo:true}})).json<ModuleResult>();
     const opportunityName=(opportunity.outputData as any).items[0].name;
     expect((product.outputData as any).proposals[0].concept).toContain(opportunityName);
-    const generated:Record<string,ModuleResult>={};for(const key of ["avatar","mechanism","beliefs","offer","landing","funnel","content"]){generated[key]=(await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/${key}/run`,payload:{provider:"mock",demo:true}})).json<ModuleResult>();}
+    const generated:Record<string,ModuleResult>={};for(const key of ["avatar","mechanism","beliefs","offer","landing","funnel","content"]){generated[key]=(await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/${key}/run`,payload:{provider:"mock",demo:true}})).json<ModuleResult>();if(key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"){expect(generated[key]!.status).toBe("draft");const approval=await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/${key}/versions/${generated[key]!.versionId}/approve`});expect(approval.statusCode).toBe(200);}}
     expect((generated.beliefs!.outputData as any).avatar).toBe((generated.avatar!.outputData as any).name);
     expect((generated.funnel!.outputData as any).offerName).toBe((generated.offer!.outputData as any).name);
     expect((generated.content!.outputData as any).centralThesis).toBe((generated.beliefs!.outputData as any).centralThesis);

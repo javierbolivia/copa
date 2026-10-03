@@ -166,6 +166,119 @@ describe("strict Product contract, grounding and downstream safety", () => {
     expect(approval.statusCode).toBe(409);
   });
 
+  it("grounds a regenerated Product on the newly selected Opportunity and records that exact parent", async () => {
+    let providerGrounding: { selectedOpportunity: { id: string; name: string } } | undefined;
+    const fetchMock = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+      const context = JSON.parse(body.messages[1]!.content) as { productGrounding: typeof providerGrounding };
+      providerGrounding = context.productGrounding!;
+      return deepSeekResponse(product());
+    });
+    app = await createApp({
+      databasePath: ":memory:",
+      serveFrontend: false,
+      deepSeek: { apiKey: "product-parent-contract-key", fetch: fetchMock as typeof fetch },
+    });
+    const demo = (await app.inject({ method: "POST", url: "/api/demo/projects" })).json<{ project: Project }>();
+    const oldOpportunity = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/modules/opportunities`,
+    })).json<{ results: ModuleResult[] }>().results[0]!;
+    const changedOutput = structuredClone(oldOpportunity.outputData) as Record<string, unknown>;
+    const oldItems = changedOutput.items as Array<Record<string, unknown>>;
+    const revisedOpportunity = {
+      ...structuredClone(oldItems[0]!),
+      id: "opp-2",
+      name: "Método de seguridad y manejo físico para dueños que pierden el control del perro reactivo",
+      rationale: "Enfoque en seguridad y control físico durante los paseos.",
+    };
+    changedOutput.items = [...oldItems, revisedOpportunity];
+    changedOutput.selectedId = revisedOpportunity.id;
+
+    const opportunityDraft = await app.inject({
+      method: "POST",
+      url: `/api/projects/${demo.project.id}/modules/opportunities/drafts`,
+      payload: { outputData: changedOutput, expectedBaseVersionId: oldOpportunity.versionId },
+    });
+    expect(opportunityDraft.statusCode).toBe(201);
+    const draftVersionId = opportunityDraft.json<ModuleResult>().versionId;
+    const approvedOpportunity = await app.inject({
+      method: "POST",
+      url: `/api/projects/${demo.project.id}/modules/opportunities/versions/${draftVersionId}/approve`,
+    });
+    expect(approvedOpportunity.statusCode).toBe(200);
+    const currentOpportunity = approvedOpportunity.json<ModuleResult>();
+
+    const productResponse = await app.inject({
+      method: "POST",
+      url: `/api/projects/${demo.project.id}/modules/product/run`,
+      payload: { provider: "deepseek" },
+    });
+    expect(productResponse.statusCode).toBe(200);
+    const generatedProduct = productResponse.json<ModuleResult>();
+    expect(generatedProduct).toMatchObject({ status: "approved", freshness: "fresh" });
+    expect(providerGrounding?.selectedOpportunity).toMatchObject({
+      id: revisedOpportunity.id,
+      name: revisedOpportunity.name,
+    });
+    const versions = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/artifacts`,
+    })).json<{ versions: ArtifactVersion[] }>().versions;
+    expect(versions.find((version) => version.id === generatedProduct.versionId)?.inputSnapshot).toMatchObject({
+      parentVersionIds: expect.arrayContaining([currentOpportunity.versionId]),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops after one unusable DeepSeek response instead of spending a retry", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "hallazia-product-one-shot-"));
+    const databasePath = join(directory, "qa.sqlite");
+    const fetchMock = vi.fn(async () => deepSeekResponse("Esto no es JSON válido."));
+    app = await createApp({
+      databasePath,
+      serveFrontend: false,
+      deepSeek: { apiKey: "product-one-shot-key", fetch: fetchMock as typeof fetch },
+    });
+    const demo = (await app.inject({ method: "POST", url: "/api/demo/projects" })).json<{ project: Project }>();
+    const before = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/modules/product`,
+    })).json<{ results: ModuleResult[] }>().results;
+
+    const failed = await app.inject({
+      method: "POST",
+      url: `/api/projects/${demo.project.id}/modules/product/run`,
+      payload: { provider: "deepseek" },
+    });
+
+    expect(failed.statusCode).toBe(409);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const after = (await app.inject({
+      method: "GET", url: `/api/projects/${demo.project.id}/modules/product`,
+    })).json<{ results: ModuleResult[] }>().results;
+    expect(after).toHaveLength(before.length);
+    expect(after[0]!.versionId).toBe(before[0]!.versionId);
+
+    await app.close();
+    app = undefined;
+    const database = new AppDatabase(databasePath);
+    try {
+      const generation = database.connection.prepare(
+        "SELECT status,input_tokens,output_tokens,estimated_cost FROM generations WHERE project_id=? AND provider='deepseek' ORDER BY created_at DESC LIMIT 1",
+      ).get(demo.project.id) as { status: string; input_tokens: number; output_tokens: number; estimated_cost: number };
+      const snapshotRow = database.connection.prepare(
+        "SELECT input_snapshot FROM generations WHERE project_id=? AND provider='deepseek' ORDER BY created_at DESC LIMIT 1",
+      ).get(demo.project.id) as { input_snapshot: string };
+      const snapshot = JSON.parse(snapshotRow.input_snapshot) as { providerAttempts: Array<{ physicalRequests?: Array<Record<string, unknown>> }> };
+      expect(generation).toMatchObject({ status: "FAILED", input_tokens: 40, output_tokens: 30 });
+      expect(generation.estimated_cost).toBeGreaterThan(0);
+      expect(snapshot.providerAttempts.at(-1)?.physicalRequests).toEqual([
+        { attempt: 1, inputTokens: 40, outputTokens: 30, usageKind: "provider_reported" },
+      ]);
+    } finally {
+      database.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("does not approve an incomplete user draft", async () => {
     app = await createApp({ databasePath: ":memory:", serveFrontend: false });
     const demo = (await app.inject({ method: "POST", url: "/api/demo/projects" })).json<{ project: Project }>();

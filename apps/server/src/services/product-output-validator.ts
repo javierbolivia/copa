@@ -166,7 +166,7 @@ const CLAIM_PATTERNS: ReadonlyArray<{ category: ProductClaimCategory; pattern: R
   { category: "GUARANTEE_OR_ASSURED_RESULT", pattern: /\b(?:garanti[az]|garantizad[oa]s?|guarantee(?:d)?|assured results?|resultados? asegurados?|risk free|sin riesgo)\b/u },
   { category: "EFFICACY_OR_PROOF", pattern: /\b(?:metodo|method|tecnicas?|techniques?|sistema|system)\s+(?:clinicamente |clinically |cientificamente |scientifically )?(?:probad[oa]s?|proven)|\b(?:basad[oa]s? en (?:la )?evidencia|evidence based|scientifically proven|cientificamente probad[oa]s?)\b/u },
   { category: "PERSONALIZED_SERVICE", pattern: /\b(?:(?:apoyo|soporte|acompanamiento|support|guidance)\s+(?:personalizad[oa]|individual|one to one|1 1)|(?:personalized|individual)\s+(?:support|guidance))\b/u },
-  { category: "COACHING_OR_SESSIONS", pattern: /\b(?:coaching|mentoria|mentoring|consultas?|consultations?|(?:sesiones?|sessions?)\s+(?:individuales?|personalizadas?|one to one|1 1))\b/u },
+  { category: "COACHING_OR_SESSIONS", pattern: /\b(?:coaching|mentoria|mentoring|consultas|consultations?|consulta\s+(?:profesional|individual|personalizada|privada|inicial)|(?:sesiones?|sessions?)\s+(?:individuales?|personalizadas?|one to one|1 1))\b/u },
   { category: "COMMUNITY_ACCESS", pattern: /\b(?:comunidad|community|grupo privado|private group)\b/u },
   { category: "CERTIFICATION", pattern: /\b(?:certificacion|certificado|certification|certificate|acreditad[oa]|accredited)\b/u },
   { category: "LIFETIME_ACCESS", pattern: /\b(?:acceso(?:\s+\w+){0,5}\s+(?:de por vida|de forma permanente|permanente|vitalicio)|(?:lifetime|permanent|forever)\s+access)\b/u },

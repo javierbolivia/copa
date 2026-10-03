@@ -50,7 +50,14 @@ export function createDemoOutput(key:ModuleKey,evidenceIds:string[]):Record<stri
     {from:"downsell",to:"thanks",event:"complete",label:"Fin del embudo"}
   ],paymentsEnabled:false},
   content:{schemaVersion:1,calendar:[{day:1,type:"educational",channel:"Facebook",hook:"No necesitas ordenar 10.000 fotos hoy",body:"Empieza por una carpeta y una regla.",cta:"Descubre el Ebook Fototeca en Orden"},{day:3,type:"story",channel:"Facebook",hook:"El verdadero coste del caos fotográfico",body:"No es espacio: es no encontrar el recuerdo cuando importa.",cta:"Conoce el sistema del Ebook"},{day:5,type:"objection",channel:"Facebook",hook:"¿Y si no tengo tiempo?",body:"Un sistema de 20 minutos vence a una maratón que nunca empieza.",cta:"Revisa el primer paso del Ebook"}],hooks:["La carpeta que cambiará tu fototeca","Tres decisiones antes de borrar una foto"],channels:["Facebook"]},
-  final_product:{schemaVersion:1,files:[],guide:{title:"Ebook: Fototeca en Orden",chapters:["Capítulo 1: Diagnóstico","Capítulo 2: Limpieza","Capítulo 3: Estructura","Capítulo 4: Respaldo","Capítulo 5: Mantenimiento"]},checklist:["Elegir carpeta piloto","Eliminar duplicados obvios","Aplicar nombre estándar","Crear respaldo","Verificar recuperación"],workbook:["Inventario de dispositivos","Reglas de nombres","Plan de mantenimiento"],miniTool:{title:"Planificador de sesión fotográfica",fields:["Tiempo disponible","Carpeta objetivo","Meta de la sesión"]}}
+  final_product:{schemaVersion:1,files:[],guide:{title:"Ebook: Fototeca en Orden",introduction:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. Este texto sirve para explorar la interfaz y no es contenido editorial listo para publicar.",chapters:["Diagnóstico","Limpieza","Estructura","Respaldo","Mantenimiento"].map(title=>({title,content:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. Este texto sirve para explorar el formato del capítulo y no es contenido editorial listo para publicar.",evidenceIds:[]})),conclusion:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. Este texto no constituye una recomendación ni un libro terminado."},checklist:["Elegir carpeta piloto","Eliminar duplicados obvios","Aplicar nombre estándar","Crear respaldo","Verificar recuperación"],workbook:["Inventario de dispositivos","Reglas de nombres","Plan de mantenimiento"],miniTool:{title:"Planificador de sesión fotográfica",fields:["Tiempo disponible","Carpeta objetivo","Meta de la sesión"]}}
  };
- return outputs[key] ?? {};
+ const output=outputs[key]??{};
+ if(key==="landing"&&Array.isArray(output.sections)){
+  output.sections=output.sections.map((value,index)=>{
+   const section=value&&typeof value==="object"&&!Array.isArray(value)?value as Record<string,unknown>:{};
+   return {...section,headline:typeof section.headline==="string"&&section.headline.trim()?section.headline:`Bloque DEMO ${index+1}`,body:typeof section.body==="string"&&section.body.trim()?section.body:"Contenido sintético solo para validación local."};
+  });
+ }
+ return output;
 }

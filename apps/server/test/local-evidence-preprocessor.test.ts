@@ -8,33 +8,32 @@ import {
   type EvidenceItem,
 } from "../src/services/local-evidence-preprocessor.js";
 
-const PROJECT_ID = "01a0289f-9377-70b0-b9ac-a0eb5a9dd35a";
-
-function loadRealEvidence(): EvidenceItem[] {
-  const dbPath = resolve(import.meta.dirname, "../../..", "data/our-platform.db");
-  let db: DatabaseSync;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true } as never);
-  } catch {
-    return []; // DB not available in CI
-  }
-  try {
-    const rows = db.prepare(
-      `SELECT e.id, e.comment_id commentId, e.quote_text quoteText,
-              c.author, e.source_id sourceId, s.title sourceTitle,
-              c.likes, c.is_reply isReply, c.thread_id threadId
-       FROM evidence_snippets e
-       JOIN comments c ON c.id = e.comment_id AND c.project_id = e.project_id
-       JOIN sources s ON s.id = e.source_id AND s.project_id = e.project_id
-       WHERE e.project_id = ?
-         AND s.include_in_analysis = 1
-         AND c.analysis_eligible = 1
-         AND s.status IN ('ready', 'completed')`,
-    ).all(PROJECT_ID) as unknown as EvidenceItem[];
-    return rows;
-  } finally {
-    db.close();
-  }
+// Reproducible stress corpus: no runtime database, personal authors or network.
+const CORPUS_SIZE = 3600;
+const AUTHOR_COUNT = 2400;
+const SOURCE_COUNT = 24;
+function stressEvidence(): EvidenceItem[] {
+  const topics = [
+    "ladridos explosivos correa tirones", "miedo tormentas truenos temblores",
+    "ansiedad separación soledad destrucción", "agresividad comida protección recursos",
+    "insomnio nocturno inquietud descanso", "excitación visitas saltos recibimiento",
+    "fugas vallado escapes jardín", "ruidos tráfico motos bocinas",
+    "socialización cachorros encuentros adaptación", "veterinario consulta exploración nervios",
+    "transporte coche mareos viajes", "higiene baño cepillado resistencia",
+    "aprendizaje premios constancia práctica", "ejercicio juego recuperación fatiga",
+    "paseos multitudes estrechez aceras", "gatos persecución bicicletas carreras",
+    "economía cursos profesionales presupuesto", "familia convivencia niños límites",
+    "enriquecimiento olfato búsqueda alimentos", "mudanzas vivienda cambios adaptación",
+    "vecinos quejas convivencia edificio", "refugio adopción acogida transición",
+    "frustración puertas barreras accesos", "comunicación señales observación registros",
+  ];
+  return Array.from({length: CORPUS_SIZE}, (_, index) => ({
+    id: 'evidence-' + index, commentId: 'comment-' + index,
+    quoteText: topics[index % topics.length]!, author: 'author-' + (index % AUTHOR_COUNT),
+    sourceId: 'source-' + (index % SOURCE_COUNT), sourceTitle: 'Synthetic source',
+    likes: index % 13, isReply: index % 5 === 0 ? 1 : 0,
+    threadId: 'thread-' + Math.floor(index / 3),
+  }));
 }
 
 // Synthetic small dataset for deterministic unit tests
@@ -145,39 +144,38 @@ describe("local-evidence-preprocessor", () => {
     });
   });
 
-  describe("clusterEvidence — real data", () => {
-    const realEvidence = loadRealEvidence();
-    const skip = realEvidence.length === 0;
+  describe("clusterEvidence — isolated stress corpus", () => {
+    const realEvidence = stressEvidence();
 
-    it.skipIf(skip)("loads expected evidence count", () => {
-      expect(realEvidence.length).toBe(3359);
+    it("loads expected evidence count", () => {
+      expect(realEvidence.length).toBe(CORPUS_SIZE);
     });
 
-    it.skipIf(skip)("covers ALL 3,359 evidence items", () => {
+    it("covers ALL 3,600 evidence items", () => {
       const result = clusterEvidence(realEvidence);
-      expect(result.coveredEvidence).toBe(3359);
-      expect(result.totalEvidence).toBe(3359);
+      expect(result.coveredEvidence).toBe(CORPUS_SIZE);
+      expect(result.totalEvidence).toBe(CORPUS_SIZE);
     });
 
-    it.skipIf(skip)("covers all unique authors", () => {
+    it("covers all unique authors", () => {
       const result = clusterEvidence(realEvidence);
-      expect(result.uniqueAuthors).toBe(2471);
+      expect(result.uniqueAuthors).toBe(AUTHOR_COUNT);
     });
 
-    it.skipIf(skip)("covers all unique sources", () => {
+    it("covers all unique sources", () => {
       const result = clusterEvidence(realEvidence);
-      // 24 active sources from our DB query
-      expect(result.uniqueSources).toBeGreaterThanOrEqual(19);
+      // All synthetic sources must be represented.
+      expect(result.uniqueSources).toBe(SOURCE_COUNT);
     });
 
-    it.skipIf(skip)("produces a reasonable cluster count (30-300)", () => {
+    it("produces a reasonable cluster count (30-300)", () => {
       const result = clusterEvidence(realEvidence);
       expect(result.clusters.length).toBeGreaterThanOrEqual(10);
       expect(result.clusters.length).toBeLessThanOrEqual(500);
-      console.log(`Real data: ${result.clusters.length} clusters from ${realEvidence.length} evidence in ${result.processingTimeMs}ms`);
+      console.log(`Synthetic corpus: ${result.clusters.length} clusters from ${realEvidence.length} evidence in ${result.processingTimeMs}ms`);
     });
 
-    it.skipIf(skip)("no evidenceId appears in multiple clusters", () => {
+    it("no evidenceId appears in multiple clusters", () => {
       const result = clusterEvidence(realEvidence);
       const seen = new Set<string>();
       for (const cluster of result.clusters) {
@@ -188,7 +186,7 @@ describe("local-evidence-preprocessor", () => {
       }
     });
 
-    it.skipIf(skip)("no evidenceId is invented", () => {
+    it("no evidenceId is invented", () => {
       const result = clusterEvidence(realEvidence);
       const validIds = new Set(realEvidence.map((e) => e.id));
       for (const cluster of result.clusters) {
@@ -198,17 +196,17 @@ describe("local-evidence-preprocessor", () => {
       }
     });
 
-    it.skipIf(skip)("produces <=5 LLM batches", () => {
+    it("produces <=5 LLM batches", () => {
       const result = clusterEvidence(realEvidence);
       const { batches } = buildClusteredMapBatches(result);
       expect(batches.length).toBeLessThanOrEqual(5);
-      console.log(`Real data: ${batches.length} LLM batches, clusters: ${result.clusters.length}`);
+      console.log(`Synthetic corpus: ${batches.length} LLM batches, clusters: ${result.clusters.length}`);
       for (const [i, batch] of batches.entries()) {
         console.log(`  Batch ${i + 1}: ${batch.clusters.length} clusters, ~${batch.estimatedChars} chars`);
       }
     });
 
-    it.skipIf(skip)("completes under 2 seconds", () => {
+    it("completes under 2 seconds", () => {
       const result = clusterEvidence(realEvidence);
       expect(result.processingTimeMs).toBeLessThan(2000);
     });

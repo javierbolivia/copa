@@ -8,7 +8,7 @@ describe("GeminiProvider",()=>{
     const provider=new GeminiProvider({apiKey:"test-key",fetch:fetchMock as typeof fetch,endpoint:"https://gemini.test/models"});
     const result=await provider.generate<{schemaVersion:number}>({provider:"gemini",model:GEMINI_ANALYSIS_MODEL,systemInstructions:"solo JSON",input:"{}",structuredOutput:{name:"research",jsonSchema:{type:"object"}},maxOutputTokens:100});
     expect(result.output.schemaVersion).toBe(1);expect(result.usage).toMatchObject({inputTokens:12,outputTokens:8,usageKind:"provider_reported"});
-    const [url,init]=fetchMock.mock.calls[0] as unknown as [string,RequestInit];const body=JSON.parse(String(init.body));expect(GEMINI_ANALYSIS_MODEL).toBe("gemini-3.5-flash-lite");expect(url).toBe(`https://gemini.test/models/${GEMINI_ANALYSIS_MODEL}:generateContent`);expect(init.headers).toMatchObject({"x-goog-api-key":"test-key"});expect(body.generationConfig).toMatchObject({responseMimeType:"application/json",responseSchema:{type:"OBJECT"}});expect(body).not.toHaveProperty("safetySettings");expect(JSON.stringify(body)).not.toContain("responseJsonSchema");
+    const [url,init]=fetchMock.mock.calls[0] as unknown as [string,RequestInit];const body=JSON.parse(String(init.body));expect(GEMINI_ANALYSIS_MODEL).toBe("gemini-3.5-flash-lite");expect(url).toBe(`https://gemini.test/models/${GEMINI_ANALYSIS_MODEL}:generateContent`);expect(init.headers).toMatchObject({"x-goog-api-key":"test-key"});expect(body.generationConfig.responseFormat).toEqual({text:{mimeType:"APPLICATION_JSON",schema:{type:"object"}}});expect(body.generationConfig).not.toHaveProperty("responseJsonSchema");expect(body.generationConfig).not.toHaveProperty("responseMimeType");expect(body.generationConfig).not.toHaveProperty("responseSchema");expect(body).not.toHaveProperty("safetySettings");
   });
   it("rechaza salida inválida sin fallback",async()=>{
     const provider=new GeminiProvider({apiKey:"test",fetch:async()=>new Response(JSON.stringify({candidates:[{content:{parts:[{text:"no-json"}]}}]}),{status:200})});
@@ -18,7 +18,10 @@ describe("GeminiProvider",()=>{
     const fetchMock=vi.fn(async()=>new Response(JSON.stringify({error:{code:400,status:"INVALID_ARGUMENT",message:'Unknown name "responseJsonSchema" at generationConfig. key=AIzaSecretShouldNotAppear'}}),{status:400,headers:{"content-type":"application/json"}}));
     const provider=new GeminiProvider({apiKey:"test-key",fetch:fetchMock as typeof fetch});
     await expect(provider.generate({provider:"gemini",model:"gemini-2.5-flash-lite",systemInstructions:"x",input:"x",structuredOutput:{name:"x",jsonSchema:{type:"object",additionalProperties:true}}})).rejects.toMatchObject({code:"http_error",status:400,message:'Gemini INVALID_ARGUMENT: Unknown name "responseJsonSchema" at generationConfig. key=[redacted]'});
-    expect(toGeminiResponseSchema({type:"object",additionalProperties:true,properties:{id:{type:"string"}}})).toEqual({type:"OBJECT",properties:{id:{type:"STRING"}}});
+    expect(toGeminiResponseSchema({type:"object",additionalProperties:true,properties:{id:{type:"string"}}})).toEqual({type:"object",properties:{id:{type:"string"},},additionalProperties:true});
+  });
+  it("normaliza uniones a anyOf y conserva las propiedades solo en la rama objeto",()=>{
+    expect(toGeminiResponseSchema({type:["object","string","null"],properties:{name:{type:"string"},description:{type:"string"}},required:["name"]})).toEqual({anyOf:[{type:"object",properties:{name:{type:"string"},description:{type:"string"}},required:["name"]},{type:"string"},{type:"null"}]});
   });
   it("informa NOT_FOUND para el modelo retirado y no hace fallback",async()=>{
     const fetchMock=vi.fn(async()=>new Response(JSON.stringify({error:{code:404,status:"NOT_FOUND",message:"This model is no longer available to new users."}}),{status:404,headers:{"content-type":"application/json"}}));

@@ -10,7 +10,9 @@ Ninguno conocido.
 
 ## MEDIUM
 
-- El retry de reparación estructurada de OpenAI no suma los tokens de la primera respuesta inválida; el coste registrado corresponde a la respuesta final y puede subestimar ese caso excepcional.
+- La revisión factual del manuscrito requiere una declaración humana ligada al contenido guardado, con extractos y afirmaciones por referencia. No verifica automáticamente las páginas externas ni certifica la veracidad del texto; las versiones históricas no quedan revisadas retroactivamente.
+- La restauración revierte fallos de ejecución y conserva un backup previo; una interrupción del proceso o del equipo durante el intercambio de archivos puede requerir recuperación manual desde ese backup.
+- OpenAI acumula el uso de sus intentos de reparación. Cuando un intento no informa consumo, el total queda estimado o desconocido y no representa una factura verificada.
 - Faltan pruebas automatizadas específicas para vídeo privado, comentarios deshabilitados y clave YouTube inválida, aunque el adaptador normaliza esas respuestas y el recorrido URL → persistence → comments está cubierto con mocks.
 - No existe todavía un E2E de navegador automatizado; la integración UI se verificó mediante smoke real de las 17 pantallas, consola y viewport móvil.
 - Knowledge no incluye OCR: un PDF escaneado sin capa de texto queda explícitamente en `NEEDS_OCR`.

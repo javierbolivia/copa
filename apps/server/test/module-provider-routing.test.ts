@@ -10,6 +10,18 @@ import { GEMINI_ANALYSIS_MODEL } from "../src/services/module-service.js";
 
 const providerModules=MODULES.map(module=>module.key).filter((key):key is Exclude<ModuleKey,"sources">=>key!=="sources");
 
+async function reviewGeneratedManuscript(app:FastifyInstance,projectId:string,versionId:string):Promise<string>{
+  const blocked=await app.inject({method:"POST",url:`/api/projects/${projectId}/modules/final_product/versions/${versionId}/approve`});
+  expect(blocked.statusCode).toBe(409);
+  const reviewed=await app.inject({method:"POST",url:`/api/projects/${projectId}/modules/final_product/versions/${versionId}/factual-review`,payload:{
+    sourcesOpened:true,reviewedAllClaims:true,notes:"Fixture sintético contrastado para probar la ruta de revisión humana.",
+    checks:["R1","R2"].map((id,index)=>({referenceId:id,sourceUrl:`https://example.invalid/${index===0?"one":"two"}`,
+      sourceExcerpt:"Extracto sintético de prueba suficientemente largo para el contrato de revisión.",manuscriptClaim:"paso verificable 1 paso verificable 2"})),
+  }});
+  expect(reviewed.statusCode,reviewed.body).toBe(201);
+  return reviewed.json<{versionId:string}>().versionId;
+}
+
 function canonicalOutput(key:Exclude<ModuleKey,"sources">,input:Record<string,unknown>={}):Record<string,unknown>{
   const output:Record<string,unknown>={...createDemoOutput(key,[]),evidenceIds:[]};
   if(key==="problems"){
@@ -24,6 +36,11 @@ function canonicalOutput(key:Exclude<ModuleKey,"sources">,input:Record<string,un
     output.items=output.items.map((item)=>({...item as Record<string,unknown>,problemId:problem?.id,evidenceIds:Array.isArray(problem?.evidenceIds)?problem.evidenceIds:[]}));
   }
   if(key==="product"&&Array.isArray(output.proposals))output.proposals=output.proposals.map((proposal:unknown)=>({...proposal as Record<string,unknown>,evidenceIds:[]}));
+  if(key==="final_product"){
+    const section=Array.from({length:160},(_,index)=>`paso verificable ${index+1}`).join(" ");
+    const citedSection=`${section} (R1, R2)`;
+    output.guide={title:"Ebook de prueba",introduction:citedSection,chapters:["Preparación","Práctica","Revisión"].map(title=>({title,content:citedSection,evidenceIds:[]})),conclusion:citedSection,references:[{id:"R1",organization:"Fixture local",title:"Fuente de prueba uno",url:"https://example.invalid/one"},{id:"R2",organization:"Fixture local",title:"Fuente de prueba dos",url:"https://example.invalid/two"}]};
+  }
   if(key==="avatar"){
     for(const [field] of AVATAR_FIELDS)output[field]=field==="language"?[]:(output[field] as Array<Record<string,unknown>>).map(item=>({...item,provenance:"AI_INFERENCE",evidenceIds:[]}));
   }
@@ -63,7 +80,14 @@ describe("matriz compartida de proveedores de módulos",()=>{
       const response=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/run`,payload:{provider:"deepseek"}});
       expect(response.statusCode,`${key}: ${response.body}`).toBe(200);
       expect(response.json()).toMatchObject({moduleKey:key});
-      if(key==="avatar")expect(response.json()).toMatchObject({status:"approved",outputData:{avatarValidationAudit:{ok:true}}});
+      if(key==="avatar")expect(response.json()).toMatchObject({status:"draft",outputData:{avatarValidationAudit:{ok:true}}});
+      if(key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product"){
+        const generated=response.json<{versionId:string;status:string}>();
+        expect(generated.status).toBe("draft");
+        const approvedVersionId=key==="final_product"?await reviewGeneratedManuscript(app,demo.project.id,generated.versionId):generated.versionId;
+        const approval=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/versions/${approvedVersionId}/approve`});
+        expect(approval.statusCode,`${key} approval: ${approval.body}`).toBe(200);
+      }
     }
 
     const generations=(await app.inject({method:"GET",url:`/api/projects/${demo.project.id}/generations`})).json<{generations:Array<{provider:string;model:string;status:string;artifactVersionId:string|null;versionNumber:number|null}>}>().generations.filter(generation=>generation.provider==="deepseek"&&generation.artifactVersionId!==null);
@@ -91,12 +115,28 @@ describe("matriz compartida de proveedores de módulos",()=>{
       const response=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/run`,payload:{provider:"gemini"}});
       expect(response.statusCode,`${key}: ${response.body}`).toBe(200);
       expect(response.json()).toMatchObject({moduleKey:key});
-      if(key==="avatar")expect(response.json()).toMatchObject({status:"approved",outputData:{avatarValidationAudit:{ok:true}}});
+      if(key==="avatar")expect(response.json()).toMatchObject({status:"draft",outputData:{avatarValidationAudit:{ok:true}}});
+      if(key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product"){
+        const generated=response.json<{versionId:string;status:string}>();
+        expect(generated.status).toBe("draft");
+        const approvedVersionId=key==="final_product"?await reviewGeneratedManuscript(app,demo.project.id,generated.versionId):generated.versionId;
+        const approval=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/${key}/versions/${approvedVersionId}/approve`});
+        expect(approval.statusCode,`${key} approval: ${approval.body}`).toBe(200);
+      }
     }
 
     const generations=(await app.inject({method:"GET",url:`/api/projects/${demo.project.id}/generations`})).json<{generations:Array<{provider:string;model:string;status:string;artifactVersionId:string|null;versionNumber:number|null}>}>().generations.filter(generation=>generation.provider==="gemini"&&generation.artifactVersionId!==null);
     expect(generations).toHaveLength(providerModules.length);
     expect(generations.every(generation=>generation.model===GEMINI_ANALYSIS_MODEL&&generation.status==="COMPLETED"&&generation.versionNumber!==null)).toBe(true);
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("no repite la llamada física de Gemini para un manuscrito tras un 503",async()=>{
+    const fetchMock=vi.fn(async()=>new Response(JSON.stringify({error:{message:"temporary unavailable"}}),{status:503,headers:{"content-type":"application/json"}}));
+    app=await createApp({databasePath:":memory:",serveFrontend:false,gemini:{apiKey:"gemini-one-shot-key",fetch:fetchMock as typeof fetch}});
+    const demo=(await app.inject({method:"POST",url:"/api/demo/projects"})).json<{project:Project}>();
+    const response=await app.inject({method:"POST",url:`/api/projects/${demo.project.id}/modules/final_product/run`,payload:{provider:"gemini"}});
+    expect(response.statusCode).not.toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

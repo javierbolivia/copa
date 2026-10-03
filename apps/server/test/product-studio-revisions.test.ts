@@ -1,4 +1,4 @@
-import type { ProductBlock, ProductDocument, Project, ProjectSettings } from "@our-platform/shared";
+import type { ModuleResult, ProductBlock, ProductDocument, Project, ProjectSettings } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -17,6 +17,14 @@ describe("Product Studio revision integrity", () => {
     const demo = await app.inject({ method: "POST", url: "/api/demo/projects" });
     expect(demo.statusCode, demo.body).toBe(201);
     const project = demo.json<{ project: Project }>().project;
+    const settingsUrl = `/api/projects/${project.id}/settings`;
+    const settings = (await app.inject({ method: "GET", url: settingsUrl })).json<ProjectSettings>();
+    const { projectId: _, updatedAt: __, ...settingsInput } = settings;
+    const configured = await app.inject({
+      method: "PUT", url: settingsUrl,
+      payload: { ...settingsInput, preferredLlmProvider: "mock" },
+    });
+    expect(configured.statusCode, configured.body).toBe(200);
     const created = await app.inject({
       method: "POST", url: `/api/projects/${project.id}/product-documents`,
       payload: { documentType: "ebook", language: "es", length: "short", level: "beginner" },
@@ -76,6 +84,37 @@ describe("Product Studio revision integrity", () => {
     expect(generated.statusCode, generated.body).toBe(409);
     const current = (await app.inject({ method: "GET", url: base })).json<ProductDocument>();
     expect(current.version).toEqual(edited!.version);
+  });
+
+  it("does not publish an outline if an upstream Avatar draft appears during generation", async () => {
+    const initial = await action("outline/generate");
+    await enableFakeProvider(initial.projectId);
+    const avatarUrl = `/api/projects/${initial.projectId}/modules/avatar`;
+    const avatar = (await app.inject({ method: "GET", url: avatarUrl }))
+      .json<{ results: ModuleResult[] }>().results[0]!;
+    providerCall = async () => {
+      const pending = await app.inject({
+        method: "POST",
+        url: `${avatarUrl}/drafts`,
+        payload: {
+          expectedBaseVersionId: avatar.versionId,
+          sourceVersionId: avatar.versionId,
+          outputData: avatar.outputData,
+        },
+      });
+      expect(pending.statusCode, pending.body).toBe(201);
+      return providerResponse({ chapters: [
+        { title: "Inicio", objective: "Aprender", targetWords: 300 },
+        { title: "Acción", objective: "Aplicar", targetWords: 300 },
+      ] });
+    };
+
+    const generated = await app.inject({ method: "POST", url: `${base}/outline/generate`, payload: {} });
+
+    expect(generated.statusCode).toBe(409);
+    expect(generated.json().message).toContain("Avatar tiene un borrador vigente pendiente de aprobación");
+    const current = (await app.inject({ method: "GET", url: base })).json<ProductDocument>();
+    expect(current.version).toEqual(initial.version);
   });
 
   it("preserves chapter edits made while regeneration awaits the provider", async () => {

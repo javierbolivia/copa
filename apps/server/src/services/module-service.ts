@@ -1,11 +1,14 @@
 import {validateFunnelOutput} from "./funnel-output-validator.js";
 import {validateLandingOutput} from "./landing-output-validator.js";
 import {validateOfferOutput} from "./offer-output-validator.js";
+import {validateFinalProductOutput} from "./final-product-output-validator.js";
+import {recordFinalProductReview, finalProductReviewStatus} from "./final-product-review.js";
+import type {FinalProductReviewInput} from "@our-platform/shared";
 import {validateBeliefsOutput} from "./beliefs-output-validator.js";
 import {validateMechanismOutput} from "./mechanism-output-validator.js";
 import {AVATAR_FIELDS} from "@our-platform/shared";
 import {validateAvatarOutput} from "./avatar-output-validator.js";
-import type { ArtifactVersion, LlmGenerateRequest, LlmGenerateResult, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
+import type { ArtifactVersion, LlmGenerateRequest, LlmGenerateResult, LlmPhysicalRequestUsage, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -83,6 +86,7 @@ interface ProviderAttemptAudit {
   readonly responseId?: string;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly physicalRequests?: readonly LlmPhysicalRequestUsage[];
   readonly outcome: "usable" | "empty" | "error" | "budget_exceeded";
   readonly errorCode?: string;
   readonly errorMessage?: string;
@@ -157,7 +161,7 @@ function providerAttemptFromError(stage: ProviderStage, attempt: number, error: 
   const base = { stage, attempt, ...(batch ? { batch } : {}) };
   if (error instanceof IntegrationError && error.code === "request_budget_exceeded") return { ...base, outcome: "budget_exceeded", errorCode: error.code, errorMessage: error.message, retryable: false };
   if (error instanceof GeminiResponseError) return { ...base, ...error.diagnostics, outcome: "empty", errorCode: error.code, errorMessage: error.message, retryable: false };
-  if (error instanceof IntegrationError) return { ...base, ...(error.status === undefined ? {} : { httpStatus: error.status }), outcome: "error", errorCode: error.code, errorMessage: error.message, retryable: error.retryable };
+  if (error instanceof IntegrationError) return { ...base, ...(error.status === undefined ? {} : { httpStatus: error.status }), ...(error.physicalRequests ? { physicalRequests: error.physicalRequests } : {}), outcome: "error", errorCode: error.code, errorMessage: error.message, retryable: error.retryable };
   return { ...base, outcome: "error", errorCode: "generation_error", errorMessage: error instanceof Error ? error.message : "La generación falló.", retryable: false };
 }
 
@@ -246,14 +250,14 @@ export class ModuleService {
     }:version);
   }
 
-  saveDraft(projectId:string,key:ModuleKey,outputData:unknown,expectedBaseVersionId?:string,sourceVersionId?:string):ModuleResult {
+  saveDraft(projectId:string,key:ModuleKey,outputData:unknown,expectedBaseVersionId?:string,sourceVersionId?:string, factualReview?:FinalProductReviewInput):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
     if(!isCanonicalModuleOutput(key,outputData)){
       if(key==="opportunities")throw new Error("Para editar Oportunidades se requieren los nueve scores válidos (0–100), selectedId y referencias estructuradas. Si esta versión histórica no tiene scores, regenera Oportunidades; el histórico se conserva sin cambios.");
       throw new Error("Los cambios no conservan el contrato estructurado del módulo.");
     }
     const activePointer=this.activeVersion(projectId,key);
-    if(sourceVersionId&&key!=="product"&&key!=="avatar"&&key!=="mechanism"&&key!=="beliefs"&&key!=="offer"&&key!=="landing"&&key!=="funnel")throw new Error("La edición desde una versión concreta solo está disponible para Producto, Avatar, Mecanismo, Creencias, Oferta, Landing y Funnel.");
+    if(sourceVersionId&&key!=="product"&&key!=="avatar"&&key!=="mechanism"&&key!=="beliefs"&&key!=="offer"&&key!=="landing"&&key!=="funnel"&&key!=="content"&&key!=="final_product")throw new Error("La edición desde una versión concreta no está disponible para este módulo.");
     const active=sourceVersionId?this.artifacts.getVersion(sourceVersionId):activePointer;
     if(!active||active.projectId!==projectId||active.artifactType!==key)throw new Error("La versión de origen no existe en este módulo.");
     if(sourceVersionId){
@@ -279,13 +283,20 @@ export class ModuleService {
     if(key==="beliefs"){const validation=validateBeliefsOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
     if(key==="mechanism"){const validation=validateMechanismOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
     if(key==="avatar"){const validation=validateAvatarOutput(outputData,this.avatarEvidence(active));if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));normalizedOutput=validation.output;}
+    if(key==="final_product")normalizedOutput=validateFinalProductOutput(outputData).output;
     if(key==="problems")normalizedOutput=this.validateProblemDraft(active,outputData);
     if(key==="opportunities"){
       assertOpportunityReferences(outputData,this.parentOutput(projectId,current.versionId,"problems"));
       normalizedOutput=applyOpportunityScoring(asRecord(outputData));
     }
-    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"?(activePointer?.id??null):current.versionId,...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing")?{editingSourceVersionId:active.id}:{}),source:"user"},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product"?(activePointer?.id??null):current.versionId,...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product")?{editingSourceVersionId:active.id}:{}),source:"user",...(key==="final_product"?{finalProductFactualReview:factualReview?recordFinalProductReview(normalizedOutput,factualReview):null}:{})},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
     return this.toResult(version);
+  }
+
+  reviewFinalProduct(projectId:string,versionId:string,input:FinalProductReviewInput):ModuleResult {
+    const version=this.artifacts.getVersion(versionId);
+    if(!version||version.projectId!==projectId||version.artifactType!=="final_product")throw new Error("El manuscrito no existe en este proyecto.");
+    return this.saveDraft(projectId,"final_product",version.outputData,undefined,version.id,input);
   }
 
   approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
@@ -356,6 +367,17 @@ export class ModuleService {
       if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Avatar más reciente; revisa el perfil activo antes de aprobar.");
       const validation=this.validatePersistedAvatar(version);
       if(!validation.audit.ok)throw new Error(validation.audit.errors.join("; "));
+    }:key==="content"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Contenido más reciente; revisa el borrador antes de aprobar.");
+    }:key==="final_product"?()=>{
+      const snapshot=asRecord(version.inputSnapshot);
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      if(version.status==="draft"&&(expected===undefined||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay un Producto final más reciente; revisa el borrador antes de aprobarlo.");
+      const validation=validateFinalProductOutput(version.outputData);
+      if(!validation.audit.ok)throw new Error(`Producto final incompleto; no se puede aprobar ni exportar: ${validation.audit.errors.join("; ")}`);
+      if(finalProductReviewStatus(version.outputData,version.inputSnapshot).status!=="RECORDED")throw new Error("Registra una revisión factual explícita de fuentes y afirmaciones para este manuscrito antes de aprobarlo o exportarlo.");
     }:key==="product"&&version.status==="draft"?()=>{
       const snapshot=asRecord(version.inputSnapshot);
       const expected=snapshot.editedFromVersionId;
@@ -439,6 +461,28 @@ export class ModuleService {
     const researchFocusAtStart=key==="problems"||key==="research"?(this.settings.researchFocus(projectId)?.value??null):null;
 
     const parentIds: string[] = [];const parentOutputs:Partial<Record<ModuleKey,unknown>>={};
+    const upstreamKeys=[...definition.parents,...(definition.optionalParents??[])];
+    if(!validation&&upstreamKeys.includes("avatar")&&this.hasCurrentDraft(projectId,"avatar")){
+      throw new Error("Avatar tiene un borrador vigente pendiente de aprobación; revisa el perfil y sus citas antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("beliefs")&&this.hasCurrentDraft(projectId,"beliefs")){
+      throw new Error("Creencias tiene un borrador vigente pendiente de aprobación; revisa sus afirmaciones antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("mechanism")&&this.hasCurrentDraft(projectId,"mechanism")){
+      throw new Error("Mecanismo tiene un borrador vigente pendiente de aprobación; revisa ese borrador antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("offer")&&this.hasCurrentDraft(projectId,"offer")){
+      throw new Error("Oferta tiene un borrador vigente pendiente de aprobación; revisa esa propuesta antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("landing")&&this.hasCurrentDraft(projectId,"landing")){
+      throw new Error("Landing tiene un borrador vigente pendiente de aprobación; revisa el contenido antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("funnel")&&this.hasCurrentDraft(projectId,"funnel")){
+      throw new Error("Funnel tiene un borrador vigente pendiente de aprobación; revisa las integraciones antes de generar etapas dependientes.");
+    }
+    if(!validation&&upstreamKeys.includes("content")&&this.hasCurrentDraft(projectId,"content")){
+      throw new Error("Contenido tiene un borrador vigente pendiente de aprobación; revísalo antes de generar el producto final.");
+    }
     for (const parentKey of definition.parents) {
       let parent = this.get(projectId, parentKey);
       if (!validation && !parent && parentKey === "sources") {
@@ -498,6 +542,7 @@ export class ModuleService {
     let structuredOutputDiagnostics: LlmGenerateResult<Record<string, unknown>>["structuredOutputDiagnostics"];
     let providerInput: Record<string, unknown> | undefined;
     let providerEvidenceAudit: ProviderEvidenceAudit | undefined;
+    let opportunityEvidenceResolutionAudit: OpportunityEvidenceResolutionAudit | undefined;
     let geminiProjectionAudits: GeminiPayloadProjectionAudit[] = [];
     const providerAttempts: ProviderAttemptAudit[] = [];
     const geminiBudget = selectedProvider === "gemini" && (key === "research" || key === "problems")
@@ -516,10 +561,18 @@ export class ModuleService {
         ? error.code
         : error instanceof Error ? error.name : "generation_error";
       const failedAttempt = providerAttempts.at(-1);
+      const physicalRequests = providerAttempts.flatMap((attempt) => attempt.physicalRequests ?? []);
+      const inputTokens = physicalRequests.length
+        ? physicalRequests.reduce((sum, request) => sum + (request.inputTokens ?? 0), 0)
+        : failedAttempt?.inputTokens ?? 0;
+      const outputTokens = physicalRequests.length
+        ? physicalRequests.reduce((sum, request) => sum + (request.outputTokens ?? 0), 0)
+        : failedAttempt?.outputTokens ?? 0;
+      const estimatedCost = inputTokens || outputTokens ? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options) : 0;
       this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?,?)`).run(
         generationId, projectId, agentKey, selectedProvider, model,
         JSON.stringify({ parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model, promptHash, promptPath, ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}), ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}), providerAttempts, ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}), context: lastProviderInput ?? providerInput }),
-        promptVersion, failedAttempt?.inputTokens ?? 0, failedAttempt?.outputTokens ?? 0, 0, Date.now() - startedAt, code, message, now, now,
+        promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, code, message, now, now,
       );
     };
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek"||selectedProvider==="groq"||selectedProvider==="openrouter") && key !== "sources") {
@@ -580,14 +633,14 @@ export class ModuleService {
           : { payload: input, systemInstructions, audit: undefined };
         if (projected.audit) geminiProjectionAudits.push(projected.audit);
         lastProviderInput = projected.payload;
-        const maxAttempts = selectedProvider === "gemini" ? GEMINI_MAX_ATTEMPTS : 1;
+        const maxAttempts = selectedProvider === "gemini" && key !== "final_product" ? GEMINI_MAX_ATTEMPTS : 1;
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
             geminiBudget?.reserve(stage, attempt > 1);
             const defaultMaxTokens = (key === "opportunities" || selectedProvider === "deepseek") ? 16_000 : 8_000;
             const result = await providerClient.generate<Record<string, unknown>>({ provider:selectedProvider, model, systemInstructions:projected.systemInstructions, input:JSON.stringify(projected.payload), structuredOutput, maxOutputTokens:defaultMaxTokens });
             const diagnostics = result.providerDiagnostics ?? {};
-            providerAttempts.push({ stage, attempt, ...(batch ? { batch } : {}), ...(typeof diagnostics.httpStatus === "number" ? { httpStatus: diagnostics.httpStatus } : {}), ...(typeof diagnostics.candidateCount === "number" ? { candidateCount: diagnostics.candidateCount } : {}), ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), outcome: "usable" });
+            providerAttempts.push({ stage, attempt, ...(batch ? { batch } : {}), ...(typeof diagnostics.httpStatus === "number" ? { httpStatus: diagnostics.httpStatus } : {}), ...(typeof diagnostics.candidateCount === "number" ? { candidateCount: diagnostics.candidateCount } : {}), ...(typeof diagnostics.blockReason === "string" ? { blockReason: diagnostics.blockReason } : {}), ...(typeof diagnostics.finishReason === "string" ? { finishReason: diagnostics.finishReason } : {}), ...(typeof diagnostics.responseId === "string" ? { responseId: diagnostics.responseId } : {}), ...(result.usage.inputTokens === undefined ? {} : { inputTokens: result.usage.inputTokens }), ...(result.usage.outputTokens === undefined ? {} : { outputTokens: result.usage.outputTokens }), ...(result.structuredOutputDiagnostics?.physicalRequests ? { physicalRequests: result.structuredOutputDiagnostics.physicalRequests } : {}), outcome: "usable" });
             return result;
           } catch (error) {
             providerAttempts.push(providerAttemptFromError(stage, attempt, error, batch));
@@ -871,7 +924,11 @@ export class ModuleService {
       output.isDemo = counts.allDemo === 1;
     }
     if(key==="opportunities"){
-      if(parentOutputs.problems)output=reconcileOpportunityEvidence(output,parentOutputs.problems);
+      if(parentOutputs.problems){
+        const reconciliation=reconcileOpportunityEvidence(output,parentOutputs.problems,selectedProvider);
+        output=reconciliation.output;
+        opportunityEvidenceResolutionAudit=reconciliation.audit;
+      }
       assertOpportunityReferences(output,parentOutputs.problems);
       output=applyOpportunityScoring(output);
     }
@@ -886,12 +943,54 @@ export class ModuleService {
       output = validation.output;
       artifactStatus = validation.audit.ok ? "approved" : "draft";
     }
-    if(key==="funnel"){const validation=validateFunnelOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
-    if(key==="landing"){const validation=validateLandingOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
-    if(key==="offer"){const validation=validateOfferOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
-    if(key==="beliefs"){const validation=validateBeliefsOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
-    if(key==="mechanism"){const validation=validateMechanismOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
-    if(key==="avatar"){const validation=validateAvatarOutput(output,evidence);output=validation.output;artifactStatus=validation.audit.ok?"approved":"draft";}
+    if(key==="funnel"){
+      const validation=validateFunnelOutput(output,evidence);
+      output=validation.output;
+      // Structural checks do not authorize checkout, tracking or external integrations.
+      artifactStatus="draft";
+    }
+    if(key==="landing"){
+      const validation=validateLandingOutput(output,evidence);
+      output=validation.output;
+      // Structural/reference checks do not verify marketing claims or publishing authorization.
+      artifactStatus="draft";
+    }
+    if(key==="offer"){
+      const validation=validateOfferOutput(output,evidence);
+      output=validation.output;
+      // Structural validation cannot authorize pricing, guarantees, or commercial claims.
+      artifactStatus="draft";
+    }
+    if(key==="beliefs"){
+      const validation=validateBeliefsOutput(output,evidence);
+      output=validation.output;
+      // This audit is structural and cannot establish semantic grounding.
+      artifactStatus="draft";
+    }
+    if(key==="mechanism"){
+      const validation=validateMechanismOutput(output,evidence);
+      output=validation.output;
+      // The current mechanism audit checks structure and reference membership,
+      // not semantic grounding or safety; generated interpretations need review.
+      artifactStatus="draft";
+    }
+    if(key==="content"){
+      // Distribution copy is public-facing and its schema cannot verify factual claims.
+      artifactStatus="draft";
+    }
+    if(key==="final_product"){
+      // Generated files remain unpublished until the proposed manuscript is reviewed.
+      const validation=validateFinalProductOutput(output);
+      output=validation.output;
+      artifactStatus="draft";
+    }
+    if(key==="avatar"){
+      const validation=validateAvatarOutput(output,evidence);
+      output=validation.output;
+      // This audit verifies structure and citation membership, not semantic
+      // grounding of the profile; generated interpretations require review.
+      artifactStatus="draft";
+    }
     if (key === "product") {
       const validation = validateProductOutput(output, {
         groundingSnapshot: productGroundingSnapshot!,
@@ -904,10 +1003,11 @@ export class ModuleService {
     const inputSnapshot = {
       ...(validation?{validationSessionId:validation.session.id,frozenSnapshotHash:validation.plan.snapshotHash,physicalRequests:validation.session.requests(),localPreprocessing:validation.plan.metrics}:{}),
       generationId,parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: persistedProvider, model,
-      ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel")?{activeVersionIdAtStart}:{}),
+      ...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product")?{activeVersionIdAtStart}:{}),
       ...(reportedModel ? { reportedModel } : {}), ...(promptHash ? { promptHash, promptPath } : {}),
       ...(structuredOutputDiagnostics ? { structuredOutputDiagnostics } : {}),
       ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}),
+      ...(opportunityEvidenceResolutionAudit ? { opportunityEvidenceResolution: opportunityEvidenceResolutionAudit } : {}),
       ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}),
       ...(providerAttempts.length ? { providerAttempts } : {}),
       ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}),
@@ -980,9 +1080,9 @@ export class ModuleService {
     }
 
     this.workflow.update(projectId, key, artifactStatus === "draft" ? "IN_PROGRESS" : "COMPLETED");
-    if (key === "landing") this.exporter.exportLanding(projectId, version.id, output);
-    if (key === "funnel") this.exporter.exportFunnel(projectId, version.id, output);
-    if (key === "final_product") this.exporter.exportFinalProduct(projectId, version.id, output);
+    if (key === "landing" && version.status === "approved") this.exporter.exportLanding(projectId, version.id, output);
+    if (key === "funnel" && version.status === "approved") this.exporter.exportFunnel(projectId, version.id, output);
+    if (key === "final_product" && version.status === "approved") this.exporter.exportFinalProduct(projectId, version.id, output);
     db.exec("COMMIT");
     return this.toResult(version);
     } catch(error){if(db.isTransaction)db.exec("ROLLBACK");if(createdVersionId)this.exporter.cleanupVersion(projectId,createdVersionId);throw error;}
@@ -992,6 +1092,18 @@ export class ModuleService {
     const row=this.db.connection.prepare(`SELECT active_version_id FROM artifacts
       WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1`).get(projectId,key) as {active_version_id:string|null}|undefined;
     return row?.active_version_id?this.artifacts.getVersion(row.active_version_id):undefined;
+  }
+
+  private hasCurrentDraft(projectId:string,key:ModuleKey):boolean {
+    const activeVersionId=this.activeVersion(projectId,key)?.id??null;
+    const drafts=this.db.connection.prepare(`SELECT version.input_snapshot FROM artifact_versions version
+      JOIN artifacts artifact ON artifact.id=version.artifact_id
+      WHERE version.project_id=? AND artifact.artifact_type=? AND version.status='draft' AND version.freshness='fresh'`).all(projectId,key) as unknown as Array<{input_snapshot:string}>;
+    return drafts.some(({input_snapshot})=>{
+      const snapshot=asRecord(JSON.parse(input_snapshot));
+      const expected=snapshot.source==="user"?snapshot.editedFromVersionId:snapshot.activeVersionIdAtStart;
+      return expected===undefined||expected===activeVersionId;
+    });
   }
 
   private validateProblemDraft(version:ArtifactVersion,outputData:unknown):Record<string,unknown>{
@@ -1050,6 +1162,28 @@ export class ModuleService {
   private assertActivationContext(projectId:string,key:ModuleKey,parentIds:readonly string[],expectedActiveVersionId:string|null,expectedResearchFocus:string|null):void {
     const current=this.db.connection.prepare("SELECT active_version_id FROM artifacts WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1").get(projectId,key) as {active_version_id:string|null}|undefined;
     if((current?.active_version_id??null)!==expectedActiveVersionId)throw new Error("La versión activa cambió durante la generación; vuelve a ejecutar el módulo.");
+    const definition=getModule(key);
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("avatar")&&this.hasCurrentDraft(projectId,"avatar")){
+      throw new Error("Avatar tiene un borrador vigente pendiente de aprobación; revisa el perfil y sus citas antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("beliefs")&&this.hasCurrentDraft(projectId,"beliefs")){
+      throw new Error("Creencias tiene un borrador vigente pendiente de aprobación; revisa sus afirmaciones antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("mechanism")&&this.hasCurrentDraft(projectId,"mechanism")){
+      throw new Error("Mecanismo tiene un borrador vigente pendiente de aprobación; revisa ese borrador antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("offer")&&this.hasCurrentDraft(projectId,"offer")){
+      throw new Error("Oferta tiene un borrador vigente pendiente de aprobación; revisa esa propuesta antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("landing")&&this.hasCurrentDraft(projectId,"landing")){
+      throw new Error("Landing tiene un borrador vigente pendiente de aprobación; revisa el contenido antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("funnel")&&this.hasCurrentDraft(projectId,"funnel")){
+      throw new Error("Funnel tiene un borrador vigente pendiente de aprobación; revisa las integraciones antes de generar etapas dependientes.");
+    }
+    if(definition&&[...definition.parents,...(definition.optionalParents??[])].includes("content")&&this.hasCurrentDraft(projectId,"content")){
+      throw new Error("Contenido tiene un borrador vigente pendiente de aprobación; revísalo antes de generar el producto final.");
+    }
     if((key==="problems"||key==="research")&&(this.settings.researchFocus(projectId)?.value??null)!==expectedResearchFocus){
       throw new Error(`El Research Focus cambió durante la generación; vuelve a ejecutar ${key==="research"?"Investigación":"Problemas"}.`);
     }
@@ -1150,7 +1284,7 @@ export class ModuleService {
       versionNumber: version.versionNumber,
       freshness: invalidProduct?"stale":version.freshness,
       status: invalidProduct?"draft":version.status,
-      outputData: version.artifactType==="funnel"?{...asRecord(version.outputData),funnelValidationAudit:this.validatePersistedFunnel(version).audit}:version.artifactType==="landing"?{...asRecord(version.outputData),landingValidationAudit:this.validatePersistedLanding(version).audit}:version.artifactType==="offer"?{...asRecord(version.outputData),offerValidationAudit:this.validatePersistedOffer(version).audit}:version.artifactType==="beliefs"?{...asRecord(version.outputData),beliefsValidationAudit:this.validatePersistedBeliefs(version).audit}:version.artifactType==="mechanism"?{...asRecord(version.outputData),mechanismValidationAudit:this.validatePersistedMechanism(version).audit}:version.artifactType==="avatar"?{...asRecord(version.outputData),avatarValidationAudit:this.validatePersistedAvatar(version).audit}:version.artifactType==="product"&&(asRecord(version.inputSnapshot).source==="user"||!asRecord(version.outputData).productValidationAudit)?{...asRecord(version.outputData),productValidationAudit:this.validatePersistedProduct(version).audit}:version.outputData,
+      outputData: version.artifactType==="final_product"?{...asRecord(version.outputData),finalProductFactualReview:finalProductReviewStatus(version.outputData,version.inputSnapshot)}:version.artifactType==="funnel"?{...asRecord(version.outputData),funnelValidationAudit:this.validatePersistedFunnel(version).audit}:version.artifactType==="landing"?{...asRecord(version.outputData),landingValidationAudit:this.validatePersistedLanding(version).audit}:version.artifactType==="offer"?{...asRecord(version.outputData),offerValidationAudit:this.validatePersistedOffer(version).audit}:version.artifactType==="beliefs"?{...asRecord(version.outputData),beliefsValidationAudit:this.validatePersistedBeliefs(version).audit}:version.artifactType==="mechanism"?{...asRecord(version.outputData),mechanismValidationAudit:this.validatePersistedMechanism(version).audit}:version.artifactType==="avatar"?{...asRecord(version.outputData),avatarValidationAudit:this.validatePersistedAvatar(version).audit}:version.artifactType==="product"&&(asRecord(version.inputSnapshot).source==="user"||!asRecord(version.outputData).productValidationAudit)?{...asRecord(version.outputData),productValidationAudit:this.validatePersistedProduct(version).audit}:version.outputData,
       createdAt: version.createdAt,
     };
   }
@@ -1315,24 +1449,47 @@ function problemEvidenceIds(problem:Record<string,unknown>):Set<string>{
   return ids;
 }
 
-function reconcileOpportunityEvidence(output:Record<string,unknown>,problemsOutput:unknown):Record<string,unknown>{
+type OpportunityEvidenceResolutionAudit={
+  version:1;
+  generationProvider:string;
+  items:Array<{
+    opportunityId:string;
+    problemId:string;
+    providerEvidenceIds:string[];
+    acceptedProviderEvidenceIds:string[];
+    rejectedProviderEvidenceIds:string[];
+    persistedEvidenceIds:string[];
+    resolution:"provider_selected"|"backend_fallback_first_parent_ids"|"no_parent_evidence"|"problem_parent_missing";
+  }>;
+};
+
+function reconcileOpportunityEvidence(output:Record<string,unknown>,problemsOutput:unknown,generationProvider:string):{output:Record<string,unknown>;audit:OpportunityEvidenceResolutionAudit}{
   const problems=asRecord(problemsOutput);
   const problemItems=Array.isArray(problems.items)?problems.items.map(asRecord):[];
   const problemById=new Map(problemItems.filter((item)=>typeof item.id==="string").map((item)=>[item.id as string,item]));
-  if(!Array.isArray(output.items))return output;
+  const auditItems:OpportunityEvidenceResolutionAudit["items"]=[];
+  if(!Array.isArray(output.items))return {output,audit:{version:1,generationProvider,items:auditItems}};
   const items=output.items.map((raw)=>{
     if(typeof raw!=="object"||raw===null||Array.isArray(raw))return raw;
     const item=raw as Record<string,unknown>;
     const problemId=typeof item.problemId==="string"?item.problemId:"";
+    const providerEvidenceIds=Array.isArray(item.evidenceIds)?item.evidenceIds.filter((id):id is string=>typeof id==="string"):[];
     const problem=problemById.get(problemId);
-    if(!problem)return item;
+    if(!problem){
+      auditItems.push({opportunityId:String(item.id??""),problemId,providerEvidenceIds,acceptedProviderEvidenceIds:[],rejectedProviderEvidenceIds:providerEvidenceIds,persistedEvidenceIds:providerEvidenceIds,resolution:"problem_parent_missing"});
+      return item;
+    }
     const allowedEvidence=problemEvidenceIds(problem);
-    const rawEvidenceIds=Array.isArray(item.evidenceIds)?item.evidenceIds:[];
-    const validEvidenceIds=rawEvidenceIds.filter((id):id is string=>typeof id==="string"&&allowedEvidence.has(id));
-    const evidenceIds=validEvidenceIds.length>0?validEvidenceIds:[...allowedEvidence].slice(0,Math.min(5,allowedEvidence.size));
+    const acceptedProviderEvidenceIds=providerEvidenceIds.filter((id)=>allowedEvidence.has(id));
+    const rejectedProviderEvidenceIds=providerEvidenceIds.filter((id)=>!allowedEvidence.has(id));
+    const usedFallback=acceptedProviderEvidenceIds.length===0;
+    const persistedEvidenceIds=usedFallback?[...allowedEvidence].slice(0,Math.min(5,allowedEvidence.size)):acceptedProviderEvidenceIds;
+    const resolution:OpportunityEvidenceResolutionAudit["items"][number]["resolution"]=usedFallback?(allowedEvidence.size>0?"backend_fallback_first_parent_ids":"no_parent_evidence"):"provider_selected";
+    auditItems.push({opportunityId:String(item.id??""),problemId,providerEvidenceIds,acceptedProviderEvidenceIds,rejectedProviderEvidenceIds,persistedEvidenceIds,resolution});
+    const evidenceIds=persistedEvidenceIds;
     return {...item,evidenceIds};
   });
-  return {...output,items};
+  return {output:{...output,items},audit:{version:1,generationProvider,items:auditItems}};
 }
 
 function contextualize(output:Record<string,unknown>,key:ModuleKey,niche:string,evidence:Array<{id:string;quoteText:string}>):Record<string,unknown>{
@@ -1436,7 +1593,7 @@ function createContextOutput(key:ModuleKey,niche:string,evidence:Array<{id:strin
      {from:"downsell",to:"thanks",event:"complete",label:"Finalizar solo tras definir el proceso de entrega"}
    ],paymentsEnabled:false,evidenceIds:offer?.evidenceIds??ids},
   content:{schemaVersion:1,offerName:offer?.name,audience:avatar?.name,mechanism:mechanism?.mechanism,centralThesis:beliefs?.centralThesis,calendar:[{day:1,type:"educational",channel:"Facebook",hook:`El primer paso para ${offer?.promise??niche}`,body:mechanism?.simpleExplanation??"Empieza por definir un resultado observable.",cta:`Descubre ${offer?.name??"el Ebook"}`},{day:3,type:"objection",channel:"Facebook",hook:(beliefs?.objections??[])[0]??"No necesitas resolver todo hoy",body:(beliefs?.arguments??[])[0]??"Elige una acción acotada y revísala.",cta:`Conoce el enfoque de ${offer?.name??"el Ebook"}`}],hooks:[beliefs?.centralThesis??`Una forma más clara de abordar ${niche}`],channels:["Facebook"],evidenceIds:offer?.evidenceIds??ids},
-  final_product:{schemaVersion:1,files:[],guide:{title:selectedProduct?.name??offer?.name??`Ebook: ${niche}`,chapters:selectedProduct?.modules??["Capítulo 1: Diagnóstico","Capítulo 2: Plan","Capítulo 3: Implementación","Capítulo 4: Casos Prácticos"]},checklist:["Definir resultado","Revisar evidencia","Elegir acción","Registrar avance"],workbook:["Situación actual","Objetivo","Plan de acción del libro"],miniTool:{title:`Planificador del Ebook: ${niche}`,fields:["Objetivo","Próxima acción","Fecha de revisión"]},evidenceIds:selectedProduct?.evidenceIds??offer?.evidenceIds??ids},
+  final_product:{schemaVersion:1,files:[],guide:{title:selectedProduct?.name??offer?.name??`Ebook: ${niche}`,introduction:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. No es contenido editorial listo para publicar.",chapters:(selectedProduct?.modules??["Diagnóstico","Plan","Implementación","Casos prácticos"]).map((title:string)=>({title,content:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. Este espacio ilustra la estructura y debe sustituirse por contenido desarrollado antes de aprobar o exportar.",evidenceIds:[]})),conclusion:"MUESTRA SINTÉTICA DE DEMOSTRACIÓN. No es contenido editorial listo para publicar."},checklist:["Definir resultado","Revisar evidencia","Elegir acción","Registrar avance"],workbook:["Situación actual","Objetivo","Plan de acción del libro"],miniTool:{title:`Planificador del Ebook: ${niche}`,fields:["Objetivo","Próxima acción","Fecha de revisión"]},evidenceIds:selectedProduct?.evidenceIds??offer?.evidenceIds??ids},
  };
  return outputs[key] ?? {};
 }

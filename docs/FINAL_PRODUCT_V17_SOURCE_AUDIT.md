@@ -1,10 +1,10 @@
-# Revisión de fuentes del manuscrito v16
+# Revisión de fuentes del manuscrito v17
 
-Proyecto local: **Perros Reactivos – Seed QA**. Versión: `01a1030a-35fb-75c4-ae11-5ae78321f5fa` (3 de octubre de 2026).
+Proyecto local: **Perros Reactivos – Seed QA**. Versión aprobada: `01a10332-8675-7129-a946-051f5ba6a0d7` (v17, 3 de octubre de 2026). Deriva del borrador v16 `01a1030a-35fb-75c4-ae11-5ae78321f5fa`.
 
 ## Alcance y resultado
 
-Se abrieron las cinco referencias públicas y se contrastaron los nueve puntos de cita en línea de la v16 con el contenido de esas páginas. Los pasajes citados sobre entrenamiento, manejo ambiental, elección de profesional y posible dolor son coherentes con las fuentes indicadas. Esto es una comprobación editorial puntual, no una revisión veterinaria ni la atestación humana de todas las afirmaciones del manuscrito. La revisión factual de la aplicación permanece **PENDING** y la v16 permanece **draft/fresh**.
+Se abrieron las cinco referencias públicas y se contrastaron los nueve puntos de cita en línea de la v16 con el contenido de esas páginas: doce pares pasaje-fuente al desglosar las citas múltiples. Los pasajes citados sobre entrenamiento, manejo ambiental, elección de profesional y posible dolor son coherentes con las fuentes indicadas. La aplicación registró esa revisión como **ASSISTANT_SOURCE_AUDIT** en v17, que está **approved/fresh**. Es una comprobación editorial asistida, no una revisión veterinaria ni una atestación humana.
 
 | ID | Fuente consultada | Qué respalda en el manuscrito | Límite |
 | --- | --- | --- | --- |
@@ -20,6 +20,8 @@ Se abrieron las cinco referencias públicas y se contrastaron los nueve puntos d
 - Se redujo el workbook de diez a cinco recursos, eliminando cinco variantes repetidas.
 - La conclusión ya habla de «la guía» en lugar de «el borrador».
 
-## Pendiente para publicación
+## Estado de entrega y límite para publicación
 
-Una persona debe leer la v16 completa, contrastar también las afirmaciones sin cita explícita y valorar el contenido con criterio veterinario/conductual apropiado antes de marcar en la aplicación que revisó **todas** las afirmaciones. Después deberá registrar extractos y notas honestas, aprobar la versión resultante y comprobar los archivos exportados. El validador estructural (`ok=true`, 9 capítulos, 5 referencias, 3.717 palabras) no sustituye esos pasos.
+La v17 contiene 9 capítulos, 5 referencias y 3.717 palabras; la auditoría estructural está aprobada. Se comprobaron por descarga los cuatro archivos generados para v17 (`guide.md`, `checklist.md`, `workbook.md`, `mini-tool.html`): todos responden correctamente e identifican la revisión como asistida. La página local muestra v17 como aprobada y vigente.
+
+Antes de distribución pública, una persona debe leer el manuscrito completo, contrastar también las afirmaciones sin cita explícita y valorar el contenido con criterio veterinario/conductual apropiado. La aprobación interna no implica validación clínica, certificación profesional ni publicación externa.

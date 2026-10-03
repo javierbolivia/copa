@@ -54,6 +54,14 @@ export class ArtifactRepository {
       db.exec("COMMIT");return this.getVersion(id);
     }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
+  archiveDraft(projectId:string,id:string):ArtifactVersion|undefined {
+    const db=this.database.connection;
+    const version=this.getVersion(id);
+    if(!version||version.projectId!==projectId)return undefined;
+    if(version.status!=="draft")throw new Error("Sólo un borrador puede archivarse; la versión aprobada permanece activa.");
+    db.prepare("UPDATE artifact_versions SET status='archived' WHERE id=? AND project_id=? AND status='draft'").run(id,projectId);
+    return this.getVersion(id);
+  }
   private propagateStale(oldId:string,newId:string,projectId:string,now:string):void {
     const descendants=this.database.connection.prepare(`WITH RECURSIVE d(id) AS (SELECT child_version_id FROM lineage_edges WHERE parent_version_id=? UNION SELECT le.child_version_id FROM lineage_edges le JOIN d ON le.parent_version_id=d.id) SELECT DISTINCT d.id,a.artifact_type FROM d JOIN artifact_versions v ON v.id=d.id JOIN artifacts a ON a.id=v.artifact_id`).all(oldId) as unknown as Array<{id:string;artifact_type:string}>;
     const update=this.database.connection.prepare("UPDATE artifact_versions SET freshness='stale', stale_reason=? WHERE id=?");

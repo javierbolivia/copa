@@ -236,6 +236,8 @@ export const api = {
       `/api/projects/${id}/modules/${key}/versions/${versionId}/approve`,
       json("POST"),
     ),
+  archiveModuleDraft: (id: string, key: ModuleKey, versionId: string) =>
+    request<ModuleResult>(`/api/projects/${id}/modules/${key}/versions/${versionId}/archive`, json("POST")),
   reviewFinalProduct: (id: string, versionId: string, input: import("@our-platform/shared").FinalProductReviewInput) =>
     request<ModuleResult>(`/api/projects/${id}/modules/final_product/versions/${versionId}/factual-review`, json("POST", input)),
   traceability: (id: string, versionId: string) =>

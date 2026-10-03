@@ -104,4 +104,13 @@ export function registerModuleRoutes(
       catch(error){return reply.code(409).send({error:"approval_blocked",message:error instanceof Error?error.message:"No se pudo aprobar la versión."});}
     },
   );
+  app.post<{Params:{id:string;key:ModuleKey;versionId:string};Reply:ModuleResult|ApiError}>(
+    "/api/projects/:id/modules/:key/versions/:versionId/archive",
+    {schema:{params:VersionParamsSchema,response:{200:ModuleResultSchema,404:ApiErrorSchema,409:ApiErrorSchema}}},
+    async(request,reply)=>{
+      try{return modules.archiveDraft(request.params.id,request.params.key,request.params.versionId)
+        ?? reply.code(404).send({error:"not_found",message:"El borrador no existe en este módulo."});}
+      catch(error){return reply.code(409).send({error:"archive_blocked",message:error instanceof Error?error.message:"No se pudo archivar el borrador."});}
+    },
+  );
 }

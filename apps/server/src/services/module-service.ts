@@ -299,6 +299,13 @@ export class ModuleService {
     return this.saveDraft(projectId,"final_product",version.outputData,undefined,version.id,input);
   }
 
+  archiveDraft(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
+    const version=this.artifacts.getVersion(versionId);
+    if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
+    const archived=this.artifacts.archiveDraft(projectId,versionId);
+    return archived?this.toResult(archived):undefined;
+  }
+
   approve(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
     const version=this.artifacts.getVersion(versionId);if(!version||version.projectId!==projectId||version.artifactType!==key)return undefined;
     if(version.status==="draft"&&key==="opportunities"){

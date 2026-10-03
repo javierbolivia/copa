@@ -24,10 +24,17 @@ const props={
 };
 const render=(overrides={})=>renderToStaticMarkup(createElement(RefinedModuleOutput,{
   ...props,
+  ...(overrides.versions?{versions:overrides.versions}:{}),
   selected:{...props.selected,...overrides.selected,outputData:{...output,...overrides.outputData,...overrides.selected?.outputData}},
 }));
 
 describe("Final Product approval UI",()=>{
+  it("shows historical and current manuscript versions for explicit review",()=>{
+    const html=render({versions:[{...props.selected,versionId:"v15",versionNumber:15,status:"draft",freshness:"fresh"},{...props.selected,versionId:"v13",versionNumber:13,status:"approved",freshness:"stale"}]});
+    expect(html).toContain('aria-label="Versiones de Producto final"');
+    expect(html).toContain("Versión 15");
+    expect(html).toContain("Versión 13");
+  });
   it("requires source checks and explicit confirmations before submitting a human review",async()=>{
     const previous=globalThis.IS_REACT_ACT_ENVIRONMENT;globalThis.IS_REACT_ACT_ENVIRONMENT=true;
     const container=document.createElement("div");document.body.append(container);const root=createRoot(container);

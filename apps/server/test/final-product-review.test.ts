@@ -17,6 +17,15 @@ describe("version-bound factual review",()=>{
     expect(finalProductReviewStatus({...output,checklist:["Nueva recomendación"]},snapshot).status).toBe("PENDING");
     expect(manuscriptHash({...output,finalProductValidationAudit:{ok:true}})).toBe(manuscriptHash(output));
   });
+  it("records an assistant source audit without presenting it as human review",()=>{
+    const snapshot={source:"user",finalProductFactualReview:recordFinalProductReview(output,input,"ASSISTANT_SOURCE_AUDIT")};
+    expect(finalProductReviewStatus(output,snapshot)).toMatchObject({status:"RECORDED",kind:"ASSISTANT_SOURCE_AUDIT"});
+    expect(finalProductReviewStatus({...output,guide:{...output.guide,title:"Versión nueva"}},snapshot).status).toBe("PENDING");
+  });
+  it("requires assistant coverage for each distinct cited passage",()=>{
+    const distinct={...output,guide:{...output.guide,chapters:output.guide.chapters.map((chapter,index)=>index===0?{...chapter,content:"Afirmación distinta para otro capítulo. ".repeat(160)+"(R1, R2)"}:chapter)}};
+    expect(()=>recordFinalProductReview(distinct,input,"ASSISTANT_SOURCE_AUDIT")).toThrow("cada pasaje citado");
+  });
   it("rejects an unrelated source URL or a claim absent from the cited paragraph",()=>{
     expect(()=>recordFinalProductReview(output,{...input,checks:input.checks.map(check=>({...check,sourceUrl:"https://example.invalid/other"}))})).toThrow("URL");
     expect(()=>recordFinalProductReview(output,{...input,checks:input.checks.map(check=>({...check,manuscriptClaim:"Una afirmación que el manuscrito nunca hace."}))})).toThrow("párrafo");

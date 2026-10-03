@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
+import type { FinalProductReviewKind } from "./final-product-review.js";
 
 const escapeHtml=(value:unknown)=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!));
 const markdownText=(value:unknown)=>String(value??"").replace(/[\r\n]+/gu," ").replace(/[\\`*_{}\[\]()#+.!|>]/gu,"\\$&");
@@ -24,14 +25,15 @@ export class FileExporterService{
     this.write(projectId,versionId,"funnel","funnel.md",md),
   ];
  }
- exportFinalProduct(projectId:string,versionId:string,output:any):string[]{
+ exportFinalProduct(projectId:string,versionId:string,output:any,reviewKind?:FinalProductReviewKind):string[]{
   const chapters=Array.isArray(output.guide?.chapters)?output.guide.chapters:[];
   const references=Array.isArray(output.guide?.references)?output.guide.references:[];
   const referenceSection=references.length?`\n\n## Referencias\n\n${references.map((reference:any)=>`- ${markdownText(reference?.id)}. ${markdownText(reference?.organization)}. ${markdownText(reference?.title)}. ${httpsUrl(reference?.url)}`).join("\n")}`:"";
-  const guide=`# ${output.guide?.title??"Producto final"}\n\n${output.guide?.introduction??""}\n\n${chapters.map((chapter:any,i:number)=>`## ${i+1}. ${chapter?.title??chapter}\n\n${chapter?.content??""}`).join("\n\n")}\n\n${output.guide?.conclusion??""}${referenceSection}`;
-  const checklist=`# Checklist\n\n${(output.checklist??[]).map((x:string)=>`- [ ] ${x}`).join("\n")}`;
-  const workbook=`# Workbook\n\n${(output.workbook??[]).map((x:string)=>`## ${x}\n\nNotas: ______________________________`).join("\n\n")}`;
-  const tool=`<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(output.miniTool?.title)}</title><style>body{font:16px system-ui;max-width:700px;margin:40px auto;padding:20px}label{display:block;margin:18px 0}input{display:block;width:100%;padding:10px}</style><h1>${escapeHtml(output.miniTool?.title)}</h1>${(output.miniTool?.fields??[]).map((f:string)=>`<label>${escapeHtml(f)}<input></label>`).join("")}<button onclick="window.print()">Guardar plan</button></html>`;
+  const assistedNote=reviewKind==="ASSISTANT_SOURCE_AUDIT"?"> Revisión editorial asistida por IA. Material educativo; no equivale a evaluación humana o veterinaria ni a un plan individual.\n\n":"";
+  const guide=`${assistedNote}# ${output.guide?.title??"Producto final"}\n\n${output.guide?.introduction??""}\n\n${chapters.map((chapter:any,i:number)=>`## ${i+1}. ${chapter?.title??chapter}\n\n${chapter?.content??""}`).join("\n\n")}\n\n${output.guide?.conclusion??""}${referenceSection}`;
+  const checklist=`${assistedNote}# Checklist\n\n${(output.checklist??[]).map((x:string)=>`- [ ] ${x}`).join("\n")}`;
+  const workbook=`${assistedNote}# Workbook\n\n${(output.workbook??[]).map((x:string)=>`## ${x}\n\nNotas: ______________________________`).join("\n\n")}`;
+  const tool=`<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(output.miniTool?.title)}</title><style>body{font:16px system-ui;max-width:700px;margin:40px auto;padding:20px}label{display:block;margin:18px 0}input{display:block;width:100%;padding:10px}</style>${reviewKind==="ASSISTANT_SOURCE_AUDIT"?"<p>Revisión editorial asistida por IA. Material educativo; no equivale a evaluación humana o veterinaria ni a un plan individual.</p>":""}<h1>${escapeHtml(output.miniTool?.title)}</h1>${(output.miniTool?.fields??[]).map((f:string)=>`<label>${escapeHtml(f)}<input></label>`).join("")}<button onclick="window.print()">Guardar plan</button></html>`;
   return [this.write(projectId,versionId,"guide","guide.md",guide),this.write(projectId,versionId,"checklist","checklist.md",checklist),this.write(projectId,versionId,"workbook","workbook.md",workbook),this.write(projectId,versionId,"mini_html_tool","mini-tool.html",tool)];
  }
  list(projectId:string):Array<{id:string;projectId:string;artifactVersionId:string|null;fileRole:string;format:string;relativePath:string;checksum:string;bytes:number;createdAt:string;downloadUrl:string}>{

@@ -76,6 +76,12 @@ describe("Final Product approval UI",()=>{
 
     expect(html).toMatch(/<button[^>]*class="refinement-decision refinement-decision--approve"(?![^>]*disabled)/);
   });
+  it("identifies an assistant review without claiming a human reviewed the manuscript",()=>{
+    const html=render({outputData:{finalProductValidationAudit:{ok:true,errors:[]},finalProductFactualReview:{status:"RECORDED",kind:"ASSISTANT_SOURCE_AUDIT",notes:"Auditoría documental asistida."}}});
+    expect(html).toContain("Revisión editorial asistida registrada");
+    expect(html).toContain("no equivale a validación humana o veterinaria");
+    expect(html).not.toContain("Revisión humana registrada");
+  });
 
   it("shows the review scope and remaining release caveat",()=>{
     const html=render({outputData:{reviewNote:"Aprobación interna local; revisión profesional pendiente antes de distribución pública."}});

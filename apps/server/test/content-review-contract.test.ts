@@ -73,5 +73,16 @@ describe("public copy and final product review gates",()=>{
     expect(edited.statusCode,edited.body).toBe(201);
     expect(edited.json().outputData.finalProductFactualReview.status).toBe("PENDING");
     expect((await app.inject({method:"POST",url:`${finalBase}/versions/${edited.json().versionId}/approve`})).statusCode).toBe(409);
+    const assistantReviewed=await app.inject({method:"POST",url:`${finalBase}/versions/${edited.json().versionId}/assistant-source-review`,payload:{...reviewInput,notes:"Revisión editorial asistida de las fuentes y afirmaciones en esta prueba local aislada."}});
+    expect(assistantReviewed.statusCode,assistantReviewed.body).toBe(201);
+    expect(assistantReviewed.json().outputData.finalProductFactualReview).toMatchObject({status:"RECORDED",kind:"ASSISTANT_SOURCE_AUDIT"});
+    expect((await app.inject({method:"POST",url:`${finalBase}/versions/${assistantReviewed.json().versionId}/approve`})).statusCode).toBe(200);
+    const assistedFiles=(await app.inject({method:"GET",url:`/api/projects/${project.id}/files`})).json().files.filter((file:{artifactVersionId:string})=>file.artifactVersionId===assistantReviewed.json().versionId);
+    expect(assistedFiles).toHaveLength(4);
+    for(const file of assistedFiles){
+      const response=await app.inject({method:"GET",url:`/api/projects/${project.id}/files/${file.id}/download`});
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain("Revisión editorial asistida por IA");
+    }
   });
 });

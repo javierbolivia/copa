@@ -39,6 +39,14 @@ export function registerModuleRoutes(
       catch(error){return reply.code(409).send({error:"factual_review_blocked",message:error instanceof Error?error.message:"No se pudo registrar la revisión."});}
     },
   );
+  app.post<{Params:{id:string;versionId:string};Body:FinalProductReviewInput}>(
+    "/api/projects/:id/modules/final_product/versions/:versionId/assistant-source-review",
+    {schema:{params:Type.Object({id:Type.String({format:"uuid"}),versionId:Type.String({format:"uuid"})}),body:FinalProductReviewInputSchema,response:{201:ModuleResultSchema,409:ApiErrorSchema}}},
+    async(request,reply)=>{
+      try{return reply.code(201).send(modules.reviewFinalProduct(request.params.id,request.params.versionId,request.body,"ASSISTANT_SOURCE_AUDIT"));}
+      catch(error){return reply.code(409).send({error:"assistant_review_blocked",message:error instanceof Error?error.message:"No se pudo registrar la revisión asistida."});}
+    },
+  );
   app.get<{ Params: Params; Reply: { results: ModuleResult[] } | ApiError }>(
     "/api/projects/:id/modules/:key",
     { schema: { params: ParamsSchema, response: { 200: ModuleResultListSchema, 404: ApiErrorSchema } } },

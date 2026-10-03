@@ -11,8 +11,8 @@ export function FinalProductReviewPanel({references,review,disabled,readOnly,onR
   const update=(index:number,key:"sourceExcerpt"|"manuscriptClaim",value:string)=>setChecks(current=>current.map((check,i)=>i===index?{...check,[key]:value}:check));
   const ready=sourcesOpened&&reviewedAllClaims&&notes.trim().length>=20&&checks.length>=2&&checks.every(check=>check.sourceExcerpt.trim().length>=40&&check.manuscriptClaim.trim().length>=20);
   return <section className="detail-card" aria-label="Revisión factual del manuscrito">
-    <h3>{review.status==="RECORDED"?"Revisión humana registrada":"Revisión factual pendiente"}</h3>
-    <p>La auditoría estructural no comprueba que las fuentes existan ni que respalden el texto. Abre cada fuente, contrasta todas las afirmaciones y registra los extractos utilizados. Este registro acredita una revisión humana; no constituye certificación científica ni profesional.</p>
+    <h3>{review.status==="RECORDED"?review.kind==="ASSISTANT_SOURCE_AUDIT"?"Revisión editorial asistida registrada":"Revisión humana registrada":"Revisión factual pendiente"}</h3>
+    <p>La auditoría estructural no comprueba que las fuentes existan ni que respalden el texto. Abre cada fuente, contrasta todas las afirmaciones y registra los extractos utilizados. {review.kind==="ASSISTANT_SOURCE_AUDIT"?"Esta revisión asistida no equivale a validación humana o veterinaria.":"El registro humano acredita una revisión de la persona que lo envía; no constituye certificación científica ni profesional."}</p>
     {review.status==="RECORDED"?<><p>{String(review.notes??"")}</p><p>La revisión corresponde al contenido guardado. Cualquier edición requiere una nueva revisión.</p></>:readOnly?<p>Actualiza las dependencias y guarda una versión vigente para registrar su revisión.</p>:<>
       {references.map((reference,index)=><fieldset key={reference.id} disabled={disabled}>
         <legend>{reference.id} · {reference.title}</legend>

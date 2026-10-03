@@ -2,7 +2,7 @@ import {validateFunnelOutput} from "./funnel-output-validator.js";
 import {validateLandingOutput} from "./landing-output-validator.js";
 import {validateOfferOutput} from "./offer-output-validator.js";
 import {validateFinalProductOutput} from "./final-product-output-validator.js";
-import {recordFinalProductReview, finalProductReviewStatus} from "./final-product-review.js";
+import {recordFinalProductReview, finalProductReviewStatus, type FinalProductReviewKind} from "./final-product-review.js";
 import type {FinalProductReviewInput} from "@our-platform/shared";
 import {validateBeliefsOutput} from "./beliefs-output-validator.js";
 import {validateMechanismOutput} from "./mechanism-output-validator.js";
@@ -250,7 +250,7 @@ export class ModuleService {
     }:version);
   }
 
-  saveDraft(projectId:string,key:ModuleKey,outputData:unknown,expectedBaseVersionId?:string,sourceVersionId?:string, factualReview?:FinalProductReviewInput):ModuleResult {
+  saveDraft(projectId:string,key:ModuleKey,outputData:unknown,expectedBaseVersionId?:string,sourceVersionId?:string, factualReview?:FinalProductReviewInput, factualReviewKind:FinalProductReviewKind="HUMAN_ATTESTATION"):ModuleResult {
     const definition=getModule(key);if(!definition)throw new Error("Módulo desconocido.");
     if(!isCanonicalModuleOutput(key,outputData)){
       if(key==="opportunities")throw new Error("Para editar Oportunidades se requieren los nueve scores válidos (0–100), selectedId y referencias estructuradas. Si esta versión histórica no tiene scores, regenera Oportunidades; el histórico se conserva sin cambios.");
@@ -289,14 +289,14 @@ export class ModuleService {
       assertOpportunityReferences(outputData,this.parentOutput(projectId,current.versionId,"problems"));
       normalizedOutput=applyOpportunityScoring(asRecord(outputData));
     }
-    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product"?(activePointer?.id??null):current.versionId,...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product")?{editingSourceVersionId:active.id}:{}),source:"user",...(key==="final_product"?{finalProductFactualReview:factualReview?recordFinalProductReview(normalizedOutput,factualReview):null}:{})},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
+    const version=this.artifacts.createVersion({projectId,artifactType:key,name:definition.label,artifactId:current.artifactId,inputSnapshot:{...asRecord(active.inputSnapshot),editedFromVersionId:key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product"?(activePointer?.id??null):current.versionId,...((key==="product"||key==="avatar"||key==="mechanism"||key==="beliefs"||key==="offer"||key==="landing"||key==="funnel"||key==="content"||key==="final_product")?{editingSourceVersionId:active.id}:{}),source:"user",...(key==="final_product"?{finalProductFactualReview:factualReview?recordFinalProductReview(normalizedOutput,factualReview,factualReviewKind):null}:{})},outputData:normalizedOutput,parentVersionIds:parentIds.map(item=>item.parent_version_id),status:"draft"});
     return this.toResult(version);
   }
 
-  reviewFinalProduct(projectId:string,versionId:string,input:FinalProductReviewInput):ModuleResult {
+  reviewFinalProduct(projectId:string,versionId:string,input:FinalProductReviewInput,kind:FinalProductReviewKind="HUMAN_ATTESTATION"):ModuleResult {
     const version=this.artifacts.getVersion(versionId);
     if(!version||version.projectId!==projectId||version.artifactType!=="final_product")throw new Error("El manuscrito no existe en este proyecto.");
-    return this.saveDraft(projectId,"final_product",version.outputData,undefined,version.id,input);
+    return this.saveDraft(projectId,"final_product",version.outputData,undefined,version.id,input,kind);
   }
 
   archiveDraft(projectId:string,key:ModuleKey,versionId:string):ModuleResult|undefined {
@@ -394,7 +394,11 @@ export class ModuleService {
     }:undefined);if(!approved)return undefined;
     if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
     if(key==="funnel")this.exporter.exportFunnel(projectId,approved.id,approved.outputData);
-    if(key==="final_product")this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData);
+    if(key==="final_product"){
+      const review=finalProductReviewStatus(approved.outputData,approved.inputSnapshot);
+      if(review.status!=="RECORDED")throw new Error("No se puede exportar un manuscrito sin revisión factual registrada.");
+      this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData,review.kind);
+    }
     this.knowledge.saveMemoryDecision({originProjectId:projectId,artifactVersionId:approved.id,disposition:"APPROVED",visibility:"PROJECT",reusable:false,preferred:false});
     return this.toResult(approved);
   }

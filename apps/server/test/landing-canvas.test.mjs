@@ -1,14 +1,16 @@
 import {describe,it,expect} from 'vitest';
-import {toLandingCanvas,fromLandingCanvas,hasVisibleOffer,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
+import {toLandingCanvas,fromLandingCanvas,firstVisibleOfferId,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
 import {applyLandingSectionImage,toLanding,fromLanding,withStableLandingSectionIds} from '../../web/src/features/refinement/landing-adapter.ts';
 import {renderLandingHtml,renderLandingReactCode} from '@our-platform/shared';
 describe('Hallazia visual editor boundary',()=>{
- it('uses the first visible section as the CTA fallback only when no offer is visible',()=>{
+ it('selects only the first visible offer as the visual CTA target',()=>{
   const value=toLanding({title:'Página',sections:[{type:'hero',cta:'Ver detalles'},{type:'offer',headline:'Oferta',enabled:false}]});
   const data=toLandingCanvas(value);
-  expect(hasVisibleOffer(data)).toBe(false);
+  expect(firstVisibleOfferId(data)).toBeNull();
   data.content[1].props.enabled=true;
-  expect(hasVisibleOffer(data)).toBe(true);
+  expect(firstVisibleOfferId(data)).toBe(data.content[1].props.id);
+  data.content.push({...data.content[1],props:{...data.content[1].props,id:'second-offer'}});
+  expect(firstVisibleOfferId(data)).toBe(data.content[1].props.id);
  });
  it('assigns stable unique IDs to legacy sections before asynchronous image work',()=>{
   const value=toLanding({title:'Página',sections:[{type:'hero'},{type:'problem'},{id:'kept',type:'offer'},{id:'kept',type:'faq'}]});

@@ -2,22 +2,23 @@ import {createPortal} from "react-dom";
 import {createContext,useContext,useState} from 'react';
 import {Puck,type Config,type Data} from '@puckeditor/core';
 import {landingCheckoutUrl,landingDesignTokens,type LandingContentSection} from '@our-platform/shared';
-import {LANDING_BLOCKS,toLandingCanvas,fromLandingCanvas,hasVisibleOffer,type LandingCanvasData} from './landing-puck-adapter';
+import {LANDING_BLOCKS,toLandingCanvas,fromLandingCanvas,firstVisibleOfferId,type LandingCanvasData} from './landing-puck-adapter';
 import type {LandingEditorValue} from './types';
 import '@puckeditor/core/no-external.css';
 import './landing-visual.css';
 type Props=Record<string,unknown>;
 const txt=(v:unknown)=>typeof v==='string'?v:'';
 const CheckoutContext=createContext('');
-const VisibleOfferContext=createContext(false);
+const VisibleOfferContext=createContext<string|null>(null);
 export function LandingReactBlock({section,editing=false}:{section:LandingContentSection;editing?:boolean}){
   if(section.enabled===false&&!editing)return null;
   const title=txt(section.headline),hero=section.type==='hero';
   const centered=section.variant==='centered'||['hero','offer','guarantee','cta','footer'].includes(section.type);
   const imageUrl=typeof section.imageUrl==='string'&&(/^(https:\/\/|\/(?!\/))/i).test(section.imageUrl)?section.imageUrl:'';
   const checkoutUrl=useContext(CheckoutContext);
+  const visibleOfferId=useContext(VisibleOfferContext);
   const directCheckout=Boolean(checkoutUrl&&(section.type==='offer'||section.type==='cta'));
-  return <section id={section.type==='offer'&&section.enabled!==false?'hl-offer-preview':undefined} className={`hl-block hl-block--${section.type} hl-block--${centered?'centered':'editorial'}${imageUrl?' hl-block--with-image':''}`} style={{opacity:section.enabled===false?.4:1}}>
+  return <section id={section.type==='offer'&&section.enabled!==false&&section.id===visibleOfferId?'hl-offer-preview':undefined} className={`hl-block hl-block--${section.type} hl-block--${centered?'centered':'editorial'}${imageUrl?' hl-block--with-image':''}`} style={{opacity:section.enabled===false?.4:1}}>
     <div className="hl-block__content">
     {section.enabled===false&&<small className="hl-disabled">DESACTIVADO · Conservado en la versión</small>}
     {section.eyebrow&&<p className="hl-eyebrow">{section.eyebrow}</p>}
@@ -54,12 +55,12 @@ const config:Config<{components:Record<string,Props>;root:Props}>={
     font:{type:'select',label:'Tipografía',options:[{label:'Sans serif',value:'sans'},{label:'Serif editorial',value:'serif'}]},
     width:{type:'select',label:'Ancho',options:[{label:'Lectura compacta',value:'compact'},{label:'Amplio',value:'wide'}]},
     spacing:{type:'select',label:'Espaciado',options:[{label:'Compacto',value:'compact'},{label:'Amplio',value:'relaxed'}]}
-  },render:({children,...root})=>{const t=landingDesignTokens(root);const checkoutUrl=root.checkoutPlatform!=='none'?landingCheckoutUrl(root.checkoutUrl):'';const offerVisible=useContext(VisibleOfferContext);return <CheckoutContext.Provider value={checkoutUrl}><div className="hl-page" style={{background:t.background,color:t.text,fontFamily:t.font==='serif'?'Georgia,serif':'system-ui,sans-serif','--hl-accent':t.accent,'--hl-width':t.width==='wide'?'1160px':'880px','--hl-space':t.spacing==='compact'?'36px':'64px'} as React.CSSProperties}>{!offerVisible&&<span id="hl-offer-preview" aria-hidden="true"/>}{children}{txt(root.footerNote)&&<footer>{txt(root.footerNote)}</footer>}</div></CheckoutContext.Provider>;}},
+  },render:({children,...root})=>{const t=landingDesignTokens(root);const checkoutUrl=root.checkoutPlatform!=='none'?landingCheckoutUrl(root.checkoutUrl):'';const offerId=useContext(VisibleOfferContext);return <CheckoutContext.Provider value={checkoutUrl}><div className="hl-page" style={{background:t.background,color:t.text,fontFamily:t.font==='serif'?'Georgia,serif':'system-ui,sans-serif','--hl-accent':t.accent,'--hl-width':t.width==='wide'?'1160px':'880px','--hl-space':t.spacing==='compact'?'36px':'64px'} as React.CSSProperties}>{!offerId&&<span id="hl-offer-preview" aria-hidden="true"/>}{children}{txt(root.footerNote)&&<footer>{txt(root.footerNote)}</footer>}</div></CheckoutContext.Provider>;}},
   categories:{strategy:{title:'Narrativa',components:['hero','problem','agitation','mechanism','benefits','product','deliverables']},conversion:{title:'Decisión y cierre',components:['bonuses','proof','objections','faq','offer','guarantee','cta','footer']}},
   components:Object.fromEntries(Object.entries({...LANDING_BLOCKS,custom:'Bloque conservado'}).map(([type,label])=>[type,{label,fields:{enabled:{type:'radio',label:'Visible en página',options:[{label:'Activo',value:true},{label:'Desactivado',value:false}]},eyebrow:{type:'text',label:'Antetítulo'},headline:{type:'text',label:'Título'},subheadline:{type:'textarea',label:'Subtítulo'},body:{type:'textarea',label:'Contenido'},cta:{type:'text',label:'Texto del botón'},imageUrl:{type:'text',label:'URL de imagen HTTPS o ruta local'},imageAlt:{type:'text',label:'Descripción accesible de imagen'},variant:{type:'select',label:'Composición',options:[{label:'Editorial',value:'editorial'},{label:'Centrada',value:'centered'}]},items:{type:'custom',label:'Elementos / preguntas',render:({value,onChange}: {value:unknown;onChange:(v:unknown)=>void})=><ItemsField value={value} onChange={onChange}/>}},defaultProps:{headline:'',enabled:true,variant:'editorial'},render:({puck,...section}:Props&{puck:{isEditing:boolean}})=><LandingReactBlock section={{...section,type:type==='custom'?txt(section.originalType):type}} editing={puck.isEditing}/>}]))
 };
 export default function LandingVisualEditor({value,onSave,onClose,saving=false,demo=false}:{value:LandingEditorValue;onSave:(v:LandingEditorValue)=>Promise<boolean|void>|boolean|void;onClose:()=>void;saving?:boolean;demo?:boolean}){
   const [data,setData]=useState(()=>toLandingCanvas(value)),[error,setError]=useState('');
   const save=async()=>{try{setError('');const result=await onSave(fromLandingCanvas(value,data));if(result!==false)onClose();else setError('No se guardó. Los cambios siguen en el editor.');}catch(e){setError(e instanceof Error?e.message:'No se guardó.');}};
-  return createPortal(<div className="hl-visual-dialog" role="dialog" aria-modal="true" aria-label="Constructor visual de Landing"><div className="hl-visual-notice"><strong>Hallazia · Constructor visual</strong><span>{demo?"Laboratorio: solo datos sintéticos en esta pantalla. No modifica el proyecto.":"Guardar crea un borrador. No publica la página."}</span><button disabled={saving} onClick={onClose}>Volver sin guardar</button>{error&&<span role="alert">{error}</span>}</div><VisibleOfferContext.Provider value={hasVisibleOffer(data)}><Puck config={config} data={data as Data} onChange={v=>setData(v as LandingCanvasData)} height="calc(100vh - 52px)" headerTitle={value.pageName||'Landing'} headerPath="Bloques · Capas · Diseño" overrides={{headerActions:()=> <button className="hl-save" disabled={saving} onClick={()=>void save()}>{saving?'Guardando…':demo?'Aplicar al ejemplo':'Guardar borrador'}</button>}}/></VisibleOfferContext.Provider></div>,document.body);
+  return createPortal(<div className="hl-visual-dialog" role="dialog" aria-modal="true" aria-label="Constructor visual de Landing"><div className="hl-visual-notice"><strong>Hallazia · Constructor visual</strong><span>{demo?"Laboratorio: solo datos sintéticos en esta pantalla. No modifica el proyecto.":"Guardar crea un borrador. No publica la página."}</span><button disabled={saving} onClick={onClose}>Volver sin guardar</button>{error&&<span role="alert">{error}</span>}</div><VisibleOfferContext.Provider value={firstVisibleOfferId(data)}><Puck config={config} data={data as Data} onChange={v=>setData(v as LandingCanvasData)} height="calc(100vh - 52px)" headerTitle={value.pageName||'Landing'} headerPath="Bloques · Capas · Diseño" overrides={{headerActions:()=> <button className="hl-save" disabled={saving} onClick={()=>void save()}>{saving?'Guardando…':demo?'Aplicar al ejemplo':'Guardar borrador'}</button>}}/></VisibleOfferContext.Provider></div>,document.body);
 }

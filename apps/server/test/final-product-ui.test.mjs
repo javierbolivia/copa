@@ -61,6 +61,13 @@ describe("Final Product approval UI",()=>{
     const html=render();
     expect(html).toContain("Manuscrito en revisión");
     expect(html).not.toContain("Manuscrito vigente");
+    expect(html).toContain("BORRADOR · VERSIÓN 1");
+    expect(html).not.toContain("BORRADOR CANÓNICO");
+  });
+  it("does not present an archived draft as an approved manuscript",()=>{
+    const html=render({selected:{status:"archived"}});
+    expect(html).toContain("VERSIÓN ARCHIVADA · VERSIÓN 1");
+    expect(html).not.toContain("VERSIÓN APROBADA · VERSIÓN 1");
   });
   it("blocks approval and explains the validation errors for an incomplete manuscript",()=>{
     const html=render({outputData:{finalProductValidationAudit:{ok:false,errors:["La referencia R2 está listada pero no se cita."]}}});

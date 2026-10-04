@@ -112,4 +112,11 @@ describe('Hallazia visual editor boundary',()=>{
   expect(html).not.toContain('>Comprar</a>');
   expect(renderLandingHtml({...value,externalCheckout:{platform:'custom',checkoutUrl:'https://pay.example.org/guide'}})).toContain('href="https://pay.example.org/guide"');
  });
+ it('does not render a navigation CTA when there is no visible offer target',()=>{
+  const html=renderLandingHtml({title:'Sin oferta',sections:[{type:'hero',headline:'Inicio',cta:'Ver oferta'},{type:'offer',headline:'Oculta',enabled:false}]});
+  expect(html).not.toContain('href="#section-0"');
+  expect(html).not.toContain('Ver oferta</a>');
+  const reactCode=renderLandingReactCode({title:'Sin oferta',sections:[{type:'hero',headline:'Inicio',cta:'Ver oferta'}]});
+  expect(reactCode).toContain('offerIndex < 0 ? null');
+ });
 });

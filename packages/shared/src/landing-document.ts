@@ -263,7 +263,7 @@ export function renderLandingHtml(input: unknown): string {
         (section.subheadline ? `<p class="hl-lead">${escape(section.subheadline)}</p>` : "") +
         (section.body ? `<div class="hl-body"><p>${escape(section.body)}</p></div>` : "") +
         itemsHtml +
-        (section.cta && (type !== "offer" || externalCheckoutUrl) ? `<div class="hl-cta-wrap"><a class="hl-cta" href="${ctaHref}"${ctaTarget}${ctaOnClick}>${escape(section.cta)}</a></div>` : "") +
+        (section.cta && (isDirectCheckout || (type !== "offer" && offerIndex >= 0)) ? `<div class="hl-cta-wrap"><a class="hl-cta" href="${ctaHref}"${ctaTarget}${ctaOnClick}>${escape(section.cta)}</a></div>` : "") +
         `</div>${imageHtml}</section>`;
     })
     .join("");
@@ -555,7 +555,7 @@ export default function LandingPage({ data = LANDING_DATA }: { data?: LandingDat
   const { designTokens: t, sections, footerNote, externalCheckout } = data;
   const activeSections = sections.filter((s) => s.enabled !== false);
   const offerIndex = activeSections.findIndex((s) => s.type === "offer");
-  const offerTarget = \`#section-\${offerIndex < 0 ? 0 : offerIndex}\`;
+  const offerTarget = offerIndex < 0 ? null : \`#section-\${offerIndex}\`;
   const checkoutUrl = (() => {
     if (!externalCheckout || externalCheckout.platform === "none" || !externalCheckout.checkoutUrl) return undefined;
     const value = externalCheckout.checkoutUrl.trim();
@@ -618,7 +618,7 @@ function LandingSectionComponent({
   index: number;
   accent: string;
   spacing: "compact" | "relaxed";
-  offerTarget: string;
+  offerTarget: string | null;
   checkoutUrl?: string;
 }) {
   const isHero = section.type === "hero";
@@ -711,10 +711,10 @@ function LandingSectionComponent({
           })}
         </div>
       )}
-      {section.cta && (section.type !== "offer" || checkoutUrl) && (
+      {section.cta && (isDirectCheckout || (section.type !== "offer" && offerTarget)) && (
         <div>
           <a
-            href={isDirectCheckout ? (checkoutUrl || offerTarget) : offerTarget}
+            href={isDirectCheckout ? checkoutUrl : (offerTarget ?? undefined)}
             target={isDirectCheckout ? "_blank" : undefined}
             rel={isDirectCheckout ? "noopener noreferrer" : undefined}
             onClick={() => {

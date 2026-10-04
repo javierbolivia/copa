@@ -17,6 +17,22 @@ describe("API local", () => {
 
   afterEach(async () => app.close());
 
+  it("no permite fabricar un workflow completado desde la API pública", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { name: "Proyecto de prueba", niche: "Pruebas", description: "Sin artefactos." },
+    });
+    const project = created.json<Project>();
+    const url = `/api/projects/${project.id}/workflow/avatar`;
+    const before = await app.inject({ method: "GET", url: `/api/projects/${project.id}/workflow` });
+    const original = before.json<{ steps: Array<{ stepKey: string; state: string }> }>().steps.find((step) => step.stepKey === "avatar")?.state;
+    const response = await app.inject({ method: "PATCH", url, payload: { state: "COMPLETED" } });
+    expect(response.statusCode).toBe(404);
+    const workflow = await app.inject({ method: "GET", url: `/api/projects/${project.id}/workflow` });
+    expect(workflow.json<{ steps: Array<{ stepKey: string; state: string }> }>().steps.find((step) => step.stepKey === "avatar")?.state).toBe(original);
+  });
+
   it("responde health con SQLite operativo", async () => {
     const response = await app.inject({ method: "GET", url: "/api/health" });
 

@@ -1,7 +1,7 @@
 import {createPortal} from "react-dom";
 import {createContext,useContext,useState} from 'react';
 import {Puck,type Config,type Data} from '@puckeditor/core';
-import {landingCheckoutUrl,landingDesignTokens,type LandingContentSection} from '@our-platform/shared';
+import {landingCheckoutUrl,landingDesignTokens,landingImageUrl,type LandingContentSection} from '@our-platform/shared';
 import {LANDING_BLOCKS,toLandingCanvas,fromLandingCanvas,firstVisibleOfferId,type LandingCanvasData} from './landing-puck-adapter';
 import type {LandingEditorValue} from './types';
 import '@puckeditor/core/no-external.css';
@@ -14,7 +14,7 @@ export function LandingReactBlock({section,editing=false}:{section:LandingConten
   if(section.enabled===false&&!editing)return null;
   const title=txt(section.headline),hero=section.type==='hero';
   const centered=section.variant==='centered'||['hero','offer','guarantee','cta','footer'].includes(section.type);
-  const imageUrl=typeof section.imageUrl==='string'&&(/^(https:\/\/|\/(?!\/))/i).test(section.imageUrl)?section.imageUrl:'';
+  const imageUrl=landingImageUrl(section.imageUrl);
   const checkoutUrl=useContext(CheckoutContext);
   const visibleOfferId=useContext(VisibleOfferContext);
   const directCheckout=Boolean(checkoutUrl&&(section.type==='offer'||section.type==='cta'));

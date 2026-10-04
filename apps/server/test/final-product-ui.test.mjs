@@ -90,6 +90,16 @@ describe("Final Product approval UI",()=>{
     expect(html).toContain("Aprobación interna local; revisión profesional pendiente antes de distribución pública.");
   });
 
+  it("distinguishes a saved editorial note from the current review of an approved manuscript",()=>{
+    const note="Las fuentes se revisarán otra vez antes de aprobarla.";
+    const html=render({selected:{status:"approved"},outputData:{reviewNote:note,finalProductFactualReview:{status:"RECORDED",kind:"ASSISTANT_SOURCE_AUDIT"}}});
+
+    expect(html).toContain("Revisión editorial asistida registrada");
+    expect(html).toContain("Nota editorial guardada");
+    expect(html).toContain("puede describir una etapa anterior");
+    expect(html).toContain(note);
+  });
+
   it("blocks approval while edited manuscript fields have not been saved",async()=>{
     const previousActEnvironment=globalThis.IS_REACT_ACT_ENVIRONMENT;
     globalThis.IS_REACT_ACT_ENVIRONMENT=true;

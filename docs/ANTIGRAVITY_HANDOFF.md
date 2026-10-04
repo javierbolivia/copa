@@ -1,14 +1,18 @@
 # Traspaso para Antigravity
 
-Última actualización: 2026-09-30
+Última actualización operativa: 2026-10-04 (las secciones históricas conservan sus fechas originales)
 Repositorio: `C:\Users\user23\Downloads\copa 2`
 Rama: `codex/fix-20.7d-relevance-regression`
 
 ## Resumen Ejecutivo
 
-Se completó la auditoría integral y resolución de hallazgos en las 4 secciones del proyecto **"Perros Reactivos – Seed QA"** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`): **Investigación**, **Fuentes**, **Problemas** y **Oportunidades**, así como la verificación real de todas las APIs configuradas y la optimización rigurosa de solidez en patrones sólidos (90-95/100).
+Este documento conserva el historial de revisión del proyecto **"Perros Reactivos – Seed QA"** (`01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`). No acredita por sí solo el estado actual de todos los módulos ni la disponibilidad de los proveedores; para operar se debe contrastar con el repositorio y el API activos.
 
-> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual del ebook, proveedores y exportación, consulta **“Checkpoint vigente Product Studio — v65”** al final; no asumas que los checkpoints anteriores son actuales.
+> Estado cambiante: las secciones A-G y los checkpoints anteriores son notas históricas. Para el estado operativo actual consulta `SECTION_REVIEW_CHECKPOINT.md` y verifica el API; el antiguo «Checkpoint vigente Product Studio — v65» ya no define el manuscrito canónico.
+
+> **Decisión editorial vigente (2026-10-04):** Final Product v17 (`approved/fresh`) es el manuscrito canónico. Product Studio v65 (`STALE/stale`, 265 bloques) se conserva como histórico de solo lectura; no se migra ni aprueba automáticamente. El estado actual y la comparación con sus dependencias constan en `docs/SECTION_REVIEW_CHECKPOINT.md`, sección «Product Studio: comparación actual de linaje».
+
+> **Decisión de Landing (2026-10-04):** v12 permanece como borrador para conservar Final Product v17 canónico. Landing v11 sigue aprobada y vigente; aprobar v12 invalidaría Funnel v9, Contenido v5 y Final Product v17. La revisión visual puede evaluar v12, pero no debe tratarla como versión aprobada ni pedir su aprobación automática.
 
 ---
 

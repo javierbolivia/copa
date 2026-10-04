@@ -6,6 +6,12 @@ describe("Landing review contract",()=>{
   afterEach(async()=>{await app?.close();});
   async function setup(){app=await createApp({databasePath:":memory:",serveFrontend:false});const {project}=(await app.inject({method:"POST",url:"/api/demo/projects"})).json();const base=`/api/projects/${project.id}/modules/landing`;return {base,result:(await app.inject({method:"GET",url:base})).json().results[0],projectId:project.id};}
   it("rejects an empty document and incomplete FAQ",async()=>{const {base,result}=await setup();for(const sections of [[],[{type:"faq",items:[{q:"Pregunta",a:""}]}]])expect((await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:{...result.outputData,sections}}})).statusCode).toBe(409);});
+  it("rejects a landing whose every section is disabled",async()=>{
+    const {base,result}=await setup();
+    const sections=result.outputData.sections.map((section:Record<string,unknown>)=>({...section,enabled:false}));
+    const response=await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:{...result.outputData,sections}}});
+    expect(response.statusCode).toBe(409);
+  });
   it("keeps generated landing copy in review and blocks dependent Funnel generation",async()=>{const {base,projectId}=await setup();const generated=(await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).json();expect(generated).toMatchObject({status:"draft",outputData:{landingValidationAudit:{ok:true}}});const blocked=await app.inject({method:"POST",url:`/api/projects/${projectId}/modules/funnel/run`,payload:{provider:"mock"}});expect(blocked.statusCode).toBe(409);expect(blocked.json()).toMatchObject({error:"module_blocked",message:expect.stringContaining("Landing tiene un borrador vigente pendiente de aprobación")});});
   it("does not approve a draft based on a superseded landing",async()=>{const {base,result}=await setup();const draft=(await app.inject({method:"POST",url:`${base}/drafts`,payload:{outputData:result.outputData}})).json();const generated=(await app.inject({method:"POST",url:`${base}/run`,payload:{provider:"mock"}})).json();expect(generated.status).toBe("draft");expect((await app.inject({method:"POST",url:`${base}/versions/${generated.versionId}/approve`})).statusCode).toBe(200);expect((await app.inject({method:"POST",url:`${base}/versions/${draft.versionId}/approve`})).statusCode).toBe(409);});
   it("generates all 15 canonical blocks in contextual landing output and exports HTML and React",async()=>{

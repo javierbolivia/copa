@@ -491,7 +491,12 @@ export function renderLandingReactCode(input: unknown): string {
         const section = record(raw);
         return section.imageUrl === undefined ? raw : { ...section, imageUrl: landingImageUrl(section.imageUrl) };
       }),
-      externalCheckout: output.externalCheckout,
+      externalCheckout: (() => {
+        const checkout = record(output.externalCheckout);
+        return output.externalCheckout === undefined
+          ? undefined
+          : { ...checkout, checkoutUrl: landingCheckoutUrl(checkout.checkoutUrl) };
+      })(),
       tracking: output.tracking,
     },
     null,

@@ -84,6 +84,13 @@ describe('Hallazia visual editor boundary',()=>{
   expect(html).not.toContain(imageUrl);
   expect(renderLandingReactCode({title:'Seguro',sections:[{type:'hero',headline:'Inicio',imageUrl,imageAlt:'Imagen'}]})).not.toContain(imageUrl);
  });
+ it('does not serialize checkout credentials into the standalone React export',()=>{
+  const checkoutUrl='https://user:pass@payments.example.org/guide';
+  const reactCode=renderLandingReactCode({title:'Seguro',sections:[{type:'offer',headline:'Oferta',cta:'Comprar'}],externalCheckout:{platform:'custom',checkoutUrl}});
+  expect(reactCode).not.toContain(checkoutUrl);
+  expect(reactCode).toContain('"checkoutUrl": ""');
+  expect(renderLandingReactCode({title:'Seguro',sections:[],externalCheckout:{platform:'custom',checkoutUrl:'https://payments.example.org/guide'}})).toContain('"checkoutUrl": "https://payments.example.org/guide"');
+ });
  it('keeps checkout settings through both editors and activates payment only for a configured platform',()=>{
   const source={title:'Guía',sections:[{type:'hero',headline:'Inicio',cta:'Ver oferta'},{type:'offer',headline:'Oferta',cta:'Comprar'}],externalCheckout:{platform:'hotmart',checkoutUrl:'https://pay.hotmart.com/example',productSku:'sku-1'}};
   const value=toLanding(source);

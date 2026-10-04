@@ -166,7 +166,7 @@ export function landingImageUrl(value: unknown): string {
   if (url.startsWith("/") && !url.startsWith("//") && !/[\\\x00-\x1f]/u.test(url)) return url;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === "https:" ? url : "";
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password ? url : "";
   } catch {
     return "";
   }
@@ -487,7 +487,10 @@ export function renderLandingReactCode(input: unknown): string {
       title: output.title ?? "Landing",
       footerNote: output.footerNote ?? "",
       designTokens: tokens,
-      sections: rawSections,
+      sections: rawSections.map((raw) => {
+        const section = record(raw);
+        return section.imageUrl === undefined ? raw : { ...section, imageUrl: landingImageUrl(section.imageUrl) };
+      }),
       externalCheckout: output.externalCheckout,
       tracking: output.tracking,
     },
@@ -616,7 +619,17 @@ function LandingSectionComponent({
   const isHero = section.type === "hero";
   const isCentered = section.variant === "centered" || ["hero", "offer", "guarantee", "cta", "footer"].includes(section.type);
   const isDirectCheckout = Boolean(checkoutUrl && (section.type === "offer" || section.type === "cta"));
-  const imageUrl = section.imageUrl && (/^https:\/\//i.test(section.imageUrl) || (section.imageUrl.startsWith("/") && !section.imageUrl.startsWith("//"))) ? section.imageUrl : undefined;
+  const imageUrl = (() => {
+    const value = section.imageUrl?.trim();
+    if (!value || [...value].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 92)) return undefined;
+    if (value.startsWith("/") && !value.startsWith("//")) return value;
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "https:" && !parsed.username && !parsed.password ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const sectionStyle: React.CSSProperties = {
     padding: \`\${spacing === "compact" ? "36px" : "64px"} 24px\`,

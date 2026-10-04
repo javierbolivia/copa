@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest';
 import {toLandingCanvas,fromLandingCanvas,firstVisibleOfferId,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
 import {applyLandingSectionImage,toLanding,fromLanding,withStableLandingSectionIds} from '../../web/src/features/refinement/landing-adapter.ts';
-import {renderLandingHtml,renderLandingReactCode} from '@our-platform/shared';
+import {landingImageUrl,renderLandingHtml,renderLandingReactCode} from '@our-platform/shared';
 describe('Hallazia visual editor boundary',()=>{
  it('selects only the first visible offer as the visual CTA target',()=>{
   const value=toLanding({title:'Página',sections:[{type:'hero',cta:'Ver detalles'},{type:'offer',headline:'Oferta',enabled:false}]});
@@ -76,6 +76,13 @@ describe('Hallazia visual editor boundary',()=>{
   expect(html).not.toContain('src="javascript:');
   expect(html).not.toContain('href="javascript:');
   expect(html).not.toContain('alert(3)');
+ });
+ it('rejects credentials embedded in image URLs across validation and exports',()=>{
+  const imageUrl='https://user:pass@images.example.org/hero.webp';
+  expect(landingImageUrl(imageUrl)).toBe('');
+  const html=renderLandingHtml({title:'Seguro',sections:[{type:'hero',headline:'Inicio',imageUrl,imageAlt:'Imagen'}]});
+  expect(html).not.toContain(imageUrl);
+  expect(renderLandingReactCode({title:'Seguro',sections:[{type:'hero',headline:'Inicio',imageUrl,imageAlt:'Imagen'}]})).not.toContain(imageUrl);
  });
  it('keeps checkout settings through both editors and activates payment only for a configured platform',()=>{
   const source={title:'Guía',sections:[{type:'hero',headline:'Inicio',cta:'Ver oferta'},{type:'offer',headline:'Oferta',cta:'Comprar'}],externalCheckout:{platform:'hotmart',checkoutUrl:'https://pay.hotmart.com/example',productSku:'sku-1'}};

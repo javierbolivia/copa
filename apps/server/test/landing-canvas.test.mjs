@@ -1,8 +1,15 @@
 import {describe,it,expect} from 'vitest';
-import {toLandingCanvas,fromLandingCanvas,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
+import {toLandingCanvas,fromLandingCanvas,hasVisibleOffer,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
 import {applyLandingSectionImage,toLanding,fromLanding,withStableLandingSectionIds} from '../../web/src/features/refinement/landing-adapter.ts';
 import {renderLandingHtml,renderLandingReactCode} from '@our-platform/shared';
 describe('Hallazia visual editor boundary',()=>{
+ it('uses the first visible section as the CTA fallback only when no offer is visible',()=>{
+  const value=toLanding({title:'Página',sections:[{type:'hero',cta:'Ver detalles'},{type:'offer',headline:'Oferta',enabled:false}]});
+  const data=toLandingCanvas(value);
+  expect(hasVisibleOffer(data)).toBe(false);
+  data.content[1].props.enabled=true;
+  expect(hasVisibleOffer(data)).toBe(true);
+ });
  it('assigns stable unique IDs to legacy sections before asynchronous image work',()=>{
   const value=toLanding({title:'Página',sections:[{type:'hero'},{type:'problem'},{id:'kept',type:'offer'},{id:'kept',type:'faq'}]});
   const normalized=withStableLandingSectionIds(value),ids=normalized.sections.map(section=>section.id);

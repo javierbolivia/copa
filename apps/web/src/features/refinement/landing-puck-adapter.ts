@@ -2,6 +2,9 @@ import type {LandingContentSection} from '@our-platform/shared';
 import type {LandingEditorValue} from './types';
 export const LANDING_BLOCKS={hero:'Hero',problem:'Problema',agitation:'Agitación',mechanism:'Solución / Mecanismo',benefits:'Beneficios',product:'Producto',deliverables:'Entregables',bonuses:'Bonos',proof:'Prueba',objections:'Objeciones',faq:'FAQ',offer:'Oferta',guarantee:'Garantía',cta:'CTA',footer:'Footer'};
 export interface LandingCanvasData {root:{props:Record<string,unknown>};content:Array<{type:string;props:Record<string,unknown>&{id:string}}>}
+export function hasVisibleOffer(data:LandingCanvasData):boolean{
+  return data.content.some(block=>block.props.enabled!==false&&(block.type==='offer'||(block.type==='custom'&&block.props.originalType==='offer')));
+}
 export function toLandingCanvas(value:LandingEditorValue):LandingCanvasData{
   return {root:{props:{title:value.pageName,footerNote:value.footerNote,...value.designTokens,checkoutPlatform:value.externalCheckout?.platform??'none',checkoutUrl:value.externalCheckout?.checkoutUrl??''}},content:value.sections.map((section,index)=>({type:section.type in LANDING_BLOCKS?section.type:'custom',props:{...structuredClone(section),id:typeof section.id==='string'?section.id:`legacy-${index}`,originalType:section.type}}))};
 }

@@ -1,8 +1,4 @@
-import {lazy,Suspense,useState} from 'react';
-import {toLanding} from './landing-adapter';
-import {Sparkles,Layers,Eye,ArrowRight} from 'lucide-react';
-
-const VisualEditor=lazy(()=>import('./LandingVisualEditor'));
+import {useState} from 'react';
 
 export interface LandingPreparationProps {
   onGenerate?:(instructions?:string)=>void|Promise<void>;
@@ -24,20 +20,9 @@ export function LandingPreparation({
   deepSeekConfigured=false
 }:LandingPreparationProps){
   const [instructions,setInstructions]=useState('');
-  const [open,setOpen]=useState(false);
-  const [saved,setSaved]=useState(false);
-  const [demo,setDemo]=useState(()=>toLanding({
-    title:'Laboratorio visual · ejemplo',
-    sections:[
-      {type:'hero',eyebrow:'DATOS DE EJEMPLO',headline:'Una propuesta clara merece una página clara.',subheadline:'Prueba bloques, composición y estilo dentro de Hallazia.',body:'Este laboratorio usa datos sintéticos. No guarda versiones ni cambia tus proyectos.',cta:'Explorar la propuesta'},
-      {type:'benefits',headline:'Contenido, diseño y versiones',items:['Bloques React reutilizables','Temas y vista responsive','Datos estructurados bajo tu control']},
-      {type:'faq',headline:'Antes de empezar',items:[{q:'¿Esto modifica mi proyecto?',a:'No. Los cambios del laboratorio solo viven en esta pantalla.'}]},
-      {type:'footer',body:'Hallazia · Laboratorio visual'}
-    ]
-  }));
 
   const handleGenerate=()=>{
-    if(onGenerate){
+    if(onGenerate&&provider!=="mock"){
       void onGenerate(instructions.trim()||undefined);
     }
   };
@@ -48,7 +33,7 @@ export function LandingPreparation({
       <span className="eyebrow" style={{display:"block",color:"#2563eb",fontWeight:700,letterSpacing:".1em"}}>PROMPT → LANDING COMPLETA AUTOMÁTICA</span>
       <h2 style={{fontSize:"1.85rem",lineHeight:1.2,margin:"8px 0 12px"}}>Generar Landing completa a partir de la estrategia</h2>
       <p style={{fontSize:"1.05rem",lineHeight:1.65,color:"#475569",margin:"0 0 20px"}}>
-        Hallazia recopila automáticamente todo el contexto aprobado del proyecto (<strong>Investigación</strong>, <strong>Problemas</strong>, <strong>Oportunidades</strong>, <strong>Producto</strong>, <strong>Avatar</strong>, <strong>Mecanismo</strong>, <strong>Creencias</strong> y <strong>Oferta</strong>) y genera una página completa de alta conversión con los 15 bloques canónicos.
+        Hallazia recopila el contexto aprobado del proyecto (<strong>Investigación</strong>, <strong>Problemas</strong>, <strong>Oportunidades</strong>, <strong>Producto</strong>, <strong>Avatar</strong>, <strong>Mecanismo</strong>, <strong>Creencias</strong> y <strong>Oferta</strong>) para proponer una página con hasta 15 tipos de bloques editables.
       </p>
 
       <div style={{marginBottom:"20px"}}>
@@ -58,7 +43,7 @@ export function LandingPreparation({
             value={instructions}
             onChange={e=>setInstructions(e.target.value)}
             disabled={running}
-            placeholder="Ej: Crea una landing premium de alta conversión para vender este ebook enfocado en dueños de perros reactivos."
+            placeholder="Ej.: Presenta este producto digital con un hero editorial, beneficios respaldados, una imagen relevante y un CTA claro."
             rows={3}
             style={{width:"100%",boxSizing:"border-box",padding:"12px 14px",fontSize:"15px",borderRadius:"10px",border:"1px solid #cbd5e1",marginTop:"6px",fontFamily:"inherit"}}
           />
@@ -81,7 +66,7 @@ export function LandingPreparation({
               <option value="gemini" disabled={!geminiConfigured}>Gemini (Recomendado)</option>
               <option value="openai" disabled={!openAiConfigured}>OpenAI</option>
               <option value="deepseek" disabled={!deepSeekConfigured}>DeepSeek</option>
-              <option value="mock">Demo / Sintético</option>
+              {provider==="mock"&&<option value="mock" disabled>Demo / Mock no disponible para esta Landing</option>}
             </select>
           </label>
         )}
@@ -89,18 +74,19 @@ export function LandingPreparation({
         <button
           className="button primary"
           style={{padding:"12px 28px",fontSize:"1rem",fontWeight:700,borderRadius:"8px",cursor:running?"wait":"pointer"}}
-          disabled={running||!onGenerate}
+          disabled={running||!onGenerate||provider==="mock"}
           onClick={handleGenerate}
         >
           {running?"Generando Landing Completa con IA…":"🚀 Generar Landing Completa con IA"}
         </button>
+        {provider==="mock"&&<p role="alert">Selecciona un proveedor real configurado para generar la Landing.</p>}
       </div>
     </div>
 
     <div className="strategy-empty-grid" style={{marginBottom:"32px"}}>
       <article>
         <h3>1. Generación Automática</h3>
-        <p>Escribe tu prompt o genera directo: la IA produce datos estructurados (LandingSpec) para los 15 bloques canónicos.</p>
+        <p>Escribe tu indicación o genera desde el contexto aprobado. La IA propone contenido estructurado que puedes revisar antes de aprobar.</p>
       </article>
       <article>
         <h3>2. Renderers Profesionales</h3>
@@ -112,14 +98,5 @@ export function LandingPreparation({
       </article>
     </div>
 
-    <header style={{padding:"20px",border:"1px solid #e2e8f0",borderRadius:"12px",background:"#fff"}}>
-      <span className="eyebrow" style={{display:"block",marginBottom:"4px"}}>HERRAMIENTA SECUNDARIA</span>
-      <h3 style={{margin:"0 0 8px"}}>Laboratorio visual aislado</h3>
-      <p style={{margin:"0 0 16px",fontSize:"0.9rem",color:"#64748b"}}>Prueba Puck y bloques React interactivos con datos sintéticos en memoria sin tocar ningún proyecto.</p>
-      <button className="button secondary" onClick={()=>setOpen(true)}>Explorar constructor con datos sintéticos</button>
-      {saved&&<p role="status" style={{fontSize:"0.85rem",color:"#10b981",marginTop:"8px"}}>Ejemplo actualizado en memoria.</p>}
-    </header>
-
-    {open&&<Suspense fallback={<p role="status">Cargando constructor…</p>}><VisualEditor demo value={demo} onSave={value=>{setDemo(value);setSaved(true);return true;}} onClose={()=>setOpen(false)}/></Suspense>}
   </section>;
 }

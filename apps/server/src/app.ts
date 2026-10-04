@@ -44,6 +44,7 @@ import { ProductStudioService } from "./services/product-studio-service.js";
 import { registerProductStudioRoutes } from "./routes/product-studio.js";
 import { ProductExportService } from "./services/product-export-service.js";
 import { registerProductExportRoutes } from "./routes/product-exports.js";
+import { LandingImageService } from "./services/landing-image-service.js";
 import { registerResearchFocusRoutes } from "./routes/research-focus.js";
 import { YouTubeAdapter } from "./integrations/youtube-adapter.js";
 import { TavilyProvider } from "./integrations/tavily-provider.js";
@@ -176,6 +177,11 @@ export async function createApp(
     productDocuments,
     dataRoot,
   );
+  const landingImageKey = options.gemini?.apiKey ?? process.env.GEMINI_API_KEY;
+  const landingImages = new LandingImageService({
+    ...(landingImageKey ? { apiKey: landingImageKey } : {}),
+    ...(options.gemini?.fetch ? { fetch: options.gemini.fetch } : {}),
+  });
 
   // PHASE 20.4 — real multi-source Research. Reuses the existing provider
   // clients and market-signal adapters; a dedicated DeepSeek instance disables
@@ -219,7 +225,7 @@ export async function createApp(
   registerTraceabilityRoutes(app, traceability);
   registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings, modules);
   registerProductStudioRoutes(app, projects, productStudio);
-  registerProductExportRoutes(app, productExports);
+  registerProductExportRoutes(app, projects, productExports, landingImages);
   youtubeImports.resumePending();
 
   if (options.serveFrontend ?? true) {

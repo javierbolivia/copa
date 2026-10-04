@@ -82,6 +82,7 @@ export interface LandingEditorValue {
   footerNote:string;
   sections:import("@our-platform/shared").LandingContentSection[];
   designTokens:import("@our-platform/shared").LandingDesignTokens;
+  externalCheckout?:import("@our-platform/shared").ExternalCheckoutConfig|undefined;
 }
 
 export interface LandingVersion {

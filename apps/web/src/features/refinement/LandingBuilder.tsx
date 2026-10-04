@@ -1,5 +1,6 @@
-import {lazy,Suspense,useEffect,useState} from "react";
+import {lazy,Suspense,useEffect,useRef,useState} from "react";
 import {
+  landingCheckoutUrl,
   renderLandingHtml,
   renderLandingReactCode,
   LANDING_THEME_PRESETS,
@@ -9,11 +10,13 @@ import {
   type LandingDesignTokens
 } from "@our-platform/shared";
 import {Field} from "./EditorScaffold";
-import {fromLanding} from "./landing-adapter";
+import {api,type ProductAsset} from "../../api/client";
+import {applyLandingSectionImage,createLandingSectionId,fromLanding,withStableLandingSectionIds} from "./landing-adapter";
 import type {LandingEditorValue,LandingPreviewMode,LandingVersion} from "./types";
 import "./refinement.css";
 
 export interface LandingBuilderProps {
+  projectId:string;
   value:LandingEditorValue;
   versions:LandingVersion[];
   selectedVersionId?:string|undefined;
@@ -50,134 +53,8 @@ const labels:Record<string,string>={
 
 const text=(value:unknown)=>typeof value==="string"?value:"";
 
-function blockRegenerationContent(type:string,current:LandingContentSection):Partial<LandingContentSection>{
-  switch(type){
-    case "hero":
-      return {
-        eyebrow:"NUEVA PROPUESTA ACCIONABLE",
-        headline:"Transforma tu enfoque con una secuencia validada paso a paso",
-        subheadline:"Elimina la improvisación y aplica un método comprobado desde el primer día.",
-        cta:"Comenzar de inmediato"
-      };
-    case "problem":
-      return {
-        eyebrow:"EL OBSTÁCULO REAL",
-        headline:"El ciclo de prueba y error te está costando tiempo valioso",
-        body:"La mayoría de intentos fallan no por falta de esfuerzo, sino por no contar con una secuencia clara de ejecución."
-      };
-    case "agitation":
-      return {
-        eyebrow:"CONSECUENCIAS",
-        headline:"Lo que ocurre si continúas postergando la decisión",
-        body:"Cada semana sin una metodología estructurada aumenta el desgaste y aleja los resultados que buscas.",
-        items:["Pérdida de foco en tareas secundarias.","Sensación constante de estar empezando de cero.","Resultados impredecibles que no se pueden escalar."]
-      };
-    case "mechanism":
-      return {
-        eyebrow:"EL MÉTODO",
-        headline:"Un proceso verificable en 4 fases concretas",
-        subheadline:"De la claridad conceptual a la implementación práctica sin fricción.",
-        body:"1. Diagnóstico objetivo. 2. Selección de palancas críticas. 3. Ejecución directa. 4. Medición continua.",
-        items:[
-          {name:"Fase 1: Diagnóstico de precisión",description:"Identifica exactamente qué ajustar sin perder tiempo."},
-          {name:"Fase 2: Plan de acción inmediato",description:"Pasos ordenados por impacto y facilidad de ejecución."},
-          {name:"Fase 3: Implementación guiada",description:"Uso de recursos y plantillas listas para aplicar."},
-          {name:"Fase 4: Consolidación",description:"Asegura que los resultados sean sostenibles en el tiempo."}
-        ]
-      };
-    case "benefits":
-      return {
-        eyebrow:"VENTAJAS DIRECTAS",
-        headline:"Lo que vas a lograr de forma tangible",
-        items:[
-          {name:"Ahorro masivo de tiempo",description:"Elimina semanas de dudas con una ruta clara."},
-          {name:"Decisiones fundamentadas",description:"Avanza sabiendo exactamente por qué cada paso funciona."},
-          {name:"Control total del proceso",description:"Métricas observables para evaluar tu progreso real."}
-        ]
-      };
-    case "product":
-      return {
-        headline:current.headline||"Sistema Integral de Implementación",
-        subheadline:"El conjunto completo de herramientas, guías y estrategias para dominar tu área.",
-        body:"Estructurado en módulos progresivos pensados para aplicar inmediatamente.",
-        items:[
-          {name:"Módulo 1: Fundamentos y Estrategia",description:"La base necesaria para no cometer los errores típicos."},
-          {name:"Módulo 2: Secuencia Operativa",description:"Paso a paso detallado con ejemplos reales."},
-          {name:"Módulo 3: Optimización Avanzada",description:"Cómo mantener y escalar los resultados logrados."}
-        ]
-      };
-    case "deliverables":
-      return {
-        headline:"Todos los materiales que recibirás",
-        items:[
-          {name:"Guía de Estudio y Ejecución",description:"Manual completo con explicaciones directas y sin relleno."},
-          {name:"Cuadernos de Trabajo (Workbooks)",description:"Ejercicios prácticos para completar tu propio plan."},
-          {name:"Plantillas y Listas de Cotejo",description:"Recursos descargables listos para usar."}
-        ]
-      };
-    case "bonuses":
-      return {
-        eyebrow:"REGALOS DE ACCIÓN RÁPIDA",
-        headline:"Bonos exclusivos incluidos con tu acceso",
-        items:[
-          {name:"Bono 1: Sesión de Preguntas Frecuentes",description:"Respuestas a los casos más comunes de implementación."},
-          {name:"Bono 2: Plantilla Rápida de Lanzamiento",description:"Acelera tu puesta en marcha en menos de 24 horas."}
-        ]
-      };
-    case "proof":
-      return {
-        eyebrow:"EVIDENCIA",
-        headline:"Principios respaldados por investigación y validación de campo",
-        body:"Cada herramienta y concepto incluido ha sido contrastado con necesidades reales observadas en el mercado."
-      };
-    case "objections":
-      return {
-        eyebrow:"RESOLVIENDO TUS DUDAS",
-        headline:"Lo que necesitas saber antes de dar el paso",
-        items:[
-          {q:"¿Cuánto tiempo necesito para leer y aplicar el libro?",a:"El ebook está diseñado para avanzar en lecturas y prácticas de 20 minutos al día."},
-          {q:"¿Es aplicable si nunca antes he hecho esto?",a:"Sí, parte desde los fundamentos y cada paso incluye instrucciones paso a paso."}
-        ]
-      };
-    case "faq":
-      return {
-        eyebrow:"PREGUNTAS FRECUENTES",
-        headline:"Respuestas rápidas a preguntas habituales",
-        items:[
-          {q:"¿El acceso es inmediato?",a:"Sí, tan pronto confirmes tu compra recibirás acceso de descarga digital a todo el libro y complementos."},
-          {q:"¿Los materiales son descargables?",a:"El libro en PDF y EPUB, junto con plantillas y hojas de trabajo, se descargan para leer offline."},
-          {q:"¿Qué nivel técnico requiere?",a:"Ninguno: el libro explica la metodología desde cero con casos claros."}
-        ]
-      };
-    case "offer":
-      return {
-        eyebrow:"OFERTA ESPECIAL",
-        headline:"Accede al Ebook completo hoy mismo",
-        subheadline:"Invierte en una solución comprobada con todos los entregables y bonos digitales incluidos.",
-        cta:"Comprar el Ebook ahora"
-      };
-    case "guarantee":
-      return {
-        eyebrow:"RIESGO CERO",
-        headline:"Garantía de satisfacción incondicional",
-        body:"Prueba el material durante los primeros días. Si sientes que no te aporta un valor tangible y una ruta clara, dispones de una política de satisfacción total."
-      };
-    case "cta":
-      return {
-        headline:"No dejes pasar otro día sin un plan claro",
-        subheadline:"Da el primer paso hacia una ejecución estructurada y resultados predecibles.",
-        cta:"Comenzar hoy mismo"
-      };
-    case "footer":
-      return {
-        body:`© ${new Date().getFullYear()} Todos los derechos reservados. Información presentada con fines educativos y de implementación.`
-      };
-    default:
-      return {};
-  }
-}
-
 export function LandingBuilder({
+  projectId,
   value,
   versions,
   selectedVersionId,
@@ -192,7 +69,7 @@ export function LandingBuilder({
   onOpenTraceability
 }:LandingBuilderProps){
   const [visual,setVisual]=useState(false);
-  const [draft,setDraft]=useState(()=>structuredClone(value));
+  const [draft,setDraft]=useState(()=>withStableLandingSectionIds(structuredClone(value)));
   const [editing,setEditing]=useState(false);
   const [error,setError]=useState<string|null>(null);
   const [index,setIndex]=useState(0);
@@ -202,8 +79,19 @@ export function LandingBuilder({
   const [showRegenPrompt,setShowRegenPrompt]=useState(false);
   const [regenInstruction,setRegenInstruction]=useState("");
   const [regenerating,setRegenerating]=useState(false);
+  const [assets,setAssets]=useState<ProductAsset[]>([]);
+  const [uploading,setUploading]=useState(false);
+  const [imageConfigured,setImageConfigured]=useState<boolean|null>(null);
+  const [imagePrompt,setImagePrompt]=useState("");
+  const [imageAspectRatio,setImageAspectRatio]=useState<"16:9"|"4:3"|"1:1">("16:9");
+  const [generatingImage,setGeneratingImage]=useState(false);
+  const projectIdRef=useRef(projectId);
+  projectIdRef.current=projectId;
 
-  useEffect(()=>{if(!editing)setDraft(structuredClone(value));},[value,editing]);
+  useEffect(()=>{let current=true;void api.productAssets(projectId).then(result=>{if(current)setAssets(result.assets.filter(asset=>asset.kind==="image"));}).catch(()=>{});return()=>{current=false;};},[projectId]);
+  useEffect(()=>{let current=true;setImageConfigured(null);void api.landingImageStatus(projectId).then(result=>{if(current)setImageConfigured(result.configured);}).catch(()=>{if(current)setImageConfigured(false);});return()=>{current=false;};},[projectId]);
+
+  useEffect(()=>{if(!editing)setDraft(withStableLandingSectionIds(structuredClone(value)));},[value,editing]);
   const shown=editing?draft:value;
   const section=draft.sections[index];
   const comparison=versions.find(item=>item.id===compareId);
@@ -235,6 +123,30 @@ export function LandingBuilder({
     }
   };
 
+  const uploadImage=(file:File)=>{
+    if(!section?.id)return;
+    if(!["image/png","image/jpeg","image/webp"].includes(file.type)){setError("Usa PNG, JPEG o WebP para la imagen.");return;}
+    const targetId=section.id;
+    setUploading(true);setError(null);
+    const reader=new FileReader();
+    reader.onerror=()=>{setUploading(false);setError("No se pudo leer la imagen.");};
+    reader.onload=()=>{void api.uploadProductAsset(projectId,{title:file.name.replace(/\.[^.]+$/,""),filename:file.name,mimeType:file.type,contentBase64:String(reader.result).split(",")[1]??""}).then(asset=>{if(projectIdRef.current!==projectId)return;setAssets(current=>[asset,...current]);setDraft(current=>({...current,sections:applyLandingSectionImage(current.sections,targetId,asset.url,file.name.replace(/\.[^.]+$/,"" ))}));}).catch(reason=>setError(reason instanceof Error?reason.message:"No se pudo guardar la imagen.")).finally(()=>setUploading(false));};
+    reader.readAsDataURL(file);
+  };
+
+  const generateImage=async()=>{
+    if(generatingImage||!imageConfigured||!section?.id||imagePrompt.trim().length<12)return;
+    const targetId=section.id,prompt=imagePrompt.trim(),title=`Landing · ${section.headline||section.type}`.slice(0,160);
+    setGeneratingImage(true);setError(null);
+    try{
+      const asset=await api.generateLandingImage(projectId,{title,prompt,aspectRatio:imageAspectRatio});
+      if(projectIdRef.current!==projectId)return;
+      setAssets(current=>[asset,...current]);
+      setDraft(current=>({...current,sections:applyLandingSectionImage(current.sections,targetId,asset.url,prompt.slice(0,160))}));
+    }catch(reason){setError(reason instanceof Error?reason.message:"Gemini no pudo generar la imagen.");}
+    finally{setGeneratingImage(false);}
+  };
+
   const handleExportReact=()=>{
     if(onExportReact){
       void onExportReact(shown);
@@ -247,12 +159,6 @@ export function LandingBuilder({
       anchor.click();
       URL.revokeObjectURL(url);
     }
-  };
-
-  const handleRegenerateBlock=()=>{
-    if(!section)return;
-    const fresh=blockRegenerationContent(section.type,section);
-    replace({...section,...fresh});
   };
 
   const handleRunRegenerateFull=async()=>{
@@ -274,7 +180,7 @@ export function LandingBuilder({
       <div>
         <span className="rf-eyebrow">DOCUMENTO Y VISTA PREVIA</span>
         <h2>{value.pageName||"Landing sin título"}</h2>
-        <p>15 bloques canónicos, diseño con tokens/themes y generación con IA. Puck disponible para refinamiento visual libre.</p>
+        <p>Hasta 15 tipos de bloques, imágenes originales, temas y edición visual. Revisa el contenido antes de aprobar.</p>
       </div>
       <div className="rf-actions">
         {onRegenerate&&<button className="rf-button" disabled={readOnly||regenerating||saving} onClick={()=>setShowRegenPrompt(true)} title="Regenerar con IA usando una instrucción corta">
@@ -368,15 +274,30 @@ export function LandingBuilder({
             {editing&&<div className="rf-actions" style={{marginBottom:"12px"}}>
               <button className="rf-button" disabled={index===0} onClick={()=>move(-1)}>Subir</button>
               <button className="rf-button" disabled={index===draft.sections.length-1} onClick={()=>move(1)}>Bajar</button>
-              <button className="rf-button" onClick={handleRegenerateBlock} title="Generar una variación de copy para este bloque sin tocar los demás">
-                ⚡ Regenerar bloque
-              </button>
               <button className="rf-button" onClick={()=>{setDraft({...draft,sections:draft.sections.filter((_,i)=>i!==index)});setIndex(Math.max(0,index-1));}}>
                 Retirar bloque
               </button>
             </div>}
 
             {([["eyebrow","Antetítulo"],["headline","Título"],["subheadline","Subtítulo"],["body","Cuerpo"],["cta","Texto del botón"]] as const).map(([key,label])=><Field key={key} label={label} value={text(section[key])} editing={editing} multiline={key!=="eyebrow"&&key!=="cta"} onChange={content=>replace({...section,[key]:content})}/>)}
+            <Field label="Imagen · URL HTTPS o ruta local" value={text(section.imageUrl)} editing={editing} onChange={content=>replace({...section,imageUrl:content})}/>
+            <Field label="Descripción accesible de la imagen" value={text(section.imageAlt)} editing={editing} onChange={content=>replace({...section,imageAlt:content})}/>
+            {editing&&<label>Subir imagen del producto<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={event=>{const file=event.target.files?.[0];if(file)uploadImage(file);event.target.value="";}}/></label>}
+            {editing&&assets.length>0&&<label>Usar imagen existente<select value="" onChange={event=>{const asset=assets.find(item=>item.id===event.target.value);if(asset)replace({...section,imageUrl:asset.url,imageAlt:section.imageAlt||asset.title});}}><option value="">Elegir de la biblioteca del proyecto</option>{assets.map(asset=><option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label>}
+            {editing&&<div className="landing-image-generator">
+              <h3>Generar imagen original con Gemini</h3>
+              <p className="form-hint">El servidor añadirá instrucciones de formato y seguridad a tu descripción antes de enviarla a Gemini; la solicitud puede consumir cuota y tener costo según la facturación de Google. Una pulsación genera una imagen. No se envía el corpus ni se genera automáticamente.</p>
+              <label>Descripción de la escena
+                <textarea value={imagePrompt} onChange={event=>setImagePrompt(event.target.value)} maxLength={1200} rows={3} placeholder="Ej.: Fotografía editorial de una persona paseando con su perro por un parque al atardecer, luz cálida, composición horizontal, sin texto"/>
+              </label>
+              <label>Formato
+                <select value={imageAspectRatio} onChange={event=>setImageAspectRatio(event.target.value as "16:9"|"4:3"|"1:1")}><option value="16:9">Horizontal 16:9</option><option value="4:3">Horizontal 4:3</option><option value="1:1">Cuadrado 1:1</option></select>
+              </label>
+              <button type="button" className="rf-button rf-button--primary" disabled={!imageConfigured||generatingImage||imagePrompt.trim().length<12} onClick={()=>void generateImage()}>{generatingImage?"Generando una imagen…":"Generar una imagen con Gemini"}</button>
+              {imageConfigured===false&&<p className="form-hint">Configura GEMINI_API_KEY para habilitar esta función. La subida y la biblioteca siguen disponibles.</p>}
+              <p className="form-hint">Revisa el texto alternativo y el resultado antes de guardar el borrador.</p>
+            </div>}
+            {editing&&<p className="form-hint">Para compartir el HTML fuera de Hallazia, usa una URL HTTPS pública.</p>}
             <LandingItems section={section} editing={editing} onChange={replace}/>
             {onOpenTraceability&&<button className="rf-button" onClick={()=>onOpenTraceability(`sections.${index}`)}>Ver origen de la versión</button>}
           </div></>:<p>No hay una sección seleccionada.</p>}
@@ -388,7 +309,7 @@ export function LandingBuilder({
               </select>
             </label>
             <button className="rf-button" onClick={()=>{
-              const created:LandingContentSection={id:`${newType}-${Date.now()}`,type:newType,enabled:true,...blockRegenerationContent(newType,{type:newType})};
+              const created:LandingContentSection={id:createLandingSectionId(draft.sections.flatMap(item=>typeof item.id==="string"?[item.id]:[])),type:newType,enabled:true,headline:"Nuevo bloque",body:"Describe aquí el contenido respaldado por el proyecto."};
               setDraft({...draft,sections:[...draft.sections,created]});
               setIndex(draft.sections.length);
             }}>
@@ -399,7 +320,7 @@ export function LandingBuilder({
       </div>
 
       <div className="rf-preview-stage">
-        <p className="form-hint">{editing?"Vista previa de los cambios sin guardar":"Vista previa de la versión guardada"} · Sin publicación ni checkout.</p>
+        <p className="form-hint">{editing?"Vista previa de los cambios sin guardar":"Vista previa de la versión guardada"} · Sin publicación · {shown.externalCheckout?.platform&&shown.externalCheckout.platform!=="none"&&landingCheckoutUrl(shown.externalCheckout.checkoutUrl)?"Checkout externo configurado":"Sin checkout"}.</p>
         <div className={`rf-preview-frame rf-preview-frame--${mode}`}>
           <LandingPreview value={shown}/>
         </div>
@@ -435,6 +356,16 @@ function LandingStyleEditor({value,editing,onChange}:{value:LandingEditorValue;e
   return <div className="rf-field-stack">
     <Field label="Nombre de la página" value={value.pageName} editing={editing} onChange={pageName=>onChange({...value,pageName})}/>
     <Field label="Nota al pie" value={value.footerNote} editing={editing} multiline onChange={footerNote=>onChange({...value,footerNote})}/>
+
+    <h3>Pago externo</h3>
+    <p className="form-hint">Solo enlaza un checkout real de tu producto. Sin URL válida, los botones siguen llevando a la oferta dentro de la página; Hallazia no cobra ni publica por sí mismo.</p>
+    <label>Plataforma
+      <select disabled={!editing} value={value.externalCheckout?.platform??"none"} onChange={event=>onChange({...value,externalCheckout:{...value.externalCheckout,platform:event.target.value as "none"|"hotmart"|"skool"|"custom"}})}>
+        <option value="none">Sin checkout</option><option value="hotmart">Hotmart</option><option value="skool">Skool</option><option value="custom">Otra plataforma</option>
+      </select>
+    </label>
+    <Field label="URL HTTPS del checkout" value={value.externalCheckout?.checkoutUrl??""} editing={editing} onChange={checkoutUrl=>onChange({...value,externalCheckout:{...value.externalCheckout,platform:value.externalCheckout?.platform??"none",checkoutUrl}})}/>
+    {value.externalCheckout?.platform!=="none"&&value.externalCheckout?.platform&&value.externalCheckout.checkoutUrl&&!landingCheckoutUrl(value.externalCheckout.checkoutUrl)&&<p className="refinement-feedback" role="alert">Usa una URL HTTPS completa y válida para activar la compra.</p>}
 
     <h3>Temas de diseño predefinidos</h3>
     <p className="form-hint">Cambia colores, tipografía y estilo sin perder ningún contenido ni bloque.</p>
@@ -476,5 +407,18 @@ function LandingStyleEditor({value,editing,onChange}:{value:LandingEditorValue;e
 }
 
 export function LandingPreview({value}:{value:LandingEditorValue;onOpenTraceability?:((field:string)=>void)|undefined}){
-  return <iframe title="Vista previa de landing" sandbox="" srcDoc={renderLandingHtml(fromLanding({},value))} style={{width:"100%",height:760,border:0,background:value.designTokens.background}}/>;
+  const previewFrame=useRef<HTMLIFrameElement>(null);
+  const handlePreviewLoad=()=>{
+    const document=previewFrame.current?.contentDocument;
+    if(!document)return;
+    document.addEventListener("click",event=>{
+      const link=(event.target as Element|null)?.closest?.('a[href^="#section-"]');
+      const id=link?.getAttribute("href")?.slice(1);
+      const destination=id?document.getElementById(id):null;
+      if(!destination)return;
+      event.preventDefault();
+      destination.scrollIntoView({behavior:"smooth",block:"start"});
+    });
+  };
+  return <iframe ref={previewFrame} onLoad={handlePreviewLoad} title="Vista previa de landing" sandbox="allow-popups allow-same-origin" srcDoc={renderLandingHtml(fromLanding({},value))} style={{width:"100%",height:760,border:0,background:value.designTokens.background}}/>;
 }

@@ -1,8 +1,24 @@
 import {describe,it,expect} from 'vitest';
 import {toLandingCanvas,fromLandingCanvas,LANDING_BLOCKS} from '../../web/src/features/refinement/landing-puck-adapter.ts';
-import {toLanding} from '../../web/src/features/refinement/landing-adapter.ts';
+import {applyLandingSectionImage,toLanding,fromLanding,withStableLandingSectionIds} from '../../web/src/features/refinement/landing-adapter.ts';
 import {renderLandingHtml,renderLandingReactCode} from '@our-platform/shared';
 describe('Hallazia visual editor boundary',()=>{
+ it('assigns stable unique IDs to legacy sections before asynchronous image work',()=>{
+  const value=toLanding({title:'Página',sections:[{type:'hero'},{type:'problem'},{id:'kept',type:'offer'},{id:'kept',type:'faq'}]});
+  const normalized=withStableLandingSectionIds(value),ids=normalized.sections.map(section=>section.id);
+  expect(ids.every(id=>typeof id==='string'&&id.length>0)).toBe(true);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(ids[2]).toBe('kept');
+  expect(withStableLandingSectionIds(normalized)).toEqual(normalized);
+ });
+ it('attaches an asynchronous image to its original section after sections are reordered',()=>{
+  const normalized=withStableLandingSectionIds(toLanding({title:'Página',sections:[{type:'hero'},{type:'problem'}]}));
+  const target=normalized.sections[0];
+  const reordered=[...normalized.sections].reverse();
+  const updated=applyLandingSectionImage(reordered,target.id,'/assets/hero.webp','Hero');
+  expect(updated.find(section=>section.id===target.id)?.imageUrl).toBe('/assets/hero.webp');
+  expect(updated.find(section=>section.id!==target.id)?.imageUrl).toBeUndefined();
+ });
  it('provides every required block and retains unknown sections, evidence and metadata across reorder/disable',()=>{
   expect(Object.keys(LANDING_BLOCKS)).toHaveLength(15);
   const value=toLanding({title:'Página',sections:[{type:'hero',headline:'Apertura',evidenceIds:['ref'],extra:{keep:true}},{type:'future-block',headline:'Custom',items:[{q:'Pregunta',a:'Respuesta',source:'keep'}]}]});
@@ -34,5 +50,38 @@ describe('Hallazia visual editor boundary',()=>{
   expect(reactCode).toContain('Bono 1');
   expect(reactCode).toContain('$47');
   expect(reactCode).toContain('serif');
+ });
+ it('renders an accessible hero image and keeps the checkout CTA scoped to an HTTPS destination',()=>{
+  const value={title:'Guía',sections:[{type:'hero',headline:'Paseos observables',imageUrl:'https://images.example.org/walk.webp',imageAlt:'Persona paseando con un perro',cta:'Conocer la guía'},{type:'offer',headline:'Contenido',cta:'Comprar'}],externalCheckout:{platform:'custom',checkoutUrl:'https://payments.example.org/guide'}};
+  const html=renderLandingHtml(value);
+  expect(html).toContain('src="https://images.example.org/walk.webp"');
+  expect(html).toContain('alt="Persona paseando con un perro"');
+  expect(html).toContain('href="#section-1"');
+  expect(html).toContain('href="https://payments.example.org/guide"');
+  const reactCode=renderLandingReactCode(value);
+  expect(reactCode).toContain('imageUrl?: string');
+  expect(reactCode).toContain('alt={section.imageAlt || ""}');
+ });
+ it('does not emit unsafe image, checkout or tracking URLs into exported HTML',()=>{
+  const html=renderLandingHtml({title:'Seguro',sections:[{type:'hero',headline:'Inicio',imageUrl:'javascript:alert(1)',imageAlt:'Imagen',cta:'Ver oferta'},{type:'offer',headline:'Oferta',cta:'Comprar'}],externalCheckout:{platform:'custom',checkoutUrl:'javascript:alert(2)'},tracking:{metaPixel:{pixelId:"12345');alert(3)//"}}});
+  expect(html).not.toContain('src="javascript:');
+  expect(html).not.toContain('href="javascript:');
+  expect(html).not.toContain('alert(3)');
+ });
+ it('keeps checkout settings through both editors and activates payment only for a configured platform',()=>{
+  const source={title:'Guía',sections:[{type:'hero',headline:'Inicio',cta:'Ver oferta'},{type:'offer',headline:'Oferta',cta:'Comprar'}],externalCheckout:{platform:'hotmart',checkoutUrl:'https://pay.hotmart.com/example',productSku:'sku-1'}};
+  const value=toLanding(source);
+  const saved=fromLanding(source,fromLandingCanvas(value,toLandingCanvas(value)));
+  expect(saved.externalCheckout).toEqual(source.externalCheckout);
+  expect(renderLandingHtml(saved)).toContain('href="https://pay.hotmart.com/example"');
+  expect(renderLandingHtml({...saved,externalCheckout:{...source.externalCheckout,platform:'none'}})).not.toContain('href="https://pay.hotmart.com/example"');
+  expect(renderLandingHtml({...saved,externalCheckout:{platform:'custom',checkoutUrl:'https://user:pass@evil.test/'}})).not.toContain('href="https://user:pass@evil.test/"');
+ });
+ it('does not render a dead purchase link in the offer when checkout is unavailable',()=>{
+  const value={title:'Guía',sections:[{type:'hero',cta:'Ver oferta'},{type:'offer',headline:'Oferta',cta:'Comprar'}]};
+  const html=renderLandingHtml(value);
+  expect(html).toContain('href="#section-1"');
+  expect(html).not.toContain('>Comprar</a>');
+  expect(renderLandingHtml({...value,externalCheckout:{platform:'custom',checkoutUrl:'https://pay.example.org/guide'}})).toContain('href="https://pay.example.org/guide"');
  });
 });

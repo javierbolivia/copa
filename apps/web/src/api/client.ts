@@ -409,6 +409,10 @@ export const api = {
     ),
   productAssets: (id: string) =>
     request<{ assets: ProductAsset[] }>(`/api/projects/${id}/product-assets`),
+  landingImageStatus: (id: string) =>
+    request<{ configured: boolean; model: string; paidModel: boolean }>(`/api/projects/${id}/product-assets/image-generation`),
+  generateLandingImage: (id: string, input: { title: string; prompt: string; aspectRatio: "16:9" | "4:3" | "1:1" }) =>
+    request<ProductAsset>(`/api/projects/${id}/product-assets/image-generation`, json("POST", input)),
   uploadProductAsset: (
     id: string,
     input: {

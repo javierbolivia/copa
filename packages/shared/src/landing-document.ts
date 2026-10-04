@@ -8,6 +8,8 @@ export interface LandingContentSection extends Record<string, unknown> {
   subheadline?: string;
   body?: string;
   cta?: string;
+  imageUrl?: string;
+  imageAlt?: string;
   items?: Array<string | Record<string, unknown>>;
   evidenceIds?: string[];
 }
@@ -158,6 +160,30 @@ const escape = (value: unknown) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!),
   );
 
+export function landingImageUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const url = value.trim();
+  if (url.startsWith("/") && !url.startsWith("//") && !/[\\\x00-\x1f]/u.test(url)) return url;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? url : "";
+  } catch {
+    return "";
+  }
+}
+
+export function landingCheckoutUrl(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const url = value.trim();
+  if (!url || /[\\\x00-\x1f]/u.test(url)) return "";
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password ? url : "";
+  } catch {
+    return "";
+  }
+}
+
 export function landingDesignTokens(input: unknown, fallbackTheme?: string): LandingDesignTokens {
   const value = record(input);
   const themeName = (typeof value.theme === "string" && value.theme) ? value.theme : (fallbackTheme ?? "");
@@ -190,10 +216,10 @@ export function renderLandingHtml(input: unknown): string {
   const target = `section-${offerIndex < 0 ? 0 : offerIndex}`;
 
   const externalCheckout = record(output.externalCheckout);
-  const externalCheckoutUrl = typeof externalCheckout.checkoutUrl === "string" && externalCheckout.checkoutUrl.trim() ? externalCheckout.checkoutUrl.trim() : "";
+  const externalCheckoutUrl = externalCheckout.platform !== "none" ? landingCheckoutUrl(externalCheckout.checkoutUrl) : "";
   const tracking = record(output.tracking);
   const metaPixel = record(tracking.metaPixel);
-  const pixelId = typeof metaPixel.pixelId === "string" && metaPixel.pixelId.trim() ? metaPixel.pixelId.trim() : "";
+  const pixelId = typeof metaPixel.pixelId === "string" && /^\d{5,30}$/u.test(metaPixel.pixelId.trim()) ? metaPixel.pixelId.trim() : "";
 
   const content = sections
     .map((section, index) => {
@@ -202,6 +228,8 @@ export function renderLandingHtml(input: unknown): string {
       const tag = hero ? "h1" : "h2";
       const items = Array.isArray(section.items) ? section.items : [];
       const centered = section.variant === "centered" || ["hero", "offer", "guarantee", "cta", "footer"].includes(type);
+      const imageUrl = landingImageUrl(section.imageUrl);
+      const imageHtml = imageUrl ? `<figure class="hl-media"><img src="${escape(imageUrl)}" alt="${escape(section.imageAlt ?? "")}" loading="${hero ? "eager" : "lazy"}" decoding="async"></figure>` : "";
 
       let itemsHtml = "";
       if (items.length > 0) {
@@ -216,7 +244,8 @@ export function renderLandingHtml(input: unknown): string {
           const itemTitle = escape(item.name ?? item.title ?? "");
           const itemDesc = escape(item.description ?? item.text ?? "");
           const badge = type === "mechanism" ? `<div class="hl-step-num">${String(itemIdx + 1).padStart(2, "0")}</div>` :
-            type === "bonuses" ? `<div class="hl-bonus-badge">BONO EXCLUSIVO</div>` :
+            type === "bonuses" ? `<div class="hl-bonus-badge">RECURSO ADICIONAL</div>` :
+            type === "deliverables" ? `<div class="hl-deliverable-badge">FORMATO DIGITAL</div>` :
             type === "benefits" ? `<div class="hl-check-badge">✓</div>` : "";
           return `<article class="hl-item">${badge}${itemTitle ? `<h3>${itemTitle}</h3>` : ""}${itemDesc ? `<p>${itemDesc}</p>` : ""}</article>`;
         }).join("");
@@ -228,14 +257,14 @@ export function renderLandingHtml(input: unknown): string {
       const ctaTarget = isDirectCheckout ? ` target="_blank" rel="noopener noreferrer"` : "";
       const ctaOnClick = isDirectCheckout && pixelId ? ` onclick="if(window.fbq)fbq('track','InitiateCheckout');"` : "";
 
-      return `<section id="section-${index}" class="hl-block hl-block--${escape(type)}${centered ? " hl-block--centered" : " hl-block--editorial"}">` +
+      return `<section id="section-${index}" class="hl-block hl-block--${escape(type)}${centered ? " hl-block--centered" : " hl-block--editorial"}${imageUrl ? " hl-block--with-image" : ""}"><div class="hl-block__content">` +
         (section.eyebrow ? `<p class="hl-eyebrow">${escape(section.eyebrow)}</p>` : "") +
         (section.headline ? `<${tag}>${escape(section.headline)}</${tag}>` : "") +
         (section.subheadline ? `<p class="hl-lead">${escape(section.subheadline)}</p>` : "") +
         (section.body ? `<div class="hl-body"><p>${escape(section.body)}</p></div>` : "") +
         itemsHtml +
-        (section.cta ? `<div class="hl-cta-wrap"><a class="hl-cta" href="${ctaHref}"${ctaTarget}${ctaOnClick}>${escape(section.cta)}</a></div>` : "") +
-        `</section>`;
+        (section.cta && (type !== "offer" || externalCheckoutUrl) ? `<div class="hl-cta-wrap"><a class="hl-cta" href="${ctaHref}"${ctaTarget}${ctaOnClick}>${escape(section.cta)}</a></div>` : "") +
+        `</div>${imageHtml}</section>`;
     })
     .join("");
 
@@ -344,6 +373,17 @@ h3{font-size:1.15rem;font-weight:700}
   padding:3px 8px;
   margin-bottom:10px;
 }
+.hl-deliverable-badge{
+  display:inline-block;
+  font-size:.72rem;
+  font-weight:800;
+  letter-spacing:.08em;
+  color:#0e7880;
+  background:#e6f7f6;
+  border-radius:6px;
+  padding:3px 8px;
+  margin-bottom:10px;
+}
 .hl-check-badge{
   display:inline-flex;
   align-items:center;
@@ -389,6 +429,36 @@ h3{font-size:1.15rem;font-weight:700}
   transition:transform .15s ease,box-shadow .15s ease;
 }
 .hl-cta:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(0,0,0,0.16)}
+html{scroll-behavior:smooth}
+main{max-width:none}
+.hl-block{max-width:min(100% - 32px,1160px);margin:0 auto;position:relative;border-bottom:0}
+.hl-block+.hl-block{margin-top:18px}
+.hl-block--hero{max-width:none;margin:0;background:linear-gradient(115deg,#092a31,#0c5557 58%,#0d7768);color:#fff;min-height:570px;display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,.9fr);align-items:center;gap:clamp(28px,5vw,80px);padding:clamp(56px,7vw,110px) max(24px,calc((100vw - 1120px)/2));border-top:0;overflow:hidden}
+.hl-block--hero:before{content:"";position:absolute;inset:auto -12% -60% auto;width:70%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,#f2bd6540,transparent 66%);pointer-events:none}
+.hl-block--hero .hl-block__content{position:relative;z-index:1;max-width:620px;text-align:left}
+.hl-block--hero:not(.hl-block--with-image){grid-template-columns:1fr}
+.hl-block--hero h1{font-size:clamp(2.8rem,5.2vw,5rem);line-height:1.04;letter-spacing:-.055em}
+.hl-block--hero .hl-eyebrow{color:#ffd58d}
+.hl-block--hero .hl-lead,.hl-block--hero .hl-body{color:#e3f4ef}
+.hl-block--hero .hl-media{margin:0;z-index:1;align-self:stretch;min-height:360px}
+.hl-media{margin:28px 0 0;overflow:hidden;border-radius:26px;box-shadow:0 28px 65px #071e2440;background:#dce7df}
+.hl-media img{width:100%;height:100%;min-height:280px;display:block;object-fit:cover}
+.hl-block--with-image:not(.hl-block--hero){display:grid;grid-template-columns:minmax(0,1.05fr) minmax(280px,.95fr);gap:clamp(28px,5vw,70px);align-items:center}
+.hl-block--with-image:not(.hl-block--hero) .hl-media{margin:0;max-height:520px}
+.hl-block--problem,.hl-block--agitation{background:#f3f6f1;border-radius:28px}
+.hl-block--mechanism,.hl-block--product{background:#e9f3ee;border-radius:28px}
+.hl-block--proof{background:#103b40;color:#f8faf8;border-radius:28px}
+.hl-block--proof .hl-eyebrow{color:#ffd58d}
+.hl-block--offer{background:#f6ead6;border:1px solid #cc9a55;padding:clamp(40px,6vw,80px);box-shadow:0 24px 70px #4d32131c}
+.hl-block--cta{background:#103b40;color:#fff;border-radius:28px;padding:clamp(44px,7vw,88px)}
+.hl-block--cta .hl-eyebrow{color:#ffd58d}
+.hl-items article{background:#fff;border:1px solid #dbe5dd;box-shadow:0 10px 28px #1e443010}
+.hl-block--proof .hl-items article{color:#152629}
+.hl-cta{border-radius:12px;background:#efb84d;color:#17252a !important;box-shadow:0 10px 26px #9f6b2670;transition:transform .2s ease,box-shadow .2s ease}
+.hl-cta:hover{transform:translateY(-2px);box-shadow:0 14px 30px #9f6b2680}
+.hl-cta:focus-visible{outline:3px solid #0e7880;outline-offset:4px}
+@media(max-width:760px){.hl-block--hero,.hl-block--with-image:not(.hl-block--hero){grid-template-columns:1fr}.hl-block--hero{padding:52px 22px}.hl-block--hero .hl-media{min-height:250px}.hl-block--hero h1{font-size:clamp(2.5rem,10vw,3.8rem)}.hl-block{max-width:calc(100% - 24px)}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.hl-cta{transition:none}}
 footer{padding:32px 20px;font-size:.85rem;opacity:.75;text-align:center}
 @media(max-width:640px){
   .hl-block{padding:36px 18px}
@@ -441,6 +511,8 @@ export interface LandingContentSection {
   subheadline?: string;
   body?: string;
   cta?: string;
+  imageUrl?: string;
+  imageAlt?: string;
   items?: Array<string | Record<string, unknown>>;
   evidenceIds?: string[];
 }
@@ -476,7 +548,17 @@ export default function LandingPage({ data = LANDING_DATA }: { data?: LandingDat
   const activeSections = sections.filter((s) => s.enabled !== false);
   const offerIndex = activeSections.findIndex((s) => s.type === "offer");
   const offerTarget = \`#section-\${offerIndex < 0 ? 0 : offerIndex}\`;
-  const checkoutUrl = externalCheckout?.checkoutUrl;
+  const checkoutUrl = (() => {
+    if (!externalCheckout || externalCheckout.platform === "none" || !externalCheckout.checkoutUrl) return undefined;
+    const value = externalCheckout.checkoutUrl.trim();
+    if (/[\\\x00-\x1f]/u.test(value)) return undefined;
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "https:" && !parsed.username && !parsed.password ? value : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const rootStyle: React.CSSProperties = {
     fontFamily: t.font === "serif" ? "Georgia, Cambria, serif" : "system-ui, -apple-system, sans-serif",
@@ -494,7 +576,7 @@ export default function LandingPage({ data = LANDING_DATA }: { data?: LandingDat
 
   return (
     <div style={rootStyle}>
-      <main style={containerStyle}>
+      <main>
         {activeSections.map((section, idx) => (
           <LandingSectionComponent
             key={section.id || idx}
@@ -534,30 +616,37 @@ function LandingSectionComponent({
   const isHero = section.type === "hero";
   const isCentered = section.variant === "centered" || ["hero", "offer", "guarantee", "cta", "footer"].includes(section.type);
   const isDirectCheckout = Boolean(checkoutUrl && (section.type === "offer" || section.type === "cta"));
+  const imageUrl = section.imageUrl && (/^https:\/\//i.test(section.imageUrl) || (section.imageUrl.startsWith("/") && !section.imageUrl.startsWith("//"))) ? section.imageUrl : undefined;
 
   const sectionStyle: React.CSSProperties = {
     padding: \`\${spacing === "compact" ? "36px" : "64px"} 24px\`,
-    borderBottom: "1px solid rgba(148, 163, 184, 0.2)",
+    maxWidth: isHero ? "none" : "1160px",
+    margin: isHero ? 0 : "18px auto",
     textAlign: isCentered ? "center" : "left",
-    ...(isHero ? { borderTop: \`6px solid \${accent}\`, paddingTop: "80px" } : {}),
-    ...(section.type === "offer" ? { backgroundColor: "rgba(37,99,235,0.03)", border: \`2px solid \${accent}\`, borderRadius: "20px", margin: "32px auto" } : {}),
+    ...(imageUrl ? {display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,320px),1fr))",gap:"40px",alignItems:"center"} : {}),
+    ...(isHero ? {background:"linear-gradient(115deg,#092a31,#0c5557 58%,#0d7768)",color:"#fff",minHeight:"520px",padding:"70px max(24px,calc((100vw - 1120px)/2))"} : {}),
+    ...(["problem","agitation"].includes(section.type) ? {background:"#f3f6f1",borderRadius:"28px"} : {}),
+    ...(["mechanism","product"].includes(section.type) ? {background:"#e9f3ee",borderRadius:"28px"} : {}),
+    ...(["proof","cta"].includes(section.type) ? {background:"#103b40",color:"#fff",borderRadius:"28px"} : {}),
+    ...(section.type === "offer" ? { backgroundColor: "#f6ead6", border: "1px solid #cc9a55", borderRadius: "20px" } : {}),
   };
 
   const ctaStyle: React.CSSProperties = {
     display: "inline-block",
     padding: "16px 36px",
-    backgroundColor: accent,
-    color: "#fff",
+    backgroundColor: "#efb84d",
+    color: "#17252a",
     textDecoration: "none",
     fontWeight: 700,
     fontSize: "1.1rem",
-    borderRadius: "36px",
+    borderRadius: "12px",
     boxShadow: "0 4px 14px rgba(0,0,0,0.12)",
     marginTop: "24px",
   };
 
   return (
     <section id={\`section-\${index}\`} style={sectionStyle}>
+      <div>
       {section.eyebrow && (
         <p style={{ color: accent, fontSize: "0.82rem", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", margin: "0 0 12px" }}>
           {section.eyebrow}
@@ -593,7 +682,8 @@ function LandingSectionComponent({
                 ) : (
                   <>
                     {section.type === "mechanism" && <span style={{ color: accent, fontWeight: 800, fontSize: "0.85rem" }}>PASO {i + 1}</span>}
-                    {section.type === "bonuses" && <span style={{ color: "#b45309", fontWeight: 700, fontSize: "0.75rem" }}>BONO EXCLUSIVO</span>}
+                    {section.type === "bonuses" && <span style={{ color: "#b45309", fontWeight: 700, fontSize: "0.75rem" }}>RECURSO ADICIONAL</span>}
+                    {section.type === "deliverables" && <span style={{ color: "#0e7880", fontWeight: 700, fontSize: "0.75rem" }}>FORMATO DIGITAL</span>}
                     <h3 style={{ margin: "4px 0 8px", fontSize: "1.1rem" }}>{String(item?.name ?? item?.title ?? "")}</h3>
                     <p style={{ margin: 0 }}>{String(item?.description ?? item?.text ?? "")}</p>
                   </>
@@ -603,7 +693,7 @@ function LandingSectionComponent({
           })}
         </div>
       )}
-      {section.cta && (
+      {section.cta && (section.type !== "offer" || checkoutUrl) && (
         <div>
           <a
             href={isDirectCheckout ? (checkoutUrl || offerTarget) : offerTarget}
@@ -620,6 +710,8 @@ function LandingSectionComponent({
           </a>
         </div>
       )}
+      </div>
+      {imageUrl && <figure style={{margin:0,overflow:"hidden",borderRadius:"26px",boxShadow:"0 28px 65px #071e2440"}}><img src={imageUrl} alt={section.imageAlt || ""} loading={isHero ? "eager" : "lazy"} style={{width:"100%",height:"100%",minHeight:"280px",maxHeight:"520px",objectFit:"cover",display:"block"}} /></figure>}
     </section>
   );
 }

@@ -2,6 +2,8 @@ import { Type } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 import { createReadStream } from "node:fs";
 import type { ProductExportService } from "../services/product-export-service.js";
+import type { LandingImageService } from "../services/landing-image-service.js";
+import type { ProjectRepository } from "../repositories/project-repository.js";
 
 const Project = Type.Object({ id: Type.String({ format: "uuid" }) }),
   Document = Type.Object({
@@ -21,6 +23,11 @@ const ImageBody = Type.Object(
   },
   { additionalProperties: false },
 );
+const GenerateLandingImageBody = Type.Object({
+  title: Type.String({ minLength: 1, maxLength: 160 }),
+  prompt: Type.String({ minLength: 12, maxLength: 1200 }),
+  aspectRatio: Type.Union([Type.Literal("16:9"), Type.Literal("4:3"), Type.Literal("1:1")]),
+}, { additionalProperties: false });
 const DiagramBody = Type.Object(
   {
     title: Type.String({ minLength: 1, maxLength: 160 }),
@@ -48,12 +55,43 @@ const ExportBody = Type.Object(
 
 export function registerProductExportRoutes(
   app: FastifyInstance,
+  projects: ProjectRepository,
   service: ProductExportService,
+  landingImages: LandingImageService,
 ): void {
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/product-assets",
     { schema: { params: Project } },
     async (request) => ({ assets: service.listAssets(request.params.id) }),
+  );
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/product-assets/image-generation",
+    { schema: { params: Project } },
+    async () => ({ configured: landingImages.configured, model: landingImages.model, paidModel: true }),
+  );
+  app.post<{
+    Params: { id: string };
+    Body: { title: string; prompt: string; aspectRatio: "16:9" | "4:3" | "1:1" };
+  }>(
+    "/api/projects/:id/product-assets/image-generation",
+    { schema: { params: Project, body: GenerateLandingImageBody } },
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
+      if (!landingImages.configured) return reply.code(503).send({ error: "image_provider_unavailable", message: "Gemini no está configurado para generar imágenes." });
+      try {
+        const generated = await landingImages.generate(request.body.prompt, request.body.aspectRatio);
+        const extension = generated.mimeType === "image/jpeg" ? "jpg" : generated.mimeType.split("/")[1];
+        const asset = await service.addImage(request.params.id, {
+          title: request.body.title,
+          filename: `landing-generated.${extension}`,
+          mimeType: generated.mimeType,
+          contentBase64: generated.contentBase64,
+        });
+        return reply.code(201).send(asset);
+      } catch (error) {
+        return reply.code(422).send({ error: "image_generation_failed", message: message(error) });
+      }
+    },
   );
   app.post<{
     Params: { id: string };

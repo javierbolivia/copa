@@ -93,6 +93,13 @@ describe("Final Product approval UI",()=>{
     expect(html).toContain("Revisión editorial asistida registrada");
     expect(html).toContain("no equivale a validación humana o veterinaria");
     expect(html).not.toContain("Revisión humana registrada");
+    expect(html).not.toContain("Abre cada fuente, contrasta todas las afirmaciones y registra los extractos utilizados.");
+  });
+
+  it("shows the source-check instructions while factual review is pending",()=>{
+    const html=render();
+    expect(html).toContain("Revisión factual pendiente");
+    expect(html).toContain("Abre cada fuente, contrasta todas las afirmaciones y registra los extractos utilizados.");
   });
 
   it("shows the review scope and remaining release caveat",()=>{

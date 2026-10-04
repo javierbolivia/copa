@@ -792,25 +792,34 @@ export class ProductStudioService {
     );
   }
   approveDocument(projectId: string, documentId: string): ProductDocument {
-    const current = this.requireFresh(projectId, documentId),
-      chapters = this.documents.listChapters(projectId, documentId);
-    if (
-      !chapters.length ||
-      chapters.some((chapter) => chapter.status !== "APPROVED")
-    )
-      throw new Error(
-        "Aprueba todos los capítulos antes de aprobar el documento.",
+    const db = this.database.connection;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireFresh(projectId, documentId),
+        chapters = this.documents.listChapters(projectId, documentId);
+      if (
+        !chapters.length ||
+        chapters.some((chapter) => chapter.status !== "APPROVED")
+      )
+        throw new Error(
+          "Aprueba todos los capítulos antes de aprobar el documento.",
+        );
+      const saved = this.saveDocumentRevision(
+        current,
+        current.version.blocks,
+        current.version.outline.map((item) => ({ ...item, status: "APPROVED" })),
+        "APPROVAL",
+        current.version.metadata,
+        "APPROVED",
       );
-    const saved = this.saveDocumentRevision(
-      current,
-      current.version.blocks,
-      current.version.outline.map((item) => ({ ...item, status: "APPROVED" })),
-      "APPROVAL",
-      current.version.metadata,
-      "APPROVED",
-    );
-    this.artifacts.approveVersion(projectId, saved.artifactVersionId);
-    return this.documents.get(projectId, documentId)!;
+      this.artifacts.approveVersion(projectId, saved.artifactVersionId);
+      const approved = this.documents.get(projectId, documentId)!;
+      db.exec("COMMIT");
+      return approved;
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   private saveDocumentRevision(

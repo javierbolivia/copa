@@ -2,6 +2,7 @@ import type {
   CreateProjectInput,
   Project,
   UpdateProjectInput,
+  WorkflowState,
 } from "@our-platform/shared";
 import type { StatementResultingChanges } from "node:sqlite";
 import { rmSync } from "node:fs";
@@ -9,6 +10,7 @@ import { dirname, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
+import { effectiveWorkflowState } from "./workflow-repository.js";
 
 interface ProjectRow {
   id: string;
@@ -248,12 +250,12 @@ export class ProjectRepository {
   private withWorkflow(project: Project): Project {
     const rows = this.database.connection
       .prepare(
-        `SELECT label, state FROM workflow_steps WHERE project_id=? AND step_key<>'emails' ORDER BY position`,
+        `SELECT step_key, label, state, updated_at FROM workflow_steps WHERE project_id=? AND step_key<>'emails' ORDER BY position`,
       )
-      .all(project.id) as unknown as Array<{ label: string; state: string }>;
-    const completed = rows.filter((row) => row.state === "COMPLETED").length;
+      .all(project.id) as unknown as Array<{ step_key:string; label: string; state: WorkflowState; updated_at:string }>;
+    const completed = rows.filter((row) => effectiveWorkflowState(this.database,project.id,row.step_key,row.state,row.updated_at) === "COMPLETED").length;
     const current =
-      rows.find((row) => row.state !== "COMPLETED")?.label ?? "Completado";
+      rows.find((row) => effectiveWorkflowState(this.database,project.id,row.step_key,row.state,row.updated_at) !== "COMPLETED")?.label ?? "Completado";
     return {
       ...project,
       workflowStage: current,

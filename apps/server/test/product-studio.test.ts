@@ -5,8 +5,9 @@ import type {
   Project,
 } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
+import { ArtifactRepository } from "../src/repositories/artifact-repository.js";
 
 describe("Product Studio backend", () => {
   let app: FastifyInstance;
@@ -232,6 +233,22 @@ describe("Product Studio backend", () => {
       expect(approved.statusCode, approved.body).toBe(200);
       document = approved.json<ProductDocument>();
     }
+    const versionBeforeApproval = document.activeVersionId;
+    const failApproval = vi.spyOn(ArtifactRepository.prototype, "approveVersion")
+      .mockImplementationOnce(() => { throw new Error("simulated artifact approval failure"); });
+    const failed = await app.inject({
+      method: "POST",
+      url: `/api/projects/${project.id}/product-documents/${document.id}/approve`,
+      payload: {},
+    });
+    failApproval.mockRestore();
+    expect(failed.statusCode).toBe(422);
+    const afterFailure = (await app.inject({
+      method: "GET", url: `/api/projects/${project.id}/product-documents/${document.id}`,
+    })).json<ProductDocument>();
+    expect(afterFailure.activeVersionId).toBe(versionBeforeApproval);
+    expect(afterFailure.status).not.toBe("APPROVED");
+
     const approved = await app.inject({
       method: "POST",
       url: `/api/projects/${project.id}/product-documents/${document.id}/approve`,

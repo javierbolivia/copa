@@ -31,11 +31,12 @@ export class ArtifactRepository {
     } catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   approveVersion(projectId:string,id:string,beforeApprove?:()=>void):ArtifactVersion|undefined {
-    const db=this.database.connection,now=new Date().toISOString();db.exec("BEGIN IMMEDIATE");
+    const db=this.database.connection,now=new Date().toISOString(),ownsTransaction=!db.isTransaction;
+    if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
     try{
       const version=db.prepare(`SELECT v.id,v.artifact_id,v.status,v.freshness,a.active_version_id,a.artifact_type FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.id=? AND v.project_id=?`).get(id,projectId) as {id:string;artifact_id:string;status:string;freshness:string;active_version_id:string|null;artifact_type:string}|undefined;
-      if(!version){db.exec("COMMIT");return undefined;}
-      if(version.status==="approved"&&version.active_version_id===id){db.exec("COMMIT");return this.getVersion(id);}
+      if(!version){if(ownsTransaction)db.exec("COMMIT");return undefined;}
+      if(version.status==="approved"&&version.active_version_id===id){if(ownsTransaction)db.exec("COMMIT");return this.getVersion(id);}
       if(version.status!=="draft")throw new Error("Sólo una versión draft puede aprobarse.");
       if(version.freshness!=="fresh")throw new Error("La versión está obsoleta y no puede aprobarse.");
       const invalidParent=db.prepare(`SELECT parent.id FROM lineage_edges edge
@@ -51,16 +52,26 @@ export class ArtifactRepository {
       db.prepare("UPDATE artifacts SET active_version_id=? WHERE id=? AND project_id=?").run(id,version.artifact_id,projectId);
       if(version.active_version_id)this.propagateStale(version.active_version_id,id,projectId,now);
       this.database.connection.prepare("UPDATE workflow_steps SET state='COMPLETED',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key=?").run(now,projectId,version.artifact_type);
-      db.exec("COMMIT");return this.getVersion(id);
-    }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
+      if(ownsTransaction)db.exec("COMMIT");return this.getVersion(id);
+    }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   archiveDraft(projectId:string,id:string):ArtifactVersion|undefined {
-    const db=this.database.connection;
-    const version=this.getVersion(id);
-    if(!version||version.projectId!==projectId)return undefined;
-    if(version.status!=="draft")throw new Error("Sólo un borrador puede archivarse; la versión aprobada permanece activa.");
-    db.prepare("UPDATE artifact_versions SET status='archived' WHERE id=? AND project_id=? AND status='draft'").run(id,projectId);
-    return this.getVersion(id);
+    const db=this.database.connection,now=new Date().toISOString();db.exec("BEGIN IMMEDIATE");
+    try{
+      const version=db.prepare(`SELECT v.artifact_id,v.status,a.active_version_id,a.artifact_type
+        FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
+        WHERE v.id=? AND v.project_id=?`).get(id,projectId) as {artifact_id:string;status:string;active_version_id:string|null;artifact_type:string}|undefined;
+      if(!version){db.exec("COMMIT");return undefined;}
+      if(version.status!=="draft")throw new Error("Sólo un borrador puede archivarse; la versión aprobada permanece activa.");
+      const result=db.prepare("UPDATE artifact_versions SET status='archived' WHERE id=? AND project_id=? AND status='draft'").run(id,projectId);
+      if(result.changes!==1)throw new Error("El borrador cambió mientras se archivaba; vuelve a cargar el historial.");
+      const latest=db.prepare("SELECT id FROM artifact_versions WHERE artifact_id=? ORDER BY version_number DESC LIMIT 1").get(version.artifact_id) as {id:string}|undefined;
+      const active=version.active_version_id?db.prepare("SELECT status,freshness FROM artifact_versions WHERE id=? AND project_id=?").get(version.active_version_id,projectId) as {status:string;freshness:string}|undefined:undefined;
+      if(latest?.id===id&&active?.status==="approved"&&active.freshness==="fresh"){
+        db.prepare("UPDATE workflow_steps SET state='COMPLETED',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key=? AND state='IN_PROGRESS'").run(now,projectId,version.artifact_type);
+      }
+      db.exec("COMMIT");return this.getVersion(id);
+    }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   private propagateStale(oldId:string,newId:string,projectId:string,now:string):void {
     const descendants=this.database.connection.prepare(`WITH RECURSIVE d(id) AS (SELECT child_version_id FROM lineage_edges WHERE parent_version_id=? UNION SELECT le.child_version_id FROM lineage_edges le JOIN d ON le.parent_version_id=d.id) SELECT DISTINCT d.id,a.artifact_type FROM d JOIN artifact_versions v ON v.id=d.id JOIN artifacts a ON a.id=v.artifact_id`).all(oldId) as unknown as Array<{id:string;artifact_type:string}>;

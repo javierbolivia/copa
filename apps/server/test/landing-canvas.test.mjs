@@ -41,6 +41,11 @@ describe('Hallazia visual editor boundary',()=>{
   const html=renderLandingHtml({title:'<script>alert(1)</script>',designTokens:{accent:'red;}body{display:none}',font:'url(https://bad)'},sections:[{type:'hero',headline:'<img src=x onerror=alert(1)>',variant:'centered'}]});
   expect(html).not.toContain('<script>');expect(html).not.toContain('<img');expect(html).not.toContain('https://bad');expect(html).toContain('centered');
  });
+ it('escapes custom section types in item-list class attributes',()=>{
+  const html=renderLandingHtml({title:'Seguro',sections:[{type:'custom" onmouseover="alert(7)',headline:'Bloque',items:['Elemento']}]});
+  expect(html).not.toContain('onmouseover="alert(7)"');
+  expect(html).toContain('hl-items--custom&quot; onmouseover=&quot;alert(7)');
+ });
  it('preserves theme presets across canvas roundtrip and renders theme styling',()=>{
   const value=toLanding({title:'Página Temática',designTokens:{theme:'dark',accent:'#6366f1'},sections:[{type:'hero',headline:'Oscuro Hero'},{type:'footer',headline:'Pie',copyright:'2026'}]});
   const canvas=toLandingCanvas(value);

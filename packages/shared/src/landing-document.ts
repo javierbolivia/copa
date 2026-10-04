@@ -249,7 +249,7 @@ export function renderLandingHtml(input: unknown): string {
             type === "benefits" ? `<div class="hl-check-badge">✓</div>` : "";
           return `<article class="hl-item">${badge}${itemTitle ? `<h3>${itemTitle}</h3>` : ""}${itemDesc ? `<p>${itemDesc}</p>` : ""}</article>`;
         }).join("");
-        itemsHtml = `<div class="hl-items hl-items--${type}">${itemCards}</div>`;
+        itemsHtml = `<div class="hl-items hl-items--${escape(type)}">${itemCards}</div>`;
       }
 
       const isDirectCheckout = Boolean(externalCheckoutUrl && (type === "offer" || type === "cta"));

@@ -57,6 +57,11 @@ describe("Final Product approval UI",()=>{
     expect(html).not.toContain("Manuscrito vigente");
     expect(html).toContain("Manuscrito por revisar");
   });
+  it("does not label a fresh draft as the current approved manuscript",()=>{
+    const html=render();
+    expect(html).toContain("Manuscrito en revisión");
+    expect(html).not.toContain("Manuscrito vigente");
+  });
   it("blocks approval and explains the validation errors for an incomplete manuscript",()=>{
     const html=render({outputData:{finalProductValidationAudit:{ok:false,errors:["La referencia R2 está listada pero no se cita."]}}});
 

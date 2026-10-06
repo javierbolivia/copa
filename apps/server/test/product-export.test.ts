@@ -58,6 +58,21 @@ describe("Product Studio physical assets and exports", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("rechaza assets de un proyecto inexistente antes de procesar imágenes o diagramas", async () => {
+    const base = "/api/projects/00000000-0000-4000-8000-000000000000/product-assets";
+    const requests = [
+      { method: "GET" as const, url: base },
+      { method: "GET" as const, url: `${base}/image-generation` },
+      { method: "POST" as const, url: base, payload: { title: "Imagen", filename: "imagen.png", mimeType: "image/png", contentBase64: "aW52YWxpZA==" } },
+      { method: "POST" as const, url: `${base}/diagrams`, payload: { title: "Diagrama", diagramType: "flowchart", description: "Paso A a B" } },
+    ];
+    for (const request of requests) {
+      const response = await app.inject(request);
+      expect(response.statusCode, `${request.method} ${request.url}: ${response.body}`).toBe(404);
+      expect(response.json()).toMatchObject({ error: "not_found" });
+    }
+  });
+
   it.each([
     { width: 3200, height: 1600, orientation: 1, expectedWidth: 2400, expectedHeight: 1200 },
     { width: 800, height: 400, orientation: 6, expectedWidth: 400, expectedHeight: 800 },

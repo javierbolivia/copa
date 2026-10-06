@@ -62,12 +62,18 @@ export function registerProductExportRoutes(
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/product-assets",
     { schema: { params: Project } },
-    async (request) => ({ assets: service.listAssets(request.params.id) }),
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
+      return { assets: service.listAssets(request.params.id) };
+    },
   );
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/product-assets/image-generation",
     { schema: { params: Project } },
-    async () => ({ configured: landingImages.configured, model: landingImages.model, paidModel: true }),
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
+      return { configured: landingImages.configured, model: landingImages.model, paidModel: true };
+    },
   );
   app.post<{
     Params: { id: string };
@@ -105,6 +111,7 @@ export function registerProductExportRoutes(
     "/api/projects/:id/product-assets",
     { schema: { params: Project, body: ImageBody } },
     async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
       try {
         return reply
           .code(201)
@@ -128,6 +135,7 @@ export function registerProductExportRoutes(
     "/api/projects/:id/product-assets/diagrams",
     { schema: { params: Project, body: DiagramBody } },
     async (request, reply) => {
+      if (!projects.get(request.params.id)) return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
       try {
         return reply
           .code(201)

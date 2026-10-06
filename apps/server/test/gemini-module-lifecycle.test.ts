@@ -76,6 +76,7 @@ describe("Gemini module lifecycle safety", () => {
       const snapshot = JSON.parse(generation.input_snapshot) as { providerAttempts: Array<Record<string, unknown>> };
       expect(generation).toMatchObject({ input_tokens: 21, error_code: "invalid_response", error_message: expect.stringContaining("PROHIBITED_CONTENT") });
       expect(snapshot.providerAttempts).toEqual([expect.objectContaining({ stage: "problems/map", batch: { index: 1, total: 2 }, httpStatus: 200, candidateCount: 0, blockReason: "PROHIBITED_CONTENT", outcome: "empty", attempt: 1 })]);
+      expect(db.connection.prepare("SELECT input_tokens,output_tokens FROM llm_usage WHERE project_id=? AND provider='gemini'").get(project.id)).toMatchObject({ input_tokens: 21, output_tokens: 0 });
     } finally { db.close(); }
   });
 
@@ -158,6 +159,7 @@ describe("Gemini module lifecycle safety", () => {
       expect(row).toMatchObject({ error_code: "request_budget_exceeded", error_message: expect.stringContaining("requires 9 request(s)") });
       expect(snapshot.providerAttempts).toEqual([]);
       expect(snapshot.geminiOperationTotals).toEqual({ totalProviderRequests: 0, requestsByStage: {}, retries: 0, blockedRequests: 1, failedRequests: 0 });
+      expect(db.connection.prepare("SELECT COUNT(*) AS total FROM llm_usage WHERE project_id=? AND provider='gemini'").get(project.id)).toMatchObject({ total: 0 });
     } finally { db.close(); }
   });
 

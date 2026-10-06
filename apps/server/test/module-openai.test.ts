@@ -112,4 +112,22 @@ describe("pipeline real de modulos con OpenAI", () => {
     expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({status:"FAILED",artifactVersionId:null});
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/modules/research`})).json()).toEqual({results:[]});
   });
+
+  it("cuenta los tokens reportados de una reparación fallida sin duplicar la solicitud",async()=>{
+    const directory=mkdtempSync(join(tmpdir(),"hallazia-openai-failed-usage-"));
+    directories.push(directory);
+    const databasePath=join(directory,"test.db");
+    const fetchMock=vi.fn().mockResolvedValueOnce(openAIResponse("no-json")).mockRejectedValueOnce(new Error("offline transport"));
+    app=await createApp({databasePath,serveFrontend:false,openAI:{apiKey:"test-key",fetch:fetchMock as typeof fetch}});
+    const project=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Failed repair",niche:"Prueba"}})).json<Project>();
+    expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/research/run`,payload:{provider:"openai"}})).statusCode).toBe(409);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await app.close();app=undefined;
+    const db=new DatabaseSync(databasePath,{readOnly:true});
+    try{
+      const generation=db.prepare("SELECT id,input_tokens,output_tokens,estimated_cost FROM generations WHERE project_id=? AND provider='openai'").get(project.id) as {id:string;input_tokens:number;output_tokens:number;estimated_cost:number};
+      expect(generation).toMatchObject({input_tokens:101,output_tokens:37});
+      expect(db.prepare("SELECT input_tokens,output_tokens,estimated_cost FROM llm_usage WHERE generation_id=?").get(generation.id)).toMatchObject({input_tokens:101,output_tokens:37,estimated_cost:generation.estimated_cost});
+    }finally{db.close();}
+  });
 });

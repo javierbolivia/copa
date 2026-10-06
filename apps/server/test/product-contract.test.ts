@@ -262,14 +262,17 @@ describe("strict Product contract, grounding and downstream safety", () => {
     const database = new AppDatabase(databasePath);
     try {
       const generation = database.connection.prepare(
-        "SELECT status,input_tokens,output_tokens,estimated_cost FROM generations WHERE project_id=? AND provider='deepseek' ORDER BY created_at DESC LIMIT 1",
-      ).get(demo.project.id) as { status: string; input_tokens: number; output_tokens: number; estimated_cost: number };
+        "SELECT id,status,input_tokens,output_tokens,estimated_cost FROM generations WHERE project_id=? AND provider='deepseek' ORDER BY created_at DESC LIMIT 1",
+      ).get(demo.project.id) as { id: string; status: string; input_tokens: number; output_tokens: number; estimated_cost: number };
       const snapshotRow = database.connection.prepare(
         "SELECT input_snapshot FROM generations WHERE project_id=? AND provider='deepseek' ORDER BY created_at DESC LIMIT 1",
       ).get(demo.project.id) as { input_snapshot: string };
       const snapshot = JSON.parse(snapshotRow.input_snapshot) as { providerAttempts: Array<{ physicalRequests?: Array<Record<string, unknown>> }> };
       expect(generation).toMatchObject({ status: "FAILED", input_tokens: 40, output_tokens: 30 });
       expect(generation.estimated_cost).toBeGreaterThan(0);
+      expect(database.connection.prepare("SELECT provider,input_tokens,output_tokens,estimated_cost FROM llm_usage WHERE generation_id=?").get(generation.id)).toMatchObject({
+        provider: "deepseek", input_tokens: 40, output_tokens: 30, estimated_cost: generation.estimated_cost,
+      });
       expect(snapshot.providerAttempts.at(-1)?.physicalRequests).toEqual([
         { attempt: 1, inputTokens: 40, outputTokens: 30, usageKind: "provider_reported" },
       ]);

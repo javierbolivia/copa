@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { HistoryResultPanel } from "../../web/src/features/refinement/AnalyticsHistory";
+import { AnalyticsHistory, HistoryResultPanel } from "../../web/src/features/refinement/AnalyticsHistory";
 
 const failedGeneration = {
   id: "generation-failed",
@@ -38,5 +38,21 @@ describe("failed generation history", () => {
     expect(html).toContain("RESULTADO HISTÓRICO");
     expect(html).toContain("partial");
     expect(html).not.toContain("EJECUCIÓN FALLIDA");
+  });
+});
+
+describe("mixed provider history", () => {
+  it("never presents Mock or local estimates as paid costs", () => {
+    const generations = [
+      { ...failedGeneration, id: "mock", provider: "mock", model: "demo", status: "COMPLETED", estimatedCost: 2 },
+      { ...failedGeneration, id: "local", provider: "local", model: "local-sources-v1", status: "COMPLETED", estimatedCost: 4 },
+      { ...failedGeneration, id: "gemini", provider: "gemini", status: "COMPLETED", estimatedCost: 0.5 },
+    ];
+    const html = renderToStaticMarkup(createElement(AnalyticsHistory, { generations, demoMode: false }));
+    expect(html).toContain('Coste total</span><strong>$0.50</strong>');
+    expect(html).toContain('Coste por proyecto');
+    expect(html).not.toContain('$6.50');
+    expect(html).not.toContain('$2.00');
+    expect(html).not.toContain('$4.00');
   });
 });

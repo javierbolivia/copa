@@ -58,7 +58,7 @@ export function AnalyticsHistory({ generations, demoMode = false, onOpenGenerati
       <Metric label="Tasa completada" value={`${totals.completionRate}%`} hint="Generaciones correctas" />
     </div>
     <div className="refinement-distributions">
-      <Distribution title="Coste por proyecto" rows={totals.byProject.map((row) => ({ label: row.label, value: demoMode ? 0 : row.cost, display: formatCost(demoMode ? 0 : row.cost) }))} />
+      <Distribution title="Coste por proyecto" rows={totals.byProject.map((row) => ({ label: row.label, value: row.cost, display: formatCost(row.cost) }))} />
       <Distribution title="Tokens por módulo" rows={totals.byModule.map((row) => ({ label: row.label, value: row.tokens, display: row.tokens.toLocaleString("es") }))} />
       <Distribution title="Tokens por modelo" rows={totals.byModel.map((row) => ({ label: row.label, value: row.tokens, display: row.tokens.toLocaleString("es") }))} />
     </div>
@@ -75,7 +75,7 @@ export function AnalyticsHistory({ generations, demoMode = false, onOpenGenerati
         {filtered.length === 0 ? <div className="refinement-empty">No hay generaciones que coincidan con los filtros.</div> : <div className="refinement-generation-list">
           {filtered.map((item) => <button className={selected?.id === item.id ? "is-selected" : ""} key={item.id} onClick={() => { setSelectedId(item.id); onOpenGeneration?.(item.id); }} type="button">
             <span><strong>{item.moduleName}{item.versionNumber?` · v${item.versionNumber}`:""}</strong><small>{item.projectName} · {formatDateTime(item.createdAt)}</small></span>
-            <span><b>{item.model}</b><small>{(item.inputTokens + item.outputTokens).toLocaleString("es")} tokens · {formatCost(demoMode ? 0 : item.estimatedCost)}</small></span>
+            <span><b>{item.model}</b><small>{(item.inputTokens + item.outputTokens).toLocaleString("es")} tokens · {formatCost(costFor(item, demoMode))}</small></span>
             <span className={`refinement-status is-${item.status.toLowerCase()}`}>{statusLabel(item.status)}</span>
           </button>)}
         </div>}
@@ -89,7 +89,7 @@ export function HistoryResultPanel({ item, demoMode }: { item: GenerationHistory
   if (!item) return <aside className="refinement-history-result"><div className="refinement-empty">Selecciona una generación para ver su resultado histórico.</div></aside>;
   return <aside className="refinement-history-result">
     <header><span>{item.status === "FAILED" ? "EJECUCIÓN FALLIDA" : "RESULTADO HISTÓRICO"}</span><h3>{item.result?.title ?? item.moduleName}</h3><p {...(item.status === "FAILED" ? { role: "alert" } : {})}>{summaryFor(item)}</p></header>
-    <dl><div><dt>Proyecto</dt><dd>{item.projectName}</dd></div>{item.versionNumber&&<div><dt>Versión</dt><dd>v{item.versionNumber}</dd></div>}<div><dt>Proveedor</dt><dd>{item.provider}</dd></div><div><dt>Modelo</dt><dd>{item.model}</dd></div><div><dt>Duración</dt><dd>{formatDuration(item.durationMs)}</dd></div><div><dt>Tokens</dt><dd>{(item.inputTokens + item.outputTokens).toLocaleString("es")}</dd></div><div><dt>Coste</dt><dd>{formatCost(demoMode ? 0 : item.estimatedCost)}</dd></div></dl>
+    <dl><div><dt>Proyecto</dt><dd>{item.projectName}</dd></div>{item.versionNumber&&<div><dt>Versión</dt><dd>v{item.versionNumber}</dd></div>}<div><dt>Proveedor</dt><dd>{item.provider}</dd></div><div><dt>Modelo</dt><dd>{item.model}</dd></div><div><dt>Duración</dt><dd>{formatDuration(item.durationMs)}</dd></div><div><dt>Tokens</dt><dd>{(item.inputTokens + item.outputTokens).toLocaleString("es")}</dd></div><div><dt>Coste</dt><dd>{formatCost(costFor(item, demoMode))}</dd></div></dl>
     {item.status === "FAILED" && item.errorCode && <div className="refinement-result-fields"><section><span>Código de error</span><p>{item.errorCode}</p></section></div>}
     {item.status === "COMPLETED" && item.result && item.result.fields.length > 0 && <div className="refinement-result-fields">{item.result.fields.map((field) => <section key={field.label}><span>{field.label}</span><p>{field.value}</p></section>)}</div>}
   </aside>;
@@ -119,11 +119,12 @@ function Distribution({ title, rows }: { title: string; rows: readonly { label: 
 function SelectFilter({ label, value, values, onChange }: { label: string; value: string; values: readonly string[]; onChange: (value: string) => void }) { return <label><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}><option value="ALL">Todos</option>{values.map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}</select></label>; }
 
 function summarize(items: readonly GenerationHistoryItem[], demoMode: boolean) {
-  const groups = (key: "projectName" | "moduleName" | "model") => [...items.reduce((map, item) => { const label = item[key]; const current = map.get(label) ?? { label, cost: 0, tokens: 0 }; current.cost += item.estimatedCost; current.tokens += item.inputTokens + item.outputTokens; map.set(label, current); return map; }, new Map<string, { label: string; cost: number; tokens: number }>()).values()].sort((a, b) => b.tokens - a.tokens);
+  const groups = (key: "projectName" | "moduleName" | "model") => [...items.reduce((map, item) => { const label = item[key]; const current = map.get(label) ?? { label, cost: 0, tokens: 0 }; current.cost += costFor(item, demoMode); current.tokens += item.inputTokens + item.outputTokens; map.set(label, current); return map; }, new Map<string, { label: string; cost: number; tokens: number }>()).values()].sort((a, b) => b.tokens - a.tokens);
   const inputTokens = items.reduce((total, item) => total + item.inputTokens, 0);
   const outputTokens = items.reduce((total, item) => total + item.outputTokens, 0);
-  return { cost: demoMode ? 0 : items.reduce((total, item) => total + item.estimatedCost, 0), tokens: inputTokens + outputTokens, inputTokens, outputTokens, completionRate: items.length === 0 ? 0 : Math.round(items.filter((item) => item.status === "COMPLETED").length / items.length * 100), byProject: groups("projectName"), byModule: groups("moduleName"), byModel: groups("model") };
+  return { cost: items.reduce((total, item) => total + costFor(item, demoMode), 0), tokens: inputTokens + outputTokens, inputTokens, outputTokens, completionRate: items.length === 0 ? 0 : Math.round(items.filter((item) => item.status === "COMPLETED").length / items.length * 100), byProject: groups("projectName"), byModule: groups("moduleName"), byModel: groups("model") };
 }
+function costFor(item: GenerationHistoryItem, demoMode: boolean) { return demoMode || item.provider === "mock" || item.provider === "local" ? 0 : item.estimatedCost; }
 function unique(values: readonly string[]) { return [...new Set(values)].sort((a, b) => a.localeCompare(b, "es")); }
 function formatCost(value: number) { return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`; }
 function formatDuration(value: number) { return value < 1000 ? `${value} ms` : `${(value / 1000).toFixed(1)} s`; }

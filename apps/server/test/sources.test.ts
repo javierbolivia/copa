@@ -1,5 +1,9 @@
 import type { Project, SourceBundle } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { AppDatabase } from "../src/database/database.js";
@@ -43,6 +47,16 @@ describe("Sources API",()=>{
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/comments`})).json().comments).toHaveLength(10);
     const workflow=(await app.inject({method:"GET",url:`/api/projects/${project.id}/workflow`})).json();
     expect(workflow.steps.find((step:{stepKey:string})=>step.stepKey==="sources").state).toBe("STALE");
+  });
+
+  it("atribuye el resumen de fuentes reales al procesamiento local sin uso de LLM",async()=>{
+    const source=await app.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",title:"Entrevista",text:"Primer hallazgo.\n\nSegundo hallazgo."}});
+    expect(source.statusCode).toBe(201);
+    const generated=await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/sources/run`,payload:{provider:"gemini"}});
+    expect(generated.statusCode,generated.body).toBe(200);
+    expect(generated.json().outputData).toMatchObject({sourceCount:1,commentCount:2,isDemo:false});
+    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{agentKey:string;provider:string;model:string;inputTokens:number;outputTokens:number;estimatedCost:number}>}>().generations;
+    expect(generations.find(item=>item.agentKey==="sources")).toMatchObject({provider:"local",model:"local-sources-v1",inputTokens:0,outputTokens:0,estimatedCost:0});
   });
 
   it("segmenta texto manual, filtra y elimina en cascada",async()=>{
@@ -103,6 +117,26 @@ describe("Sources API",()=>{
     expect(sources.listComments(project.id,{sourceId:queued.source.id,replies:true,limit:1000})).toHaveLength(5);
     expect(adapter.calls).toHaveLength(5);expect(adapter.calls.every(call=>call.maxResults===100)).toBe(true);db.close();
   });
+});
+
+it("no registra uso LLM al actualizar Fuentes desde el corpus local",async()=>{
+  const directory=mkdtempSync(join(tmpdir(),"hallazia-local-sources-"));
+  const databasePath=join(directory,"project.sqlite");
+  const localApp=await createApp({databasePath,logger:false,serveFrontend:false});
+  try{
+    const project=(await localApp.inject({method:"POST",url:"/api/projects",payload:{name:"Corpus real",niche:"QA"}})).json<Project>();
+    const created=await localApp.inject({method:"POST",url:`/api/projects/${project.id}/sources`,payload:{sourceType:"manual",title:"Nota",text:"Observación concreta."}});
+    expect(created.statusCode).toBe(201);
+    const generated=await localApp.inject({method:"POST",url:`/api/projects/${project.id}/modules/sources/run`,payload:{provider:"mock"}});
+    expect(generated.statusCode,generated.body).toBe(200);
+    const db=new DatabaseSync(databasePath,{readOnly:true});
+    try{
+      expect(db.prepare("SELECT COUNT(*) AS total FROM llm_usage WHERE project_id=?").get(project.id)).toMatchObject({total:0});
+    }finally{db.close();}
+  }finally{
+    await localApp.close();
+    rmSync(directory,{recursive:true,force:true});
+  }
 });
 
 describe("constraints Sources",()=>{

@@ -469,7 +469,7 @@ export class ModuleService {
     if (requestedProvider !== "mock" && requestedProvider !== "openai" && requestedProvider !== "gemini" && requestedProvider !== "deepseek" && requestedProvider !== "groq" && requestedProvider !== "openrouter") {
       throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
     }
-    const selectedProvider = key === "sources" ? "mock" : requestedProvider;
+    const selectedProvider = key === "sources" ? "local" : requestedProvider;
     if (selectedProvider === "openai" && !this.options.openAI.configured) {
       throw new Error("OpenAI no esta configurado. Define OPENAI_API_KEY o ejecuta con el proveedor Mock.");
     }
@@ -552,10 +552,10 @@ export class ModuleService {
     const base=project.name.startsWith("DEMO")?createDemoOutput(key,evidenceIds):createContextOutput(key,project.niche,evidence,parentOutputs);
     let output = contextualize(base, key, project.niche, evidence);
     let agentKey: string = key;
-    let promptVersion = "demo-v1";
+    let promptVersion = key === "sources" ? "local-sources-v1" : "demo-v1";
     let promptHash: string | undefined;
     let promptPath: string | undefined;
-    let model = "demo-deterministic-v1";
+    let model = key === "sources" ? "local-sources-v1" : "demo-deterministic-v1";
     let usage: LlmGenerateResult<Record<string, unknown>>["usage"] = {
       inputTokens: 0, outputTokens: 0, estimatedCost: 0, currency: "USD", usageKind: "estimated",
     };
@@ -575,26 +575,46 @@ export class ModuleService {
     let failurePersisted = false;
     const persistFailedGeneration = (error: unknown): void => {
       if (failurePersisted) return;
-      failurePersisted = true;
       const now = new Date().toISOString();
       const message = error instanceof Error ? error.message : `La generación ${selectedProvider} falló.`;
       const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
         ? error.code
         : error instanceof Error ? error.name : "generation_error";
-      const failedAttempt = providerAttempts.at(-1);
-      const physicalRequests = providerAttempts.flatMap((attempt) => attempt.physicalRequests ?? []);
-      const inputTokens = physicalRequests.length
-        ? physicalRequests.reduce((sum, request) => sum + (request.inputTokens ?? 0), 0)
-        : failedAttempt?.inputTokens ?? 0;
-      const outputTokens = physicalRequests.length
-        ? physicalRequests.reduce((sum, request) => sum + (request.outputTokens ?? 0), 0)
-        : failedAttempt?.outputTokens ?? 0;
+      const observedUsage = providerAttempts.reduce((total, attempt) => {
+        const physicalRequests = attempt.physicalRequests;
+        if (physicalRequests?.length) {
+          for (const request of physicalRequests) {
+            total.inputTokens += request.inputTokens ?? 0;
+            total.outputTokens += request.outputTokens ?? 0;
+          }
+        } else {
+          total.inputTokens += attempt.inputTokens ?? 0;
+          total.outputTokens += attempt.outputTokens ?? 0;
+        }
+        return total;
+      }, { inputTokens: 0, outputTokens: 0 });
+      const { inputTokens, outputTokens } = observedUsage;
       const estimatedCost = inputTokens || outputTokens ? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options) : 0;
-      this.db.connection.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?,?)`).run(
-        generationId, projectId, agentKey, selectedProvider, model,
-        JSON.stringify({ parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model, promptHash, promptPath, ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}), ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}), providerAttempts, ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}), context: lastProviderInput ?? providerInput }),
-        promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, code, message, now, now,
-      );
+      const db = this.db.connection;
+      db.exec("SAVEPOINT failed_generation_usage");
+      try {
+        db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,error_code,error_message,created_at,completed_at) VALUES(?,?,?,?,?,'FAILED',?,NULL,?,?,?,?,?,?,?,?,?)`).run(
+          generationId, projectId, agentKey, selectedProvider, model,
+          JSON.stringify({ parentVersionIds: parentIds, evidenceIds, moduleKey: key, provider: selectedProvider, model, promptHash, promptPath, ...(providerEvidenceAudit ? { providerEvidenceProjection: providerEvidenceAudit } : {}), ...(geminiProjectionAudits.length ? { geminiPayloadProjection: geminiProjectionAudits } : {}), providerAttempts, ...(geminiBudget ? { geminiOperationTotals: geminiBudget.snapshot() } : {}), context: lastProviderInput ?? providerInput }),
+          promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, code, message, now, now,
+        );
+        if (inputTokens || outputTokens) {
+          db.prepare(`INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,currency,is_estimate,recorded_at) VALUES(?,?,?,?,?,?,?,?,'USD',1,?)`).run(
+            uuidv7(), projectId, generationId, selectedProvider, model, inputTokens, outputTokens, estimatedCost, now,
+          );
+        }
+        db.exec("RELEASE SAVEPOINT failed_generation_usage");
+        failurePersisted = true;
+      } catch (persistenceError) {
+        db.exec("ROLLBACK TO SAVEPOINT failed_generation_usage");
+        db.exec("RELEASE SAVEPOINT failed_generation_usage");
+        throw persistenceError;
+      }
     };
     if ((selectedProvider === "openai"||selectedProvider==="gemini"||selectedProvider==="deepseek"||selectedProvider==="groq"||selectedProvider==="openrouter") && key !== "sources") {
       const prompt = getModulePrompt(key);
@@ -1039,9 +1059,9 @@ export class ModuleService {
       ...(vocabularyVersionId ? { vocabularyVersionId, vocabularyContentHash: vocabularySnapshot?.contentHash ?? null } : { vocabularyVersionId: null }),
       knowledgeUsed: knowledgeContext,
     };
-    const inputTokens = usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
-    const outputTokens = usage.outputTokens || Math.ceil(JSON.stringify(output).length / 4);
-    const estimatedCost = usage.estimatedCost ?? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options);
+    const inputTokens = key === "sources" ? 0 : usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
+    const outputTokens = key === "sources" ? 0 : usage.outputTokens || Math.ceil(JSON.stringify(output).length / 4);
+    const estimatedCost = key === "sources" ? 0 : usage.estimatedCost ?? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options);
     const now = new Date().toISOString();
 
     const existing = this.db.connection.prepare(
@@ -1084,12 +1104,14 @@ export class ModuleService {
       generationId, projectId, agentKey, persistedProvider, model, vocabularyVersionId, JSON.stringify(inputSnapshot), JSON.stringify(output),
       promptVersion, inputTokens, outputTokens, estimatedCost, Date.now() - startedAt, now, now,
     );
-    this.db.connection.prepare(`
-      INSERT INTO llm_usage (
-        id, project_id, generation_id, provider, model, input_tokens,
-        output_tokens, estimated_cost, currency, is_estimate, recorded_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?)
-    `).run(uuidv7(), projectId, generationId, persistedProvider, model, inputTokens, outputTokens, estimatedCost, usage.estimatedCost!==undefined&&usage.usageKind === "provider_reported" ? 0 : 1, now);
+    if (key !== "sources") {
+      this.db.connection.prepare(`
+        INSERT INTO llm_usage (
+          id, project_id, generation_id, provider, model, input_tokens,
+          output_tokens, estimated_cost, currency, is_estimate, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'USD', ?, ?)
+      `).run(uuidv7(), projectId, generationId, persistedProvider, model, inputTokens, outputTokens, estimatedCost, usage.estimatedCost!==undefined&&usage.usageKind === "provider_reported" ? 0 : 1, now);
+    }
 
     if(knowledgeContext.length){
       const usedRows=knowledgeContext.map(context=>knowledgeRows.find(item=>context.chunkId===item.chunkId&&context.memoryId===item.memoryId)!).filter(Boolean);

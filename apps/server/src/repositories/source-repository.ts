@@ -215,7 +215,15 @@ export class SourceRepository {
     try {
       this.database.connection.prepare(`DELETE FROM evidence_links WHERE project_id=? AND source_type='evidence_snippet' AND source_id IN (SELECT id FROM evidence_snippets WHERE project_id=? AND source_id=?)`).run(projectId,projectId,sourceId);
     const result=this.database.connection.prepare("DELETE FROM sources WHERE project_id=? AND id=?").run(projectId,sourceId) as StatementResultingChanges;
-    if(result.changes===1)this.invalidateSourceArtifacts(projectId,"Se eliminó una fuente de evidencia.",new Date().toISOString());
+    if(result.changes===1){
+      const now=new Date().toISOString();
+      this.invalidateSourceArtifacts(projectId,"Se eliminó una fuente de evidencia.",now);
+      const remaining=this.database.connection.prepare("SELECT 1 FROM sources WHERE project_id=? AND status IN ('ready','completed') LIMIT 1").get(projectId);
+      if(!remaining){
+        this.database.connection.prepare("UPDATE workflow_steps SET state='READY',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='sources' AND state='COMPLETED'").run(now,projectId);
+        this.database.connection.prepare("UPDATE workflow_steps SET state='PENDING',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='problems' AND state='READY'").run(now,projectId);
+      }
+    }
       const deleted=result.changes===1;
       this.database.connection.exec("COMMIT");
       return deleted;

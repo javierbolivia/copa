@@ -201,6 +201,21 @@ describe("constraints Sources",()=>{
       }
     }finally{db.close();}
   });
+
+  it("reabre Fuentes si se elimina la última fuente antes de crear su artefacto",()=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const project=new ProjectRepository(db).create({name:"Last source",niche:"Evidence"});
+      const sources=new SourceRepository(db);
+      const bundle=sources.createDemo(project.id);
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='sources'").get(project.id)).toMatchObject({state:"COMPLETED"});
+
+      expect(sources.delete(project.id,bundle.sources[0]!.id)).toBe(true);
+      expect(sources.list(project.id)).toEqual([]);
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='sources'").get(project.id)).toMatchObject({state:"READY"});
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='problems'").get(project.id)).toMatchObject({state:"PENDING"});
+    }finally{db.close();}
+  });
   it("preserves manual noise but excludes it from analysis using the same rules as YouTube",()=>{
     const db=new AppDatabase(":memory:");
     try{

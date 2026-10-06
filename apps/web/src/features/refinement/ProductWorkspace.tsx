@@ -6,14 +6,14 @@ import {fromProduct,toProduct} from "./product-adapter";
 const record=(value:unknown):Record<string,unknown>=>value&&typeof value==="object"&&!Array.isArray(value)?value as Record<string,unknown>:{};
 const text=(value:unknown)=>typeof value==="string"?value:"";
 
-export function ProductWorkspace({selected,saving,onSave,onTrace}:{selected:ModuleResult;saving:boolean;onSave:(output:unknown)=>Promise<boolean>;onTrace:()=>void}){
+export function ProductWorkspace({selected,saving,readOnly=false,onSave,onTrace}:{selected:ModuleResult;saving:boolean;readOnly?:boolean;onSave:(output:unknown)=>Promise<boolean>;onTrace:()=>void}){
   const output=record(selected.outputData);
   const proposals=(Array.isArray(output.proposals)?output.proposals:[]).map(record);
   const [inspectedId,setInspectedId]=useState(text(output.selectedId)||text(proposals[0]?.id));
   const [editing,setEditing]=useState(false);
   const inspected=proposals.find(proposal=>proposal.id===inspectedId);
   const chosen=proposals.find(proposal=>proposal.id===output.selectedId);
-  const writable=selected.freshness==="fresh"&&(selected.status==="approved"||selected.status==="draft");
+  const writable=!readOnly&&selected.freshness==="fresh"&&(selected.status==="approved"||selected.status==="draft");
   const audit=record(output.productValidationAudit);
   const errors=Array.isArray(audit.errors)?audit.errors.filter((item):item is string=>typeof item==="string"):[];
   const unsupported=(Array.isArray(audit.unsupportedClaims)?audit.unsupportedClaims:[]).map(record);

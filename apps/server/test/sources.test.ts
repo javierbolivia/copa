@@ -216,6 +216,25 @@ describe("constraints Sources",()=>{
       expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='problems'").get(project.id)).toMatchObject({state:"PENDING"});
     }finally{db.close();}
   });
+
+  it("reabre Fuentes si falla la única importación lista antes de crear su artefacto",()=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const project=new ProjectRepository(db).create({name:"Partial source",niche:"Evidence"});
+      const sources=new SourceRepository(db);
+      const source=sources.createPendingYouTube(project.id,"Video","https://youtu.be/dQw4w9WgXcQ","dQw4w9WgXcQ");
+      sources.finishYouTubeImport(project.id,source.id,
+        {videoId:"dQw4w9WgXcQ",title:"Video",channelId:"channel",channelTitle:"Canal",publishedAt:"2026-01-01T00:00:00Z"},
+        [{threadId:"thread-1",topLevelComment:{commentId:"comment-1",parentCommentId:null,author:"Autor",text:"Una experiencia concreta con un problema repetido.",likes:1,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:false},totalReplyCount:0,embeddedReplies:[]}],
+        new Map());
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='sources'").get(project.id)).toMatchObject({state:"COMPLETED"});
+
+      sources.markImportFailed(project.id,source.id,"timeout","Import failed");
+      expect(sources.analysisSet(project.id)).toEqual([]);
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='sources'").get(project.id)).toMatchObject({state:"READY"});
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='problems'").get(project.id)).toMatchObject({state:"PENDING"});
+    }finally{db.close();}
+  });
   it("preserves manual noise but excludes it from analysis using the same rules as YouTube",()=>{
     const db=new AppDatabase(":memory:");
     try{

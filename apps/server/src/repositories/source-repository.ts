@@ -204,7 +204,10 @@ export class SourceRepository {
         if(status==="failed")db.prepare("UPDATE sources SET status='failed',error_code=?,error_message=?,updated_at=? WHERE project_id=? AND id=?").run(code??null,message??null,now,projectId,sourceId);
         else if(status==="cancelled")db.prepare("UPDATE sources SET status='cancelled',updated_at=? WHERE project_id=? AND id=?").run(now,projectId,sourceId);
         else db.prepare("UPDATE sources SET status='pending',error_code=NULL,error_message=NULL,updated_at=? WHERE project_id=? AND id=?").run(now,projectId,sourceId);
-        if(previous.status!==status)this.invalidateSourceArtifacts(projectId,"Cambió la disponibilidad de una fuente de evidencia.",now);
+        if(previous.status!==status){
+          this.invalidateSourceArtifacts(projectId,"Cambió la disponibilidad de una fuente de evidencia.",now);
+          this.resetWorkflowAfterLastReadySource(projectId,now);
+        }
       }
       if(ownsTransaction)db.exec("COMMIT");
     }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
@@ -218,11 +221,7 @@ export class SourceRepository {
     if(result.changes===1){
       const now=new Date().toISOString();
       this.invalidateSourceArtifacts(projectId,"Se eliminó una fuente de evidencia.",now);
-      const remaining=this.database.connection.prepare("SELECT 1 FROM sources WHERE project_id=? AND status IN ('ready','completed') LIMIT 1").get(projectId);
-      if(!remaining){
-        this.database.connection.prepare("UPDATE workflow_steps SET state='READY',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='sources' AND state='COMPLETED'").run(now,projectId);
-        this.database.connection.prepare("UPDATE workflow_steps SET state='PENDING',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='problems' AND state='READY'").run(now,projectId);
-      }
+      this.resetWorkflowAfterLastReadySource(projectId,now);
     }
       const deleted=result.changes===1;
       this.database.connection.exec("COMMIT");
@@ -277,5 +276,12 @@ export class SourceRepository {
     const update=this.database.connection.prepare("UPDATE artifact_versions SET freshness='stale',stale_reason=? WHERE project_id=? AND id=?");
     for(const version of versions)update.run(reason,projectId,version.id);
     this.database.connection.prepare(`UPDATE workflow_steps SET state='STALE',stale_reason=?,updated_at=? WHERE project_id=? AND step_key IN (SELECT DISTINCT a.artifact_type FROM artifacts a JOIN artifact_versions v ON v.artifact_id=a.id WHERE v.id IN (${versions.map(()=>"?").join(",")}))`).run(reason,now,projectId,...versions.map(v=>v.id));
+  }
+
+  private resetWorkflowAfterLastReadySource(projectId:string,now:string):void{
+    const remaining=this.database.connection.prepare("SELECT 1 FROM sources WHERE project_id=? AND status IN ('ready','completed') LIMIT 1").get(projectId);
+    if(remaining)return;
+    this.database.connection.prepare("UPDATE workflow_steps SET state='READY',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='sources' AND state='COMPLETED'").run(now,projectId);
+    this.database.connection.prepare("UPDATE workflow_steps SET state='PENDING',stale_reason=NULL,updated_at=? WHERE project_id=? AND step_key='problems' AND state='READY'").run(now,projectId);
   }
 }

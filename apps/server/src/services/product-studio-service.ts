@@ -66,13 +66,7 @@ export class ProductStudioService {
           ? Number(((inputTokens * 1.25 + outputTokens * 10) / 1_000_000).toFixed(4))
           : 0,
       maxBudget = this.settings.get(projectId)?.maxBudget ?? null,
-      spent = (
-        this.database.connection
-          .prepare(
-            "SELECT COALESCE(SUM(estimated_cost),0) total FROM llm_usage WHERE project_id=?",
-          )
-          .get(projectId) as { total: number }
-      ).total;
+      spent = this.projectSpend(projectId);
     return {
       provider,
       model: llm ? this.generationModel(projectId, llm) : "demo-deterministic-v1",
@@ -1383,17 +1377,24 @@ export class ProductStudioService {
   private assertBudget(projectId: string, nextCost: number): void {
     const max = this.settings.get(projectId)?.maxBudget;
     if (max === null || max === undefined) return;
-    const spent = (
-      this.database.connection
-        .prepare(
-          "SELECT COALESCE(SUM(estimated_cost),0) total FROM llm_usage WHERE project_id=?",
-        )
-        .get(projectId) as { total: number }
-    ).total;
+    const spent = this.projectSpend(projectId);
     if (spent + nextCost > max)
       throw new ProductStudioConflictError(
         `El coste estimado excede el presupuesto del proyecto (${max} USD).`,
       );
+  }
+  private projectSpend(projectId: string): number {
+    const row = this.database.connection.prepare(`
+      SELECT
+        (SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage WHERE project_id=?) +
+        (SELECT COALESCE(SUM(generation.estimated_cost),0)
+          FROM generations generation
+          WHERE generation.project_id=? AND generation.status='FAILED'
+            AND generation.provider NOT IN ('mock','local')
+            AND (generation.input_tokens>0 OR generation.output_tokens>0)
+            AND NOT EXISTS (SELECT 1 FROM llm_usage usage WHERE usage.generation_id=generation.id)) AS total
+    `).get(projectId, projectId) as { total: number };
+    return row.total;
   }
   private assertRequestBudget(
     projectId: string,

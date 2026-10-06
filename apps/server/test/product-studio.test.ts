@@ -5,16 +5,24 @@ import type {
   Project,
 } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { ArtifactRepository } from "../src/repositories/artifact-repository.js";
 
 describe("Product Studio backend", () => {
   let app: FastifyInstance;
+  const directories: string[] = [];
   beforeEach(async () => {
     app = await createApp({ databasePath: ":memory:", serveFrontend: false });
   });
-  afterEach(async () => app.close());
+  afterEach(async () => {
+    await app.close();
+    for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  });
 
   async function demo() {
     return (
@@ -729,5 +737,30 @@ describe("Product Studio backend", () => {
     expect(
       generations.filter((item) => item.agentKey === "product_outline"),
     ).toHaveLength(0);
+  });
+
+  it("incluye en el presupuesto costes estimados de fallos históricos sin asiento de uso", async () => {
+    await app.close();
+    const directory = mkdtempSync(join(tmpdir(), "hallazia-legacy-budget-"));
+    directories.push(directory);
+    const databasePath = join(directory, "test.db");
+    app = await createApp({ databasePath, serveFrontend: false, openAI: { apiKey: "test-key", fetch: vi.fn() as typeof fetch } });
+    const project = await demo();
+    const settings = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/settings` })).json<Record<string, unknown>>();
+    const updated = await app.inject({ method: "PUT", url: `/api/projects/${project.id}/settings`, payload: { ...settings, maxBudget: 1 } });
+    expect(updated.statusCode, updated.body).toBe(200);
+    const document = await create(project);
+    const db = new DatabaseSync(databasePath);
+    try {
+      const insertFailed = db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_tokens,output_tokens,estimated_cost,duration_ms,created_at,completed_at)
+        VALUES(?,?,?,?,?,'FAILED',?,?,?,?,?,?)`);
+      insertFailed.run("historical-failed-generation", project.id, "research_agent", "gemini", "gemini-test", 7331, 0, 0.25, 120, "2026-10-01T00:00:00.000Z", "2026-10-01T00:00:00.120Z");
+      insertFailed.run("ledgered-failed-generation", project.id, "research_agent", "openai", "openai-test", 100, 20, 0.35, 120, "2026-10-02T00:00:00.000Z", "2026-10-02T00:00:00.120Z");
+      db.prepare("INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,recorded_at) VALUES(?,?,?,?,?,?,?,?,?)").run("ledgered-failed-usage", project.id, "ledgered-failed-generation", "openai", "openai-test", 100, 20, 0.35, "2026-10-02T00:00:00.120Z");
+      insertFailed.run("mock-failed-generation", project.id, "research_agent", "mock", "mock-test", 500, 500, 0.4, 120, "2026-10-03T00:00:00.000Z", "2026-10-03T00:00:00.120Z");
+    } finally { db.close(); }
+    const estimate = await app.inject({ method: "GET", url: `/api/projects/${project.id}/product-documents/${document.id}/generation-estimate` });
+    expect(estimate.statusCode, estimate.body).toBe(200);
+    expect(estimate.json<{ remainingBudget: number }>()).toMatchObject({ remainingBudget: 0.4 });
   });
 });

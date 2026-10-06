@@ -11,6 +11,7 @@ import {
 } from "@our-platform/shared";
 import {Field} from "./EditorScaffold";
 import {api,type ProductAsset} from "../../api/client";
+import {useRequestGuard} from "../../api/useRequestGuard";
 import {applyLandingSectionImage,createLandingSectionId,fromLanding,withStableLandingSectionIds} from "./landing-adapter";
 import type {LandingEditorValue,LandingPreviewMode,LandingVersion} from "./types";
 import "./refinement.css";
@@ -85,8 +86,15 @@ export function LandingBuilder({
   const [imagePrompt,setImagePrompt]=useState("");
   const [imageAspectRatio,setImageAspectRatio]=useState<"16:9"|"4:3"|"1:1">("16:9");
   const [generatingImage,setGeneratingImage]=useState(false);
-  const projectIdRef=useRef(projectId);
-  projectIdRef.current=projectId;
+  const imageRequests=useRequestGuard(`${projectId}:${selectedVersionId??""}`);
+
+  useEffect(()=>{
+    imageRequests.invalidate();
+    setDraft(withStableLandingSectionIds(structuredClone(value)));
+    setEditing(false);setVisual(false);setIndex(0);setCompareId("");setError(null);setImagePrompt("");
+    setUploading(false);setGeneratingImage(false);
+  },[projectId,selectedVersionId]);
+  useEffect(()=>setAssets([]),[projectId]);
 
   useEffect(()=>{let current=true;void api.productAssets(projectId).then(result=>{if(current)setAssets(result.assets.filter(asset=>asset.kind==="image"));}).catch(()=>{});return()=>{current=false;};},[projectId]);
   useEffect(()=>{let current=true;setImageConfigured(null);void api.landingImageStatus(projectId).then(result=>{if(current)setImageConfigured(result.configured);}).catch(()=>{if(current)setImageConfigured(false);});return()=>{current=false;};},[projectId]);
@@ -111,40 +119,47 @@ export function LandingBuilder({
   };
 
   const save=async()=>{
+    imageRequests.invalidate();
+    const current=imageRequests.begin();
+    setUploading(false);setGeneratingImage(false);
     setError(null);
     try{
       if(await onSave(structuredClone(draft))===false){
+        if(!current())return;
         setError("No se guardó el borrador. Tus cambios permanecen en el editor.");
         return;
       }
+      if(!current())return;
       setEditing(false);
     }catch(reason){
-      setError(reason instanceof Error?reason.message:"No se pudo guardar. Tus cambios permanecen en el editor.");
+      if(current())setError(reason instanceof Error?reason.message:"No se pudo guardar. Tus cambios permanecen en el editor.");
     }
   };
 
   const uploadImage=(file:File)=>{
-    if(!section?.id)return;
+    if(saving||!section?.id)return;
     if(!["image/png","image/jpeg","image/webp"].includes(file.type)){setError("Usa PNG, JPEG o WebP para la imagen.");return;}
     const targetId=section.id;
+    const current=imageRequests.begin();
     setUploading(true);setError(null);
     const reader=new FileReader();
-    reader.onerror=()=>{setUploading(false);setError("No se pudo leer la imagen.");};
-    reader.onload=()=>{void api.uploadProductAsset(projectId,{title:file.name.replace(/\.[^.]+$/,""),filename:file.name,mimeType:file.type,contentBase64:String(reader.result).split(",")[1]??""}).then(asset=>{if(projectIdRef.current!==projectId)return;setAssets(current=>[asset,...current]);setDraft(current=>({...current,sections:applyLandingSectionImage(current.sections,targetId,asset.url,file.name.replace(/\.[^.]+$/,"" ))}));}).catch(reason=>setError(reason instanceof Error?reason.message:"No se pudo guardar la imagen.")).finally(()=>setUploading(false));};
+    reader.onerror=()=>{if(current()){setUploading(false);setError("No se pudo leer la imagen.");}};
+    reader.onload=()=>{if(!current())return;void api.uploadProductAsset(projectId,{title:file.name.replace(/\.[^.]+$/,""),filename:file.name,mimeType:file.type,contentBase64:String(reader.result).split(",")[1]??""}).then(asset=>{if(!current())return;setAssets(assets=>[asset,...assets]);setDraft(draft=>({...draft,sections:applyLandingSectionImage(draft.sections,targetId,asset.url,file.name.replace(/\.[^.]+$/,"" ))}));}).catch(reason=>{if(current())setError(reason instanceof Error?reason.message:"No se pudo guardar la imagen.");}).finally(()=>{if(current())setUploading(false);});};
     reader.readAsDataURL(file);
   };
 
   const generateImage=async()=>{
-    if(generatingImage||!imageConfigured||!section?.id||imagePrompt.trim().length<12)return;
+    if(saving||generatingImage||uploading||!imageConfigured||!section?.id||imagePrompt.trim().length<12)return;
     const targetId=section.id,prompt=imagePrompt.trim(),title=`Landing · ${section.headline||section.type}`.slice(0,160);
+    const current=imageRequests.begin();
     setGeneratingImage(true);setError(null);
     try{
       const asset=await api.generateLandingImage(projectId,{title,prompt,aspectRatio:imageAspectRatio});
-      if(projectIdRef.current!==projectId)return;
-      setAssets(current=>[asset,...current]);
-      setDraft(current=>({...current,sections:applyLandingSectionImage(current.sections,targetId,asset.url,prompt.slice(0,160))}));
-    }catch(reason){setError(reason instanceof Error?reason.message:"Gemini no pudo generar la imagen.");}
-    finally{setGeneratingImage(false);}
+      if(!current())return;
+      setAssets(assets=>[asset,...assets]);
+      setDraft(draft=>({...draft,sections:applyLandingSectionImage(draft.sections,targetId,asset.url,prompt.slice(0,160))}));
+    }catch(reason){if(current())setError(reason instanceof Error?reason.message:"Gemini no pudo generar la imagen.");}
+    finally{if(current())setGeneratingImage(false);}
   };
 
   const handleExportReact=()=>{
@@ -189,7 +204,7 @@ export function LandingBuilder({
         <button className="rf-button rf-button--primary" disabled={readOnly||editing} onClick={()=>setVisual(true)}>
           Abrir constructor visual (Puck)
         </button>
-        {editing?<><button className="rf-button" disabled={saving} onClick={()=>{setDraft(structuredClone(value));setEditing(false);setError(null);}}>Cancelar</button><button className="rf-button rf-button--primary" disabled={saving} onClick={()=>void save()}>{saving?"Guardando…":"Guardar borrador"}</button></>:<button className="rf-button" disabled={readOnly} onClick={()=>setEditing(true)}>Editar</button>}
+        {editing?<><button className="rf-button" disabled={saving} onClick={()=>{imageRequests.invalidate();setUploading(false);setGeneratingImage(false);setDraft(withStableLandingSectionIds(structuredClone(value)));setEditing(false);setError(null);}}>Cancelar</button><button className="rf-button rf-button--primary" disabled={saving} onClick={()=>void save()}>{saving?"Guardando…":"Guardar borrador"}</button></>:<button className="rf-button" disabled={readOnly} onClick={()=>setEditing(true)}>Editar</button>}
         <button className="rf-button" disabled={exporting} onClick={()=>void onExportHtml(shown)}>
           Exportar HTML
         </button>
@@ -282,7 +297,7 @@ export function LandingBuilder({
             {([["eyebrow","Antetítulo"],["headline","Título"],["subheadline","Subtítulo"],["body","Cuerpo"],["cta","Texto del botón"]] as const).map(([key,label])=><Field key={key} label={label} value={text(section[key])} editing={editing} multiline={key!=="eyebrow"&&key!=="cta"} onChange={content=>replace({...section,[key]:content})}/>)}
             <Field label="Imagen · URL HTTPS o ruta local" value={text(section.imageUrl)} editing={editing} onChange={content=>replace({...section,imageUrl:content})}/>
             <Field label="Descripción accesible de la imagen" value={text(section.imageAlt)} editing={editing} onChange={content=>replace({...section,imageAlt:content})}/>
-            {editing&&<label>Subir imagen del producto<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={event=>{const file=event.target.files?.[0];if(file)uploadImage(file);event.target.value="";}}/></label>}
+            {editing&&<label>Subir imagen del producto<input type="file" accept="image/png,image/jpeg,image/webp" disabled={saving||uploading||generatingImage} onChange={event=>{const file=event.target.files?.[0];if(file)uploadImage(file);event.target.value="";}}/></label>}
             {editing&&assets.length>0&&<label>Usar imagen existente<select value="" onChange={event=>{const asset=assets.find(item=>item.id===event.target.value);if(asset)replace({...section,imageUrl:asset.url,imageAlt:section.imageAlt||asset.title});}}><option value="">Elegir de la biblioteca del proyecto</option>{assets.map(asset=><option key={asset.id} value={asset.id}>{asset.title}</option>)}</select></label>}
             {editing&&<div className="landing-image-generator">
               <h3>Generar imagen original con Gemini</h3>
@@ -293,7 +308,7 @@ export function LandingBuilder({
               <label>Formato
                 <select value={imageAspectRatio} onChange={event=>setImageAspectRatio(event.target.value as "16:9"|"4:3"|"1:1")}><option value="16:9">Horizontal 16:9</option><option value="4:3">Horizontal 4:3</option><option value="1:1">Cuadrado 1:1</option></select>
               </label>
-              <button type="button" className="rf-button rf-button--primary" disabled={!imageConfigured||generatingImage||imagePrompt.trim().length<12} onClick={()=>void generateImage()}>{generatingImage?"Generando una imagen…":"Generar una imagen con Gemini"}</button>
+              <button type="button" className="rf-button rf-button--primary" disabled={saving||!imageConfigured||generatingImage||uploading||imagePrompt.trim().length<12} onClick={()=>void generateImage()}>{generatingImage?"Generando una imagen…":"Generar una imagen con Gemini"}</button>
               {imageConfigured===false&&<p className="form-hint">Configura GEMINI_API_KEY para habilitar esta función. La subida y la biblioteca siguen disponibles.</p>}
               <p className="form-hint">Revisa el texto alternativo y el resultado antes de guardar el borrador.</p>
             </div>}

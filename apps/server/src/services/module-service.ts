@@ -317,6 +317,10 @@ export class ModuleService {
       const validation=this.validatePersistedProduct(version);
       if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
     }
+    const atomicExport = version.status === "draft" && (key === "landing" || key === "funnel" || key === "final_product");
+    const db = this.db.connection;
+    try {
+    if (atomicExport) db.exec("BEGIN IMMEDIATE");
     const approved=this.artifacts.approveVersion(projectId,versionId,key==="research"?()=>{
       const validation=validateResearchOutput(version.outputData,this.researchSnapshotEvidence(version));
       if(!validation.audit.ok)throw new Error(`Investigación incompleta o sin evidencia válida: ${validation.audit.errors.join("; ")}`);
@@ -391,7 +395,7 @@ export class ModuleService {
       if(snapshot.source==="user"&&((expected!==null&&typeof expected!=="string")||(this.activeVersion(projectId,key)?.id??null)!==expected))throw new Error("Hay una versión de Producto más reciente; revisa el producto activo antes de aprobar este borrador.");
       const validation=this.validatePersistedProduct(version);
       if(!validation.audit.ok)throw new Error(`Producto incompleto o sin grounding suficiente: ${validation.audit.errors.join("; ")}`);
-    }:undefined);if(!approved)return undefined;
+    }:undefined);if(!approved){if(atomicExport)db.exec("COMMIT");return undefined;}
     if(key==="landing")this.exporter.exportLanding(projectId,approved.id,approved.outputData);
     if(key==="funnel")this.exporter.exportFunnel(projectId,approved.id,approved.outputData);
     if(key==="final_product"){
@@ -400,7 +404,13 @@ export class ModuleService {
       this.exporter.exportFinalProduct(projectId,approved.id,approved.outputData,review.kind);
     }
     this.knowledge.saveMemoryDecision({originProjectId:projectId,artifactVersionId:approved.id,disposition:"APPROVED",visibility:"PROJECT",reusable:false,preferred:false});
+    if (atomicExport) db.exec("COMMIT");
     return this.toResult(approved);
+    } catch (error) {
+      if (atomicExport && db.isTransaction) db.exec("ROLLBACK");
+      if (atomicExport) this.exporter.cleanupVersion(projectId,versionId);
+      throw error;
+    }
   }
 
   canPromoteToMemory(projectId:string,versionId:string):boolean {

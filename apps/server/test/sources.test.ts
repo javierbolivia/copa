@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { AppDatabase } from "../src/database/database.js";
+import { ArtifactRepository } from "../src/repositories/artifact-repository.js";
 import { ProjectRepository } from "../src/repositories/project-repository.js";
 import { SourceRepository } from "../src/repositories/source-repository.js";
 import { JobRepository } from "../src/repositories/job-repository.js";
@@ -140,6 +141,48 @@ it("no registra uso LLM al actualizar Fuentes desde el corpus local",async()=>{
 });
 
 describe("constraints Sources",()=>{
+  it.each(["failed", "cancelled"] as const)("invalidates published evidence when a partial YouTube import becomes %s",status=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const project=new ProjectRepository(db).create({name:"Partial import",niche:"Evidence"});
+      const sources=new SourceRepository(db),artifacts=new ArtifactRepository(db);
+      const source=sources.createPendingYouTube(project.id,"Video","https://youtu.be/dQw4w9WgXcQ","dQw4w9WgXcQ");
+      sources.finishYouTubeImport(project.id,source.id,
+        {videoId:"dQw4w9WgXcQ",title:"Video",channelId:"channel",channelTitle:"Canal",publishedAt:"2026-01-01T00:00:00Z"},
+        [{threadId:"thread-1",topLevelComment:{commentId:"comment-1",parentCommentId:null,author:"Autor",text:"Una experiencia concreta con un problema repetido.",likes:1,publishedAt:"2026-01-01T00:00:00Z",updatedAt:"2026-01-01T00:00:00Z",isReply:false},totalReplyCount:0,embeddedReplies:[]}],
+        new Map());
+      expect(sources.analysisSet(project.id)).toHaveLength(1);
+      const sourceVersion=artifacts.createVersion({projectId:project.id,artifactType:"sources",name:"Sources",inputSnapshot:{},outputData:{sourceCount:1}});
+      const problemVersion=artifacts.createVersion({projectId:project.id,artifactType:"problems",name:"Problems",inputSnapshot:{},outputData:{items:[]},parentVersionIds:[sourceVersion.id]});
+      db.connection.prepare("UPDATE workflow_steps SET state='COMPLETED' WHERE project_id=? AND step_key='problems'").run(project.id);
+
+      if(status==="failed")sources.markImportFailed(project.id,source.id,"timeout","Import failed");
+      else sources.markImportCancelled(project.id,source.id);
+
+      expect(sources.get(project.id,source.id)?.status).toBe(status);
+      expect(sources.analysisSet(project.id)).toEqual([]);
+      expect(artifacts.getVersion(sourceVersion.id)).toMatchObject({status:"approved",freshness:"stale"});
+      expect(artifacts.getVersion(problemVersion.id)).toMatchObject({status:"approved",freshness:"stale"});
+      expect(db.connection.prepare("SELECT state FROM workflow_steps WHERE project_id=? AND step_key='problems'").get(project.id)).toMatchObject({state:"STALE"});
+    }finally{db.close();}
+  });
+
+  it("rolls back a failed import transition if downstream invalidation fails",()=>{
+    const db=new AppDatabase(":memory:");
+    try{
+      const project=new ProjectRepository(db).create({name:"Atomic import",niche:"Evidence"});
+      const sources=new SourceRepository(db),artifacts=new ArtifactRepository(db);
+      const source=sources.createPendingYouTube(project.id,"Video","https://youtu.be/dQw4w9WgXcQ","dQw4w9WgXcQ");
+      const version=artifacts.createVersion({projectId:project.id,artifactType:"sources",name:"Sources",inputSnapshot:{},outputData:{}});
+      db.connection.prepare("UPDATE sources SET status='ready' WHERE project_id=? AND id=?").run(project.id,source.id);
+      db.connection.exec("CREATE TRIGGER reject_stale BEFORE UPDATE OF freshness ON artifact_versions WHEN NEW.freshness='stale' BEGIN SELECT RAISE(ABORT, 'invalidation failed'); END");
+
+      expect(()=>sources.markImportFailed(project.id,source.id,"timeout","Import failed")).toThrow("invalidation failed");
+      expect(sources.get(project.id,source.id)?.status).toBe("ready");
+      expect(artifacts.getVersion(version.id)?.freshness).toBe("fresh");
+    }finally{db.close();}
+  });
+
   it("excludes incomplete and failed sources from the analysis set without hiding raw comments",()=>{
     const db=new AppDatabase(":memory:");
     try{

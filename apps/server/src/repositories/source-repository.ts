@@ -191,9 +191,24 @@ export class SourceRepository {
     return saved;
   }
 
-  markImportFailed(projectId:string,sourceId:string,code:string,message:string):void{this.database.connection.prepare("UPDATE sources SET status='failed',error_code=?,error_message=?,updated_at=? WHERE project_id=? AND id=?").run(code,message,new Date().toISOString(),projectId,sourceId);}
-  markImportCancelled(projectId:string,sourceId:string):void{this.database.connection.prepare("UPDATE sources SET status='cancelled',updated_at=? WHERE project_id=? AND id=?").run(new Date().toISOString(),projectId,sourceId);}
-  markImportPending(projectId:string,sourceId:string):void{this.database.connection.prepare("UPDATE sources SET status='pending',error_code=NULL,error_message=NULL,updated_at=? WHERE project_id=? AND id=?").run(new Date().toISOString(),projectId,sourceId);}
+  markImportFailed(projectId:string,sourceId:string,code:string,message:string):void{this.transitionImportStatus(projectId,sourceId,"failed",code,message);}
+  markImportCancelled(projectId:string,sourceId:string):void{this.transitionImportStatus(projectId,sourceId,"cancelled");}
+  markImportPending(projectId:string,sourceId:string):void{this.transitionImportStatus(projectId,sourceId,"pending");}
+
+  private transitionImportStatus(projectId:string,sourceId:string,status:"failed"|"cancelled"|"pending",code?:string,message?:string):void{
+    const db=this.database.connection,now=new Date().toISOString(),ownsTransaction=!db.isTransaction;
+    if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
+    try{
+      const previous=db.prepare("SELECT status FROM sources WHERE project_id=? AND id=?").get(projectId,sourceId) as {status:string}|undefined;
+      if(previous){
+        if(status==="failed")db.prepare("UPDATE sources SET status='failed',error_code=?,error_message=?,updated_at=? WHERE project_id=? AND id=?").run(code??null,message??null,now,projectId,sourceId);
+        else if(status==="cancelled")db.prepare("UPDATE sources SET status='cancelled',updated_at=? WHERE project_id=? AND id=?").run(now,projectId,sourceId);
+        else db.prepare("UPDATE sources SET status='pending',error_code=NULL,error_message=NULL,updated_at=? WHERE project_id=? AND id=?").run(now,projectId,sourceId);
+        if(previous.status!==status)this.invalidateSourceArtifacts(projectId,"Cambió la disponibilidad de una fuente de evidencia.",now);
+      }
+      if(ownsTransaction)db.exec("COMMIT");
+    }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
+  }
 
   delete(projectId:string,sourceId:string):boolean {
     this.database.connection.exec("BEGIN IMMEDIATE");

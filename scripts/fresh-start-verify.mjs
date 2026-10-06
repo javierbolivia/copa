@@ -26,15 +26,24 @@ function run(command, args, cwd, options = {}) {
   });
 }
 
-async function waitForHealth(url) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+function startServer(cwd, environment) {
+  const child = spawn(process.execPath, ["apps/server/dist/index.js"], { cwd, env: environment, stdio: ["ignore", "pipe", "pipe"] });
+  let diagnostic = "";
+  for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { diagnostic = `${diagnostic}${String(chunk)}`.slice(-4000); });
+  child.on("error", (error) => { diagnostic = `${diagnostic}\n${error.message}`.slice(-4000); });
+  return { child, diagnostic: () => diagnostic };
+}
+
+async function waitForHealth(url, server) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (server.child.exitCode !== null) throw new Error(`El servidor temporal terminó con ${server.child.exitCode}: ${server.diagnostic()}`);
     try {
       const response = await fetch(url);
       if (response.ok) return response.json();
     } catch {}
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
   }
-  throw new Error("El servidor temporal no quedó disponible.");
+  throw new Error(`El servidor temporal no quedó disponible: ${server.diagnostic()}`);
 }
 
 async function stop(child) {
@@ -53,18 +62,20 @@ async function verifyFreshStart() {
  let second;
  try {
   copyTrackedWorkspace(workspace, temporary);
-  await run("npm.cmd", ["ci"], temporary);
+  await run("npm.cmd", ["ci", "--no-audit", "--no-fund"], temporary);
   await run("npm.cmd", ["run", "build"], temporary);
   const port=45_000+Math.floor(Math.random()*1_000),baseUrl=`http://127.0.0.1:${port}`;
   const environment = { ...process.env, PORT: String(port), DATA_DIR: join(temporary, "fresh-data") };
-  first = spawn(process.execPath, ["apps/server/dist/index.js"], { cwd: temporary, env: environment, stdio: "ignore" });
-  const health = await waitForHealth(`${baseUrl}/api/health`);
+  const firstServer = startServer(temporary, environment);
+  first = firstServer.child;
+  const health = await waitForHealth(`${baseUrl}/api/health`, firstServer);
   const demoResponse = await fetch(`${baseUrl}/api/demo/projects`, { method: "POST" });
   if (!demoResponse.ok) throw new Error(`Demo devolvió HTTP ${demoResponse.status}`);
   const demo = await demoResponse.json();
   await stop(first);
-  second = spawn(process.execPath, ["apps/server/dist/index.js"], { cwd: temporary, env: environment, stdio: "ignore" });
-  await waitForHealth(`${baseUrl}/api/health`);
+  const secondServer = startServer(temporary, environment);
+  second = secondServer.child;
+  await waitForHealth(`${baseUrl}/api/health`, secondServer);
   const persistedResponse = await fetch(`${baseUrl}/api/projects/${demo.project.id}/modules/final_product`);
   const persisted = await persistedResponse.json();
   if (!persistedResponse.ok || persisted.results?.length !== 1) throw new Error("El resultado no persistió tras reiniciar.");

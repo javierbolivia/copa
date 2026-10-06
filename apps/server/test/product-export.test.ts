@@ -64,6 +64,7 @@ describe("Product Studio physical assets and exports", () => {
     const requests = [
       { method: "GET" as const, url: base },
       { method: "GET" as const, url: `${base}/image-generation` },
+      { method: "POST" as const, url: `${base}/image-generation`, payload: { title: "Imagen generada", prompt: "Un perro descansando", aspectRatio: "1:1" } },
       { method: "POST" as const, url: base, payload: { title: "Imagen", filename: "imagen.png", mimeType: "image/png", contentBase64: "aW52YWxpZA==" } },
       { method: "POST" as const, url: `${base}/diagrams`, payload: { title: "Diagrama", diagramType: "flowchart", description: "Paso A a B" } },
     ];

@@ -1,15 +1,26 @@
-import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const workspace = resolve(import.meta.dirname, "..");
-const temporary = mkdtempSync(join(tmpdir(), "our-platform-fresh-"));
-const excluded = new Set([".git", "data", "node_modules"]);
 
-function run(command, args, options = {}) {
+export function copyTrackedWorkspace(source, destination) {
+  const tracked = execFileSync("git", ["-C", source, "ls-files", "-z", "--cached"], { maxBuffer: 16 * 1024 * 1024 });
+  for (const path of tracked.toString("utf8").split("\0").filter(Boolean)) {
+    if (path.startsWith("data/") || path.startsWith("node_modules/")) continue;
+    const name = basename(path);
+    if (name === ".env" || (name.startsWith(".env.") && name !== ".env.example")) continue;
+    const target = join(destination, path);
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(join(source, path), target, { recursive: true });
+  }
+}
+
+function run(command, args, cwd, options = {}) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command, ...args], { cwd: temporary, stdio: "inherit", ...options });
+    const child = spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command, ...args], { cwd, stdio: "inherit", ...options });
     child.once("exit", (code) => code === 0 ? resolvePromise() : reject(new Error(`${command} terminó con ${code}`)));
     child.once("error", reject);
   });
@@ -36,14 +47,14 @@ async function stop(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-let first;
-let second;
-try {
-  for (const entry of readdirSync(workspace, { withFileTypes: true })) {
-    if (!excluded.has(entry.name)) cpSync(join(workspace, entry.name), join(temporary, entry.name), { recursive: true });
-  }
-  await run("npm.cmd", ["ci"]);
-  await run("npm.cmd", ["run", "build"]);
+async function verifyFreshStart() {
+ const temporary = mkdtempSync(join(tmpdir(), "our-platform-fresh-"));
+ let first;
+ let second;
+ try {
+  copyTrackedWorkspace(workspace, temporary);
+  await run("npm.cmd", ["ci"], temporary);
+  await run("npm.cmd", ["run", "build"], temporary);
   const port=45_000+Math.floor(Math.random()*1_000),baseUrl=`http://127.0.0.1:${port}`;
   const environment = { ...process.env, PORT: String(port), DATA_DIR: join(temporary, "fresh-data") };
   first = spawn(process.execPath, ["apps/server/dist/index.js"], { cwd: temporary, env: environment, stdio: "ignore" });
@@ -58,7 +69,7 @@ try {
   const persisted = await persistedResponse.json();
   if (!persistedResponse.ok || persisted.results?.length !== 1) throw new Error("El resultado no persistió tras reiniciar.");
   console.log(JSON.stringify({ schemaVersion: health.sqlite.schemaVersion, demoModules: demo.results.length, persistedVersions: persisted.results.length }));
-} finally {
+ } finally {
   if (first) await stop(first);
   if (second) await stop(second);
   const resolvedTemporary = resolve(temporary);
@@ -66,4 +77,7 @@ try {
     try { rmSync(resolvedTemporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
     catch { console.warn(`No se pudo limpiar el directorio temporal: ${resolvedTemporary}`); }
   }
+ }
 }
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await verifyFreshStart();

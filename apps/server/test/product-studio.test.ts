@@ -764,4 +764,48 @@ describe("Product Studio backend", () => {
     expect(estimate.statusCode, estimate.body).toBe(200);
     expect(estimate.json<{ remainingBudget: number }>().remainingBudget).toBeCloseTo(0.3978007,7);
   });
+
+  it("rolls back chapter approval if persisting the document revision fails", async () => {
+    await app.close();
+    const directory = mkdtempSync(join(tmpdir(), "hallazia-chapter-approval-atomicity-"));
+    directories.push(directory);
+    const databasePath = join(directory, "test.db");
+    app = await createApp({ databasePath, serveFrontend: false });
+    const project = await demo();
+    const settings = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/settings` })).json<Record<string, unknown>>();
+    const configured = await app.inject({ method: "PUT", url: `/api/projects/${project.id}/settings`, payload: { ...settings, preferredLlmProvider: "mock" } });
+    expect(configured.statusCode, configured.body).toBe(200);
+    let document = await create(project);
+    const generatedOutline = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/outline/generate`, payload: {} });
+    expect(generatedOutline.statusCode, generatedOutline.body).toBe(200);
+    document = generatedOutline.json<ProductDocument>();
+    const approvedOutline = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/outline/approve`, payload: {} });
+    expect(approvedOutline.statusCode, approvedOutline.body).toBe(200);
+    document = approvedOutline.json<ProductDocument>();
+    const chapter = document.version.outline[0]!;
+    const generatedChapter = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/chapters/${chapter.id}/generate`, payload: {} });
+    expect(generatedChapter.statusCode, generatedChapter.body).toBe(200);
+    document = generatedChapter.json<ProductDocument>();
+    const database = new DatabaseSync(databasePath);
+    try {
+      const before = database.prepare(`SELECT chapter.status chapterStatus,version.status versionStatus
+        FROM product_chapters chapter JOIN product_chapter_versions version ON version.id=chapter.active_version_id
+        WHERE chapter.project_id=? AND chapter.document_id=? AND chapter.id=?`).get(project.id, document.id, chapter.id) as { chapterStatus: string; versionStatus: string };
+      expect(before).toEqual({ chapterStatus: "DRAFT", versionStatus: "DRAFT" });
+      const failRevision = vi.spyOn(ArtifactRepository.prototype, "createVersion")
+        .mockImplementationOnce(() => { throw new Error("simulated document revision failure"); });
+      const failed = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/chapters/${chapter.id}/approve`, payload: {} });
+      failRevision.mockRestore();
+      expect(failed.statusCode).toBe(422);
+      const after = database.prepare(`SELECT chapter.status chapterStatus,version.status versionStatus
+        FROM product_chapters chapter JOIN product_chapter_versions version ON version.id=chapter.active_version_id
+        WHERE chapter.project_id=? AND chapter.document_id=? AND chapter.id=?`).get(project.id, document.id, chapter.id) as { chapterStatus: string; versionStatus: string };
+      expect(after).toEqual(before);
+      const persisted = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/product-documents/${document.id}` })).json<ProductDocument>();
+      expect(persisted.activeVersionId).toBe(document.activeVersionId);
+      expect(persisted.version.outline.find((item) => item.id === chapter.id)?.status).toBe("DRAFT");
+    } finally {
+      database.close();
+    }
+  });
 });

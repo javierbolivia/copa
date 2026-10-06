@@ -143,14 +143,14 @@ export class ProductDocumentRepository {
     }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   approveChapter(projectId:string,documentId:string,chapterId:string):boolean{
-    const db=this.database.connection,now=new Date().toISOString();db.exec("BEGIN IMMEDIATE");try{
+    const db=this.database.connection,now=new Date().toISOString(),ownsTransaction=!db.isTransaction;if(ownsTransaction)db.exec("BEGIN IMMEDIATE");try{
       const chapter=db.prepare("SELECT active_version_id FROM product_chapters WHERE project_id=? AND document_id=? AND id=?").get(projectId,documentId,chapterId) as {active_version_id:string|null}|undefined;
-      if(!chapter?.active_version_id){db.exec("ROLLBACK");return false;}
+      if(!chapter?.active_version_id){if(ownsTransaction)db.exec("ROLLBACK");return false;}
       db.prepare("UPDATE product_chapter_versions SET status='SUPERSEDED' WHERE chapter_id=? AND status='APPROVED'").run(chapterId);
       db.prepare("UPDATE product_chapter_versions SET status='APPROVED' WHERE id=? AND chapter_id=?").run(chapter.active_version_id,chapterId);
       db.prepare("UPDATE product_chapters SET status='APPROVED',approved_at=?,updated_at=? WHERE id=? AND project_id=?").run(now,now,chapterId,projectId);
-      db.exec("COMMIT");return true;
-    }catch(error){if(db.isTransaction)db.exec("ROLLBACK");throw error;}
+      if(ownsTransaction)db.exec("COMMIT");return true;
+    }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
   markChapter(projectId:string,chapterId:string,status:ProductChapterStatus):void{this.database.connection.prepare("UPDATE product_chapters SET status=?,updated_at=? WHERE project_id=? AND id=?").run(status,new Date().toISOString(),projectId,chapterId);}
 

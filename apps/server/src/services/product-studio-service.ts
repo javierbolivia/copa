@@ -791,19 +791,28 @@ export class ProductStudioService {
     documentId: string,
     chapterId: string,
   ): ProductDocument {
-    const current = this.requireFresh(projectId, documentId);
-    if (!this.documents.approveChapter(projectId, documentId, chapterId))
-      throw new Error("Genera el capítulo antes de aprobarlo.");
-    return this.saveDocumentRevision(
-      current,
-      current.version.blocks,
-      current.version.outline.map((item) =>
-        item.id === chapterId ? { ...item, status: "APPROVED" } : item,
-      ),
-      "APPROVAL",
-      current.version.metadata,
-      "IN_PROGRESS",
-    );
+    const db = this.database.connection;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireFresh(projectId, documentId);
+      if (!this.documents.approveChapter(projectId, documentId, chapterId))
+        throw new Error("Genera el capítulo antes de aprobarlo.");
+      const saved = this.saveDocumentRevision(
+        current,
+        current.version.blocks,
+        current.version.outline.map((item) =>
+          item.id === chapterId ? { ...item, status: "APPROVED" } : item,
+        ),
+        "APPROVAL",
+        current.version.metadata,
+        "IN_PROGRESS",
+      );
+      db.exec("COMMIT");
+      return saved;
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      throw error;
+    }
   }
   approveDocument(projectId: string, documentId: string): ProductDocument {
     const db = this.database.connection;

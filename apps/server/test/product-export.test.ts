@@ -96,13 +96,14 @@ describe("Product Studio physical assets and exports", () => {
     const prior = first.json<{ downloadUrl: string }>();
     const fixtureDb = new DatabaseSync(databasePath);
     try {
-      fixtureDb.prepare("UPDATE artifact_versions SET freshness='stale',stale_reason='Parent replaced' WHERE id=?").run(document.artifactVersionId);
+      fixtureDb.prepare("UPDATE artifact_versions SET freshness='stale',stale_reason='Parent replaced.' WHERE id=?").run(document.artifactVersionId);
     } finally {
       fixtureDb.close();
     }
     const validation = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/validate` });
     expect(validation.statusCode).toBe(200);
-    expect(validation.json<{ canExport: boolean }>().canExport).toBe(false);
+    expect(validation.json<{ canExport: boolean; errors: string[] }>().canExport).toBe(false);
+    expect(validation.json<{ errors: string[] }>().errors[0]).toBe("Documento desactualizado: Parent replaced.");
     const rejected = await app.inject({ method: "POST", url: base, payload: { format: "html" } });
     expect(rejected.statusCode, rejected.body).toBe(422);
     expect(rejected.json()).toMatchObject({ error: "product_export_failed" });

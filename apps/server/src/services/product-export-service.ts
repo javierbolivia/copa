@@ -324,10 +324,10 @@ export class ProductExportService {
             "Afirmación sensible o cuantificada sin respaldo explícito; revisar antes de publicar.",
         });
     }
-    if (document.freshness === "stale")
-      errors.push(
-        `Documento desactualizado: ${document.staleReason ?? "cambió un artefacto padre"}.`,
-      );
+    if (document.freshness === "stale") {
+      const reason = document.staleReason ?? "cambió un artefacto padre";
+      errors.push(`Documento desactualizado: ${reason}${/[.!?]$/u.test(reason) ? "" : "."}`);
+    }
     return { errors, warnings, claimWarnings, canExport: errors.length === 0 };
   }
   listExports(projectId: string, documentId: string): ProductExportDto[] {

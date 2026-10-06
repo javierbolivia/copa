@@ -31,7 +31,8 @@ describe("Content draft approval",()=>{
     const previous=globalThis.IS_REACT_ACT_ENVIRONMENT;
     globalThis.IS_REACT_ACT_ENVIRONMENT=true;
     const selected={versionId:"draft-2",versionNumber:2,status:"draft",freshness:"fresh",createdAt:"2026-10-03T00:00:00Z",outputData:{calendar:[]}};
-    const confirm=vi.spyOn(window,"confirm").mockReturnValue(false);
+    const confirm=vi.fn().mockReturnValue(false);
+    vi.stubGlobal("confirm",confirm);
     const approve=vi.spyOn(api,"approveModuleVersion").mockResolvedValue({...selected,status:"approved"});
     const container=document.createElement("div");document.body.append(container);
     const root=createRoot(container);
@@ -45,6 +46,6 @@ describe("Content draft approval",()=>{
       confirm.mockReturnValue(true);
       await act(async()=>button.click());
       expect(approve).toHaveBeenCalledWith("project-a","content","draft-2");
-    }finally{await act(async()=>root.unmount());container.remove();confirm.mockRestore();approve.mockRestore();globalThis.IS_REACT_ACT_ENVIRONMENT=previous;}
+    }finally{await act(async()=>root.unmount());container.remove();vi.unstubAllGlobals();approve.mockRestore();globalThis.IS_REACT_ACT_ENVIRONMENT=previous;}
   });
 });

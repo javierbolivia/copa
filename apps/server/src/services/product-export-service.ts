@@ -325,7 +325,7 @@ export class ProductExportService {
         });
     }
     if (document.freshness === "stale")
-      warnings.push(
+      errors.push(
         `Documento desactualizado: ${document.staleReason ?? "cambió un artefacto padre"}.`,
       );
     return { errors, warnings, claimWarnings, canExport: errors.length === 0 };
@@ -346,6 +346,8 @@ export class ProductExportService {
   ): Promise<ProductExportDto> {
     const document = this.documents.get(projectId, documentId);
     if (!document) throw new Error("El documento no existe.");
+    if (document.freshness === "stale")
+      throw new Error("El documento está obsoleto; conserva sus exports históricos, pero requiere una versión vigente para crear otro.");
     const validation = this.validate(projectId, documentId);
     if (!validation.canExport) throw new Error(validation.errors.join(" "));
     const html = this.renderHtml(projectId, document),
@@ -374,6 +376,9 @@ export class ProductExportService {
       relativePath = relative(this.root, path).replaceAll("\\", "/");
     this.db.connection.exec("BEGIN IMMEDIATE");
     try {
+      const current = this.documents.get(projectId, documentId);
+      if (!current || current.version.id !== document.version.id || current.freshness !== "fresh")
+        throw new Error("El documento cambió o quedó obsoleto durante la exportación.");
       this.db.connection
         .prepare(
           `INSERT INTO generated_files(id,project_id,artifact_version_id,file_role,format,relative_path,checksum,bytes,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,

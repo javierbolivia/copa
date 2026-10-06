@@ -4,16 +4,17 @@ import type {
   Project,
 } from "@our-platform/shared";
 import type { FastifyInstance } from "fastify";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { inflateRawSync } from "node:zlib";
 import * as mammoth from "mammoth";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { extractPdf } from "../src/services/knowledge/index.js";
-import { projectExportProfileInput } from "../src/services/product-export-service.js";
+import { ProductExportService, projectExportProfileInput } from "../src/services/product-export-service.js";
 
 function docxDocumentXml(bytes: Buffer): string {
   for (let offset = 0; offset + 30 <= bytes.length; ) {
@@ -84,6 +85,66 @@ describe("Product Studio physical assets and exports", () => {
       const response = await app.inject(request);
       expect(response.statusCode, `${request.method} ${request.url}: ${response.body}`).toBe(404);
       expect(response.json()).toMatchObject({ error: "not_found" });
+    }
+  });
+
+  it("conserva exports históricos sin crear otros cuando el documento queda obsoleto", async () => {
+    const { project, document } = await createReadyDocument();
+    const base = `/api/projects/${project.id}/product-documents/${document.id}/exports`;
+    const first = await app.inject({ method: "POST", url: base, payload: { format: "html" } });
+    expect(first.statusCode, first.body).toBe(201);
+    const prior = first.json<{ downloadUrl: string }>();
+    const fixtureDb = new DatabaseSync(databasePath);
+    try {
+      fixtureDb.prepare("UPDATE artifact_versions SET freshness='stale',stale_reason='Parent replaced' WHERE id=?").run(document.artifactVersionId);
+    } finally {
+      fixtureDb.close();
+    }
+    const validation = await app.inject({ method: "POST", url: `/api/projects/${project.id}/product-documents/${document.id}/validate` });
+    expect(validation.statusCode).toBe(200);
+    expect(validation.json<{ canExport: boolean }>().canExport).toBe(false);
+    const rejected = await app.inject({ method: "POST", url: base, payload: { format: "html" } });
+    expect(rejected.statusCode, rejected.body).toBe(422);
+    expect(rejected.json()).toMatchObject({ error: "product_export_failed" });
+    const history = await app.inject({ method: "GET", url: base });
+    expect(history.json<{ exports: unknown[] }>().exports).toHaveLength(1);
+    expect((await app.inject({ method: "GET", url: prior.downloadUrl })).statusCode).toBe(200);
+  });
+
+  it("no publica un DOCX si el documento queda obsoleto mientras se renderiza", async () => {
+    const { project, document } = await createReadyDocument();
+    const base = `/api/projects/${project.id}/product-documents/${document.id}/exports`;
+    const prototype = ProductExportService.prototype as unknown as {
+      renderDocx: (projectId: string, document: ProductDocument) => Promise<Buffer>;
+    };
+    const original = prototype.renderDocx;
+    let started!: () => void;
+    let release!: () => void;
+    const rendering = new Promise<void>((resolve) => { started = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const spy = vi.spyOn(prototype, "renderDocx").mockImplementation(async function (this: ProductExportService, projectId, current) {
+      started();
+      await gate;
+      return original.call(this, projectId, current);
+    });
+    try {
+      const pending = Promise.resolve(app.inject({ method: "POST", url: base, payload: { format: "docx" } }));
+      await rendering;
+      const fixtureDb = new DatabaseSync(databasePath);
+      try {
+        fixtureDb.prepare("UPDATE artifact_versions SET freshness='stale',stale_reason='Parent replaced' WHERE id=?").run(document.artifactVersionId);
+      } finally {
+        fixtureDb.close();
+      }
+      release();
+      const rejected = await pending;
+      expect(rejected.statusCode, rejected.body).toBe(422);
+      expect((await app.inject({ method: "GET", url: base })).json<{ exports: unknown[] }>().exports).toHaveLength(0);
+      const generatedDirectory = join(root, "data", "generated", project.id, "product-studio");
+      expect(existsSync(generatedDirectory) ? readdirSync(generatedDirectory) : []).toHaveLength(0);
+    } finally {
+      release();
+      spy.mockRestore();
     }
   });
 

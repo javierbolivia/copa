@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   KnowledgeExtractionError,
   chunkExtractedDocument,
@@ -73,6 +78,21 @@ describe("knowledge extractors", () => {
     expect(document.blocks[0]).toMatchObject({ kind: "heading", headingLevel: 1, text: "Título DOCX" });
     expect(document.text).toContain("Primer párrafo seguro.");
     expect(document.metadata).toMatchObject({ externalFileAccess: false, activeContentRemoved: true });
+  });
+
+  it("mantiene la conversión DOCX del CLI de Mammoth con argparse actualizado", () => {
+    const directory = mkdtempSync(join(tmpdir(), "hallazia-mammoth-cli-"));
+    try {
+      const path = join(directory, "fixture.docx");
+      writeFileSync(path, DOCX_FIXTURE);
+      const cli = createRequire(import.meta.url).resolve("mammoth/bin/mammoth");
+      const result = spawnSync(process.execPath, [cli, path], { encoding: "utf8", timeout: 10_000 });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("Título DOCX");
+      expect(result.stdout).toContain("Primer párrafo seguro.");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("extrae PDF por página y marca NEEDS_OCR cuando no existe texto", async () => {

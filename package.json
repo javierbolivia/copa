@@ -21,9 +21,11 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
+    "mammoth": "1.12.1",
     "mermaid": "11.16.1"
   },
   "overrides": {
+    "argparse": "2.0.1",
     "katex": "0.18.2"
   },
   "devDependencies": {

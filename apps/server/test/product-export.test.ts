@@ -14,7 +14,7 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { extractPdf } from "../src/services/knowledge/index.js";
-import { ProductExportService, projectExportProfileInput } from "../src/services/product-export-service.js";
+import { ProductExportService, projectExportProfileInput, sanitizeSvg } from "../src/services/product-export-service.js";
 
 function docxDocumentXml(bytes: Buffer): string {
   for (let offset = 0; offset + 30 <= bytes.length; ) {
@@ -914,4 +914,23 @@ describe("Product Studio physical assets and exports", () => {
     expect(deleted.statusCode, deleted.body).toBe(200);
     expect(existsSync(assetDirectory)).toBe(false);
   }, 45_000);
+});
+
+describe("generated SVG safety", () => {
+  it.each([
+    '<svg viewBox="0 0 20 20"><g onload=alert(1)><path d="M0 0"/></g></svg>',
+    '<svg viewBox="0 0 20 20"><a href="data:text/html,evil"><text>x</text></a></svg>',
+    '<svg viewBox="0 0 20 20"><a href="java&#x73;cript:alert(1)"><text>x</text></a></svg>',
+    '<svg viewBox="0 0 20 20"><style>@import url(https://example.com/evil.css)</style></svg>',
+    '<?xml-stylesheet href="https://example.com/evil.css"?><svg viewBox="0 0 20 20"/>',
+  ])("rejects unsafe SVG attributes", (svg) => {
+    expect(() => sanitizeSvg(svg)).toThrow(/SVG.*no permitido/);
+  });
+
+  it("preserves internal SVG references and bounded dimensions", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs><linearGradient id="tone"/></defs><rect fill="url(#tone)" width="20" height="20"/></svg>';
+    const sanitized = sanitizeSvg(svg);
+    expect(sanitized).toContain('fill="url(#tone)"');
+    expect(sanitized).toContain('width="20" height="20"');
+  });
 });

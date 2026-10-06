@@ -35,6 +35,7 @@ import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import sharp from "sharp";
+import { DOMParser } from "@xmldom/xmldom";
 import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
 import type { ProductDocumentRepository } from "../repositories/product-document-repository.js";
@@ -1164,7 +1165,48 @@ async function renderMermaid(source: string): Promise<string> {
     rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
-function sanitizeSvg(svg: string) {
+export function sanitizeSvg(svg: string) {
+  const reject = (): never => {
+    throw new Error("El SVG generado contiene contenido no permitido.");
+  };
+  if (/<!DOCTYPE|<!ENTITY/i.test(svg)) reject();
+  const document = new DOMParser({
+    errorHandler: { warning: reject, error: reject, fatalError: reject },
+  }).parseFromString(svg, "image/svg+xml");
+  const root = document.documentElement;
+  if (!root || root.localName !== "svg" || document.doctype) reject();
+  for (let child = document.firstChild; child; child = child.nextSibling)
+    if (child.nodeType === 7) reject();
+  const unsafeUrl = (value: string) =>
+    /url\(/i.test(value.replace(/url\(\s*['"]?#[\w.-]+['"]?\s*\)/gi, ""));
+  const nodes = [root];
+  while (nodes.length) {
+    const element = nodes.pop()!;
+    const tag = element.localName.toLowerCase();
+    if (
+      (element.namespaceURI && element.namespaceURI !== "http://www.w3.org/2000/svg") ||
+      /^(?:script|foreignobject|iframe|object|embed|image|feimage|animate|set)$/i.test(tag)
+    ) reject();
+    if (tag === "style" &&
+      (/@import|expression\s*\(|behavior\s*:|javascript:|data:/i.test(element.textContent ?? "") ||
+        unsafeUrl(element.textContent ?? ""))) reject();
+    for (let index = 0; index < element.attributes.length; index++) {
+      const attribute = element.attributes.item(index)!;
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim();
+      if (
+        /^on[a-z]/i.test(name) ||
+        /^(?:src|srcset|formaction)$/i.test(name) ||
+        ((name === "href" || name === "xlink:href") && !/^#[\w.-]+$/.test(value)) ||
+        /(?:javascript|vbscript|data):/i.test(value) ||
+        unsafeUrl(value)
+      ) reject();
+    }
+    for (let child = element.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType === 7) reject();
+      if (child.nodeType === 1) nodes.push(child as typeof root);
+    }
+  }
   const sanitized = svg
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, "")

@@ -75,6 +75,26 @@ describe("Product Studio physical assets and exports", () => {
     }
   });
 
+  it.each(["flowchart", "process", "timeline", "mindmap"] as const)(
+    "renderiza un diagrama real de tipo %s",
+    async (diagramType) => {
+      const created = await app.inject({ method: "POST", url: "/api/projects", payload: { name: `Diagrama ${diagramType}`, niche: "QA" } });
+      const project = created.json<Project>();
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.id}/product-assets/diagrams`,
+        payload: { title: "Proceso", diagramType, description: "Definir objetivo. Crear borrador. Revisar resultado." },
+      });
+      expect(response.statusCode, response.body).toBe(201);
+      const asset = response.json<{ mimeType: string; url: string }>();
+      expect(asset.mimeType).toBe("image/svg+xml");
+      const downloaded = await app.inject({ method: "GET", url: asset.url });
+      expect(downloaded.statusCode).toBe(200);
+      expect(downloaded.body).toContain("<svg");
+    },
+    45_000,
+  );
+
   it("devuelve 404 al consultar o exportar un documento inexistente", async () => {
     const projectResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Export inexistente", niche: "QA" } });
     const project = projectResponse.json<Project>();

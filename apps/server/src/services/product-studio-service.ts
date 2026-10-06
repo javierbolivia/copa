@@ -16,6 +16,7 @@ import type { ProjectSettingsRepository } from "../repositories/project-settings
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import type { GeminiProvider } from "../integrations/gemini-provider.js";
+import { IntegrationError } from "../integrations/integration-error.js";
 import { estimateTokenCost, ratesForModel } from "./provider-pricing.js";
 import {
   ProductDocumentRepository,
@@ -245,8 +246,11 @@ export class ProductStudioService {
         })),
       };
       const startedAt = Date.now(),
-        model = this.generationModel(projectId, llm);
-      this.assertRequestBudget(projectId, JSON.stringify(input), 4000, llm.name, model);
+        model = this.generationModel(projectId, llm),
+        systemInstructions = "Diseña el índice y la estructura de un Ebook completo, vendible y fundamentado. Usa la investigación y contexto aprobado del proyecto, organizando la obra en introducción, capítulos temáticos prácticos, accionables y con sustancia, y conclusión. No inventes fuentes y devuelve JSON estructurado.";
+      let reservationId: string | null = null;
+      reservationId=this.reserveRequestBudget(projectId,systemInstructions+JSON.stringify(input),4000,llm.name,model);
+      try {
       const result = await llm.generate<{
           chapters: Array<{
             title: string;
@@ -256,8 +260,7 @@ export class ProductStudioService {
         }>({
           provider: llm.name,
           model,
-          systemInstructions:
-            "Diseña el índice y la estructura de un Ebook completo, vendible y fundamentado. Usa la investigación y contexto aprobado del proyecto, organizando la obra en introducción, capítulos temáticos prácticos, accionables y con sustancia, y conclusión. No inventes fuentes y devuelve JSON estructurado.",
+          systemInstructions,
           input: JSON.stringify(input),
           structuredOutput: {
             name: "product_outline",
@@ -280,7 +283,13 @@ export class ProductStudioService {
         Date.now() - startedAt,
         [],
         llm.name,
+        reservationId,
       );
+      reservationId=null;
+      } catch(error) {
+        this.releaseBudgetReservationIfUnsent(reservationId,error);
+        throw error;
+      }
     } else {
       outline = titles.map((title, index): ProductOutlineItem => ({
         id: uuidv7(),
@@ -499,17 +508,20 @@ export class ProductStudioService {
         };
         const startedAt = Date.now(),
           model = this.generationModel(projectId, llm),
+          systemInstructions = "Escribe un capítulo práctico y desarrollado de este Ebook. No inventes casos ni atribuciones. No incluyas citas directas ni frases entrecomilladas reconstruidas; solo puedes citar literalmente un texto entregado en la entrada y enlazarlo con su UUID exacto. Para evidencia usa únicamente el UUID exacto del campo evidenceId entregado, en evidenceId/evidenceIds del bloque; nunca alias como item-1 o E1 en campos ni texto. Si no puedes asociar una afirmación con seguridad, omite la cita y marca el bloque AI_INFERENCE. No atribuyas afirmaciones a 'muchos tutores' ni al corpus sin UUID válido. Para conocimiento usa solo el referenceId exacto entregado. Nunca incluyas HTML ejecutable.",
           maxOutputTokens = Math.min(
             12_000,
             Math.max(5000, chapter.targetWords * 4),
           );
-        this.assertRequestBudget(
+        let reservationId: string | null = null;
+        reservationId=this.reserveRequestBudget(
           projectId,
-          JSON.stringify(input),
+          systemInstructions+JSON.stringify(input),
           maxOutputTokens,
           llm.name,
           model,
         );
+        try {
         const result = await llm.generate<{
             blocks: Array<{
               type: ProductBlock["type"];
@@ -522,8 +534,7 @@ export class ProductStudioService {
           }>({
             provider: llm.name,
             model,
-            systemInstructions:
-              "Escribe un capítulo práctico y desarrollado de este Ebook. No inventes casos ni atribuciones. No incluyas citas directas ni frases entrecomilladas reconstruidas; solo puedes citar literalmente un texto entregado en la entrada y enlazarlo con su UUID exacto. Para evidencia usa únicamente el UUID exacto del campo evidenceId entregado, en evidenceId/evidenceIds del bloque; nunca alias como item-1 o E1 en campos ni texto. Si no puedes asociar una afirmación con seguridad, omite la cita y marca el bloque AI_INFERENCE. No atribuyas afirmaciones a 'muchos tutores' ni al corpus sin UUID válido. Para conocimiento usa solo el referenceId exacto entregado. Nunca incluyas HTML ejecutable.",
+            systemInstructions,
             input: JSON.stringify(input),
             structuredOutput: {
               name: "product_chapter",
@@ -557,7 +568,13 @@ export class ProductStudioService {
           Date.now() - startedAt,
           evidence.map((item) => item.id),
           llm.name,
+          reservationId,
         );
+        reservationId=null;
+        } catch(error) {
+          this.releaseBudgetReservationIfUnsent(reservationId,error);
+          throw error;
+        }
       } else {
         blocks = mockChapterBlocks(
           chapter,
@@ -1288,6 +1305,7 @@ export class ProductStudioService {
     durationMs: number,
     evidenceIds: string[] = [],
     providerName = "openai",
+    budgetReservationId: string | null = null,
   ): RecordedGeneration {
     const generationId = uuidv7(),
       now = new Date().toISOString(),
@@ -1302,11 +1320,12 @@ export class ProductStudioService {
         inputTokens,
         outputTokens,
       );
-    this.assertBudget(projectId, estimatedCost);
     const db=this.database.connection,ownsTransaction=!db.isTransaction;if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
     try{
+      this.assertBudget(projectId, estimatedCost, budgetReservationId);
       db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_snapshot,output_data,prompt_version,input_tokens,output_tokens,estimated_cost,duration_ms,created_at,completed_at) VALUES(?,?,?,?,?,'COMPLETED',?,?,?,?,?,?,?,?,?)`).run(generationId,projectId,agentKey,providerName,result.reportedModel??model,JSON.stringify({...asRecord(inputSnapshot),query,evidenceIds,knowledgeUsed:used}),JSON.stringify(output),promptVersion,inputTokens,outputTokens,estimatedCost,durationMs,now,now);
       db.prepare(`INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,currency,is_estimate,recorded_at) VALUES(?,?,?,?,?,?,?,?, 'USD',?,?)`).run(uuidv7(),projectId,generationId,providerName,result.reportedModel??model,inputTokens,outputTokens,estimatedCost,result.usage.estimatedCost!==undefined&&result.usage.usageKind==="provider_reported"?0:1,now);
+      if(budgetReservationId)db.prepare("DELETE FROM product_studio_budget_reservations WHERE id=? AND project_id=?").run(budgetReservationId,projectId);
       const retrieval=this.recordRetrieval(projectId,generationId,agentKey,query,used);if(ownsTransaction)db.exec("COMMIT");return{generationId,...retrieval,provider:providerName,model:result.reportedModel??model,promptVersion};
     }catch(error){if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");throw error;}
   }
@@ -1377,16 +1396,16 @@ export class ProductStudioService {
       });
     return { retrievalLogId };
   }
-  private assertBudget(projectId: string, nextCost: number): void {
+  private assertBudget(projectId: string, nextCost: number, excludeReservationId: string | null = null): void {
     const max = this.settings.get(projectId)?.maxBudget;
     if (max === null || max === undefined) return;
-    const spent = this.projectSpend(projectId);
+    const spent = this.projectSpend(projectId,excludeReservationId);
     if (spent + nextCost > max)
       throw new ProductStudioConflictError(
         `El coste estimado excede el presupuesto del proyecto (${max} USD).`,
       );
   }
-  private projectSpend(projectId: string): number {
+  private projectSpend(projectId: string, excludeReservationId: string | null = null): number {
     const db=this.database.connection;
     const ledger=db.prepare("SELECT COALESCE(SUM(estimated_cost),0) total FROM llm_usage WHERE project_id=?").get(projectId) as {total:number};
     const missing=db.prepare(`
@@ -1397,7 +1416,13 @@ export class ProductStudioService {
         AND (generation.input_tokens>0 OR generation.output_tokens>0)
         AND NOT EXISTS (SELECT 1 FROM llm_usage usage WHERE usage.generation_id=generation.id)
     `).all(projectId) as Array<{provider:string;model:string;input_tokens:number;output_tokens:number;estimated_cost:number}>;
-    return ledger.total + missing.reduce((sum,generation)=>{
+    const reservationSql=excludeReservationId
+      ? "SELECT COALESCE(SUM(estimated_cost),0) total FROM product_studio_budget_reservations WHERE project_id=? AND expires_at>? AND id<>?"
+      : "SELECT COALESCE(SUM(estimated_cost),0) total FROM product_studio_budget_reservations WHERE project_id=? AND expires_at>?";
+    const reservations=(excludeReservationId
+      ? db.prepare(reservationSql).get(projectId,new Date().toISOString(),excludeReservationId)
+      : db.prepare(reservationSql).get(projectId,new Date().toISOString())) as {total:number};
+    return ledger.total + reservations.total + missing.reduce((sum,generation)=>{
       if(generation.estimated_cost>0)return sum+generation.estimated_cost;
       return sum+estimateTokenCost(
         ratesForModel(generation.provider,generation.model,"powerful",{inputPerMillion:1.25,outputPerMillion:10}),
@@ -1406,13 +1431,15 @@ export class ProductStudioService {
       );
     },0);
   }
-  private assertRequestBudget(
+  private reserveRequestBudget(
     projectId: string,
     input: string,
     maxOutputTokens: number,
     provider: string,
     model: string,
-  ): void {
+  ): string | null {
+    const max=this.settings.get(projectId)?.maxBudget;
+    if(max===null||max===undefined)return null;
     const conservativeInputTokens = Math.max(
         100,
         Math.ceil((input.length / 4) * 1.2),
@@ -1422,7 +1449,33 @@ export class ProductStudioService {
         conservativeInputTokens,
         maxOutputTokens,
       );
-    this.assertBudget(projectId, estimated);
+    const db=this.database.connection;
+    const reservationId=uuidv7(),now=new Date(),createdAt=now.toISOString(),expiresAt=new Date(now.getTime()+2*60*60*1000).toISOString();
+    const ownsTransaction=!db.isTransaction;
+    if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
+    try{
+      db.prepare("DELETE FROM product_studio_budget_reservations WHERE project_id=? AND expires_at<=?").run(projectId,createdAt);
+      this.assertBudget(projectId,estimated);
+      db.prepare("INSERT INTO product_studio_budget_reservations(id,project_id,estimated_cost,created_at,expires_at) VALUES(?,?,?,?,?)").run(reservationId,projectId,estimated,createdAt,expiresAt);
+      if(ownsTransaction)db.exec("COMMIT");
+      return reservationId;
+    }catch(error){
+      if(ownsTransaction&&db.isTransaction)db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  private releaseBudgetReservation(id: string | null): void {
+    if(!id)return;
+    this.database.connection.prepare("DELETE FROM product_studio_budget_reservations WHERE id=?").run(id);
+  }
+  private releaseBudgetReservationIfUnsent(id: string | null, error: unknown): void {
+    if(!id)return;
+    // Missing credentials and local budget guards prove no provider request
+    // was sent. Other failures may have consumed tokens without returning
+    // usage, so retain the conservative reservation until its two-hour lease
+    // expires instead of silently reopening that budget.
+    if(error instanceof IntegrationError && (error.code==="missing_api_key"||error.code==="request_budget_exceeded"))
+      this.releaseBudgetReservation(id);
   }
 }
 

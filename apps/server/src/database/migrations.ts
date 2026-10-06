@@ -1138,5 +1138,16 @@ ALTER TABLE validation_requests ADD COLUMN returned_evidence_ids_json TEXT;
 ALTER TABLE validation_requests ADD COLUMN invalid_evidence_ids_json TEXT;
 ALTER TABLE validation_requests ADD COLUMN rejection_code TEXT;
 `},
+{version:16,name:"016_product_studio_budget_reservations",sql:`
+CREATE TABLE product_studio_budget_reservations (
+ id TEXT PRIMARY KEY,
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ estimated_cost REAL NOT NULL CHECK(estimated_cost >= 0),
+ created_at TEXT NOT NULL,
+ expires_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX product_studio_budget_reservations_project_expiry_idx
+ ON product_studio_budget_reservations(project_id,expires_at);
+`},
 ];
 export const LATEST_SCHEMA_VERSION = migrations.at(-1)?.version ?? 0;

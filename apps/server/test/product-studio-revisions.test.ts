@@ -179,6 +179,53 @@ describe("Product Studio revision integrity", () => {
     expect(calls).toBe(1);
   });
 
+  it("reserves the shared project budget before a second concurrent document request can call the provider", async () => {
+    await action("outline/generate");
+    const document = await action("outline/approve");
+    const [first, second] = document.version.outline;
+    const settingsUrl=`/api/projects/${document.projectId}/settings`;
+    const settings=(await app.inject({method:"GET",url:settingsUrl})).json<ProjectSettings>();
+    const {projectId:_,updatedAt:__,...settingsInput}=settings;
+    const configured=await app.inject({method:"PUT",url:settingsUrl,payload:{...settingsInput,preferredLlmProvider:"openai",maxBudget:0.075}});
+    expect(configured.statusCode,configured.body).toBe(200);
+
+    let releaseProvider!:()=>void;
+    let markStarted!:()=>void;
+    const providerBlocked=new Promise<void>((resolve)=>{releaseProvider=resolve;});
+    const firstCallStarted=new Promise<void>((resolve)=>{markStarted=resolve;});
+    let calls=0;
+    providerCall=async()=>{
+      calls++;
+      if(calls===1){markStarted();await providerBlocked;}
+      return providerResponse({blocks:[{type:"heading",content:"Capítulo"},{type:"paragraph",content:"Contenido generado"}]});
+    };
+
+    const firstRequest=app.inject({method:"POST",url:`${base}/chapters/${first!.id}/generate`,payload:{}});
+    await firstCallStarted;
+    const secondResponse=await app.inject({method:"POST",url:`${base}/chapters/${second!.id}/generate`,payload:{}});
+    expect(secondResponse.statusCode).toBe(409);
+    expect(calls).toBe(1);
+    releaseProvider();
+    const firstResponse=await firstRequest;
+    expect(firstResponse.statusCode,firstResponse.body).toBe(200);
+
+    const estimate=(await app.inject({method:"GET",url:`${base}/generation-estimate`})).json<{remainingBudget:number}>();
+    expect(estimate.remainingBudget).toBeGreaterThan(0.07);
+
+    let failedProviderCalls=0;
+    providerCall=async()=>{
+      failedProviderCalls++;
+      return new Response(JSON.stringify({status:"completed",model:"test-model",usage:{input_tokens:500,output_tokens:100},output:[{type:"message",content:[{type:"output_text",text:"respuesta no estructurada"}]}]}),{status:200,headers:{"content-type":"application/json"}});
+    };
+    const failed=await app.inject({method:"POST",url:`${base}/chapters/${second!.id}/generate`,payload:{}});
+    expect(failed.statusCode).not.toBe(200);
+    expect(failedProviderCalls).toBe(1);
+    const conservativeEstimate=(await app.inject({method:"GET",url:`${base}/generation-estimate`})).json<{remainingBudget:number}>();
+    // The response may have consumed billable tokens; its reservation remains
+    // until lease expiry instead of being silently returned to the budget.
+    expect(conservativeEstimate.remainingBudget).toBeLessThan(0.03);
+  });
+
   it("removes deleted chapter blocks, preserving manual content and historical versions", async () => {
     await action("outline/generate");
     let document = await action("outline/approve");

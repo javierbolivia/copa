@@ -44,6 +44,8 @@ describe("ruta Research con DeepSeek", () => {
     const research = await app.inject({ method: "POST", url: `/api/projects/${project.id}/modules/research/run`, payload: {} });
     expect(research.statusCode).toBe(200);
     expect(research.json()).toMatchObject({ moduleKey: "research", outputData: { summary: "Resultado Research" } });
+    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{agentKey:string;estimatedCost:number}>}>().generations;
+    expect(generations.find((generation)=>generation.agentKey==="research_agent")?.estimatedCost).toBeCloseTo(0.0000147,8);
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body))).toMatchObject({model:DEEPSEEK_DEFAULT_MODEL,thinking:{type:"disabled"},response_format:{type:"json_object"}});
     expect(fetchMock).toHaveBeenCalledOnce();

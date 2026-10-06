@@ -16,6 +16,7 @@ import type { ProjectSettingsRepository } from "../repositories/project-settings
 import type { OpenAIProvider } from "../integrations/openai-provider.js";
 import type { DeepSeekProvider } from "../integrations/deepseek-provider.js";
 import type { GeminiProvider } from "../integrations/gemini-provider.js";
+import { estimateTokenCost, ratesForModel } from "./provider-pricing.js";
 import {
   ProductDocumentRepository,
   DEFAULT_PRODUCT_THEME,
@@ -61,15 +62,15 @@ export class ProductStudioService {
       inputTokens = chapters.length * 2300,
       llm = this.generationProvider(projectId),
       provider = llm?.name ?? "mock",
-      estimatedCost =
-        llm
-          ? Number(((inputTokens * 1.25 + outputTokens * 10) / 1_000_000).toFixed(4))
-          : 0,
+      model = llm ? this.generationModel(projectId, llm) : "demo-deterministic-v1",
+      estimatedCost = llm
+        ? estimateTokenCost(ratesForModel(llm.name,model,"powerful",{inputPerMillion:1.25,outputPerMillion:10}),inputTokens,outputTokens)
+        : 0,
       maxBudget = this.settings.get(projectId)?.maxBudget ?? null,
       spent = this.projectSpend(projectId);
     return {
       provider,
-      model: llm ? this.generationModel(projectId, llm) : "demo-deterministic-v1",
+      model,
       chapters: chapters.length,
       inputTokens,
       outputTokens,
@@ -245,7 +246,7 @@ export class ProductStudioService {
       };
       const startedAt = Date.now(),
         model = this.generationModel(projectId, llm);
-      this.assertRequestBudget(projectId, JSON.stringify(input), 4000);
+      this.assertRequestBudget(projectId, JSON.stringify(input), 4000, llm.name, model);
       const result = await llm.generate<{
           chapters: Array<{
             title: string;
@@ -506,6 +507,8 @@ export class ProductStudioService {
           projectId,
           JSON.stringify(input),
           maxOutputTokens,
+          llm.name,
+          model,
         );
         const result = await llm.generate<{
             blocks: Array<{
@@ -1294,11 +1297,11 @@ export class ProductStudioService {
       outputTokens =
         result.usage.outputTokens ??
         Math.ceil(JSON.stringify(output).length / 4),
-      estimatedCost =
-        result.usage.estimatedCost ??
-        Number(
-          ((inputTokens * 1.25 + outputTokens * 10) / 1_000_000).toFixed(8),
-        );
+      estimatedCost = result.usage.estimatedCost ?? estimateTokenCost(
+        ratesForModel(providerName, result.reportedModel ?? model, "powerful", {inputPerMillion:1.25,outputPerMillion:10}),
+        inputTokens,
+        outputTokens,
+      );
     this.assertBudget(projectId, estimatedCost);
     const db=this.database.connection,ownsTransaction=!db.isTransaction;if(ownsTransaction)db.exec("BEGIN IMMEDIATE");
     try{
@@ -1384,32 +1387,40 @@ export class ProductStudioService {
       );
   }
   private projectSpend(projectId: string): number {
-    const row = this.database.connection.prepare(`
-      SELECT
-        (SELECT COALESCE(SUM(estimated_cost),0) FROM llm_usage WHERE project_id=?) +
-        (SELECT COALESCE(SUM(generation.estimated_cost),0)
-          FROM generations generation
-          WHERE generation.project_id=? AND generation.status='FAILED'
-            AND generation.provider NOT IN ('mock','local')
-            AND (generation.input_tokens>0 OR generation.output_tokens>0)
-            AND NOT EXISTS (SELECT 1 FROM llm_usage usage WHERE usage.generation_id=generation.id)) AS total
-    `).get(projectId, projectId) as { total: number };
-    return row.total;
+    const db=this.database.connection;
+    const ledger=db.prepare("SELECT COALESCE(SUM(estimated_cost),0) total FROM llm_usage WHERE project_id=?").get(projectId) as {total:number};
+    const missing=db.prepare(`
+      SELECT generation.provider,generation.model,generation.input_tokens,generation.output_tokens,generation.estimated_cost
+      FROM generations generation
+      WHERE generation.project_id=? AND generation.status='FAILED'
+        AND generation.provider NOT IN ('mock','local')
+        AND (generation.input_tokens>0 OR generation.output_tokens>0)
+        AND NOT EXISTS (SELECT 1 FROM llm_usage usage WHERE usage.generation_id=generation.id)
+    `).all(projectId) as Array<{provider:string;model:string;input_tokens:number;output_tokens:number;estimated_cost:number}>;
+    return ledger.total + missing.reduce((sum,generation)=>{
+      if(generation.estimated_cost>0)return sum+generation.estimated_cost;
+      return sum+estimateTokenCost(
+        ratesForModel(generation.provider,generation.model,"powerful",{inputPerMillion:1.25,outputPerMillion:10}),
+        generation.input_tokens,
+        generation.output_tokens,
+      );
+    },0);
   }
   private assertRequestBudget(
     projectId: string,
     input: string,
     maxOutputTokens: number,
+    provider: string,
+    model: string,
   ): void {
     const conservativeInputTokens = Math.max(
         100,
         Math.ceil((input.length / 4) * 1.2),
       ),
-      estimated = Number(
-        (
-          (conservativeInputTokens * 1.25 + maxOutputTokens * 10) /
-          1_000_000
-        ).toFixed(8),
+      estimated = estimateTokenCost(
+        ratesForModel(provider,model,"powerful",{inputPerMillion:1.25,outputPerMillion:10}),
+        conservativeInputTokens,
+        maxOutputTokens,
       );
     this.assertBudget(projectId, estimated);
   }

@@ -102,10 +102,11 @@ describe("Product Studio permite elegir Gemini explícitamente", () => {
       const generations = (await app.inject({
         method: "GET",
         url: `/api/projects/${project.id}/generations`,
-      })).json<{ generations: Array<{ agentKey: string; provider: string; model: string; status: string }> }>().generations;
+      })).json<{ generations: Array<{ agentKey: string; provider: string; model: string; status: string; estimatedCost:number }> }>().generations;
       const productRuns = generations.filter((run) => ["product_outline", "product_chapter"].includes(run.agentKey));
       expect(productRuns).toHaveLength(2);
       expect(productRuns.every((run) => run.provider === "gemini" && run.model === GEMINI_ANALYSIS_MODEL && run.status === "COMPLETED")).toBe(true);
+      expect(productRuns.reduce((sum,run)=>sum+run.estimatedCost,0)).toBeCloseTo(0.000472,8);
     } finally {
       await app.close();
     }

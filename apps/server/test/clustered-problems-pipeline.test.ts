@@ -187,6 +187,13 @@ describe("Clustered Problems Pipeline (DeepSeek / Free Routers)", () => {
     // Reconciliation verified: final problem has expanded evidence IDs from the cluster!
     expect(body.outputData.items[0]!.evidenceIds.length).toBeGreaterThan(2);
 
+    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{agentKey:string;estimatedCost:number}>}>().generations;
+    const problemsGeneration=generations.find((generation)=>generation.agentKey==="problem_analyzer");
+    expect(problemsGeneration).toBeDefined();
+    // Every MAP request (150 input / 50 output) plus REDUCE (200 / 60)
+    // is priced at conservative DeepSeek Flash peak rates.
+    expect(problemsGeneration!.estimatedCost).toBeCloseTo(mapCalls.length*0.000105+0.000132,8);
+
     await app.close();
     app = undefined;
   });

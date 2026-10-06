@@ -755,12 +755,13 @@ describe("Product Studio backend", () => {
       const insertFailed = db.prepare(`INSERT INTO generations(id,project_id,agent_key,provider,model,status,input_tokens,output_tokens,estimated_cost,duration_ms,created_at,completed_at)
         VALUES(?,?,?,?,?,'FAILED',?,?,?,?,?,?)`);
       insertFailed.run("historical-failed-generation", project.id, "research_agent", "gemini", "gemini-test", 7331, 0, 0.25, 120, "2026-10-01T00:00:00.000Z", "2026-10-01T00:00:00.120Z");
+      insertFailed.run("historical-zero-gemini", project.id, "research_agent", "gemini", "gemini-3.5-flash-lite", 7331, 0, 0, 120, "2026-10-01T00:00:01.000Z", "2026-10-01T00:00:01.120Z");
       insertFailed.run("ledgered-failed-generation", project.id, "research_agent", "openai", "openai-test", 100, 20, 0.35, 120, "2026-10-02T00:00:00.000Z", "2026-10-02T00:00:00.120Z");
       db.prepare("INSERT INTO llm_usage(id,project_id,generation_id,provider,model,input_tokens,output_tokens,estimated_cost,recorded_at) VALUES(?,?,?,?,?,?,?,?,?)").run("ledgered-failed-usage", project.id, "ledgered-failed-generation", "openai", "openai-test", 100, 20, 0.35, "2026-10-02T00:00:00.120Z");
       insertFailed.run("mock-failed-generation", project.id, "research_agent", "mock", "mock-test", 500, 500, 0.4, 120, "2026-10-03T00:00:00.000Z", "2026-10-03T00:00:00.120Z");
     } finally { db.close(); }
     const estimate = await app.inject({ method: "GET", url: `/api/projects/${project.id}/product-documents/${document.id}/generation-estimate` });
     expect(estimate.statusCode, estimate.body).toBe(200);
-    expect(estimate.json<{ remainingBudget: number }>()).toMatchObject({ remainingBudget: 0.4 });
+    expect(estimate.json<{ remainingBudget: number }>().remainingBudget).toBeCloseTo(0.3978007,7);
   });
 });

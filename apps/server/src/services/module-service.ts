@@ -67,6 +67,7 @@ import {
 } from "./product-output-validator.js";
 
 import { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
+import { estimateTokenCost, ratesForModel } from "./provider-pricing.js";
 export { GEMINI_ANALYSIS_MODEL } from "../integrations/gemini-provider.js";
 import { StageProviderRouter, type PipelineStage } from "./stage-provider-router.js";
 import { prepareBoundedPlan, assertFrozenPlan, compactValidationPayload, validationProblemSchema, aliasMapEvidence, decodeMapEvidence, type BoundedPlan } from "./bounded-validation-plan.js";
@@ -594,7 +595,7 @@ export class ModuleService {
         return total;
       }, { inputTokens: 0, outputTokens: 0 });
       const { inputTokens, outputTokens } = observedUsage;
-      const estimatedCost = inputTokens || outputTokens ? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options) : 0;
+      const estimatedCost = inputTokens || outputTokens ? estimateCost(selectedProvider, model, modelTierFor(key), inputTokens, outputTokens, this.options) : 0;
       const db = this.db.connection;
       db.exec("SAVEPOINT failed_generation_usage");
       try {
@@ -756,7 +757,10 @@ export class ModuleService {
               if(!mappedItems.length)throw new Error("EMPTY_MAP_OUTPUT");
             }
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
-            mapInputTokens+=mappedResult.usage.inputTokens??0;mapOutputTokens+=mappedResult.usage.outputTokens??0;mapCost+=mappedResult.usage.estimatedCost??0;reportedModel=mappedResult.reportedModel;
+            const observedInputTokens=mappedResult.usage.inputTokens??0,observedOutputTokens=mappedResult.usage.outputTokens??0;
+            mapInputTokens+=observedInputTokens;mapOutputTokens+=observedOutputTokens;
+            mapCost+=mappedResult.usage.estimatedCost??estimateCost(selectedProvider,mappedResult.reportedModel??model,modelTierFor(key),observedInputTokens,observedOutputTokens,this.options);
+            reportedModel=mappedResult.reportedModel;
           }
           mappedCandidates = mapped;
           problemMetrics={commentsSelectedForSemanticAnalysis:evidence.length,batchesSentToProvider:problemBatches.length,batchesSentToGemini:selectedProvider==="gemini"?problemBatches.length:0,semanticBatchProvider:selectedProvider,commentsPerBatch:evidence.length > 120 ? Math.ceil(evidence.length / problemBatches.length) : 60,candidateInsights:mapped.length,candidateEvidenceLinks:mapped.reduce((sum,item)=>sum+(Array.isArray(item.evidenceIds)?item.evidenceIds.length:0),0),clustersBeforeValidation:mapped.length};
@@ -791,7 +795,12 @@ export class ModuleService {
       // above already rejected missing/invalid scores). Any `total` the
       // provider sent is discarded here.
       if(key==="opportunities")output=applyOpportunityScoring(output);
-      usage = problemMetrics ? {inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??0),currency:"USD",usageKind:"estimated"} : generated.usage;
+      usage = problemMetrics ? {
+        inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),
+        outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),
+        estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??estimateCost(selectedProvider,generated.reportedModel??model,modelTierFor(key),generated.usage.inputTokens??0,generated.usage.outputTokens??0,this.options)),
+        currency:"USD",usageKind:"estimated",
+      } : generated.usage;
       reportedModel = generated.reportedModel;
       structuredOutputDiagnostics = generated.structuredOutputDiagnostics;
     } else if(instructions?.trim()) output.additionalInstructionsApplied=instructions.trim();
@@ -1061,7 +1070,7 @@ export class ModuleService {
     };
     const inputTokens = key === "sources" ? 0 : usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
     const outputTokens = key === "sources" ? 0 : usage.outputTokens || Math.ceil(JSON.stringify(output).length / 4);
-    const estimatedCost = key === "sources" ? 0 : usage.estimatedCost ?? estimateCost(modelTierFor(key), inputTokens, outputTokens, this.options);
+    const estimatedCost = key === "sources" ? 0 : usage.estimatedCost ?? estimateCost(persistedProvider, reportedModel??model, modelTierFor(key), inputTokens, outputTokens, this.options);
     const now = new Date().toISOString();
 
     const existing = this.db.connection.prepare(
@@ -1342,14 +1351,15 @@ function resolveModel(tier: ModelTier, settings: ProjectSettings | undefined, op
   return settings?.economyModel?.trim() || options.economyModel || "gpt-5-mini";
 }
 
-function estimateCost(tier: ModelTier, inputTokens: number, outputTokens: number, options: ModuleServiceOptions): number {
+function estimateCost(provider: string, model: string, tier: ModelTier, inputTokens: number, outputTokens: number, options: ModuleServiceOptions): number {
   const inputRate = tier === "powerful"
     ? options.powerfulInputCostPerMillion ?? 1.25
     : options.economyInputCostPerMillion ?? 0.25;
   const outputRate = tier === "powerful"
     ? options.powerfulOutputCostPerMillion ?? 10
     : options.economyOutputCostPerMillion ?? 2;
-  return Number(((inputTokens * inputRate + outputTokens * outputRate) / 1_000_000).toFixed(8));
+  const rates = ratesForModel(provider,model,tier,{inputPerMillion:inputRate,outputPerMillion:outputRate});
+  return estimateTokenCost(rates,inputTokens,outputTokens);
 }
 
 interface ModuleKnowledgeItem {kind:"PROJECT_KNOWLEDGE"|"GLOBAL_KNOWLEDGE"|"APPROVED_MEMORY";content:string;title:string;rawScore:number;weightedScore:number;chunkId?:string;memoryId?:string;documentId?:string;libraryId?:string;heading?:string|null;pageNumber?:number|null;chunkIndex?:number;artifactVersionId?:string;}

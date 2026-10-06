@@ -288,6 +288,57 @@ describe("Phase 20.4 market research route", () => {
     expect((await app.inject({ method: "GET", url: "/api/projects/019ff678-1319-71c2-a129-3294c901efbc/market-research/status" })).statusCode).toBe(404);
     expect(primary.generate).not.toHaveBeenCalled();
   });
+
+  it("rechaza antes de adquirir señales si no hay analizador configurado", async () => {
+    const discover = vi.fn(webDouble().discover);
+    app = await createApp({
+      databasePath: ":memory:",
+      serveFrontend: false,
+      marketResearch: {
+        clients: { tavily: { name: "tavily", configured: true, discover } },
+        analyzers: {},
+        now: () => new Date(referenceAt),
+      },
+    });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Sin analizador", niche: "Fotografía" } })).json<Project>();
+
+    const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/market-research`, payload: { topic: "fotos guardadas", providers: ["tavily"] } });
+    expect(response.statusCode).toBe(503);
+    expect(discover).not.toHaveBeenCalled();
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/generations` })).json<{ generations: Generation[] }>().generations).toEqual([]);
+  });
+
+  it("conserva una investigación fallida tras recargar latest e history", async () => {
+    const discover = vi.fn(webDouble().discover);
+    const primary = failingAnalyzer(new Error("analyzer unavailable"));
+    const fallback = failingAnalyzer(new Error("fallback unavailable"));
+    app = await createApp({
+      databasePath: ":memory:",
+      serveFrontend: false,
+      marketResearch: {
+        clients: { tavily: { name: "tavily", configured: true, discover } },
+        analyzers: { deepSeek: primary, gemini: fallback },
+        now: () => new Date(referenceAt),
+      },
+    });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Fallida", niche: "Fotografía" } })).json<Project>();
+
+    const created = (await app.inject({ method: "POST", url: `/api/projects/${project.id}/market-research`, payload: { topic: "fotos guardadas", providers: ["tavily"] } })).json<MarketResearchRun>();
+    expect(created.analysis.analyzer).toBeNull();
+    expect(created.analysis.failure).not.toBeNull();
+    expect(created.findings).toEqual([]);
+    const generations = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/generations` })).json<{ generations: Generation[] }>();
+    expect(generations.generations.find((generation) => generation.agentKey === "market_research")?.status).toBe("FAILED");
+    discover.mockClear();
+    primary.generate.mockClear();
+    fallback.generate.mockClear();
+
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/latest` })).json()).toEqual(created);
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/history` })).json()).toEqual({ runs: [created] });
+    expect(discover).not.toHaveBeenCalled();
+    expect(primary.generate).not.toHaveBeenCalled();
+    expect(fallback.generate).not.toHaveBeenCalled();
+  });
 });
 
 describe("Phase 20.4 Research UI derivations", () => {

@@ -310,6 +310,9 @@ export class MarketResearchService {
   async run(projectId: string, options: Readonly<RunMarketResearchOptions>): Promise<MarketResearchRun> {
     const topic = options.topic.trim();
     if (topic.length === 0) throw new Error("El tema a investigar es obligatorio.");
+    if (!this.options.analyzers.deepSeek?.configured && !this.options.analyzers.gemini?.configured) {
+      throw new Error("Ningún analizador semántico está configurado.");
+    }
     const youtubeMinimumDurationSeconds = resolveYouTubeMinimumDurationSeconds(options.youtubeMinimumDurationSeconds);
     const providers = [...new Set(options.providers ?? MARKET_RESEARCH_PROVIDERS)].sort();
     const key = JSON.stringify([projectId, topic, providers, youtubeMinimumDurationSeconds]);
@@ -407,7 +410,7 @@ export class MarketResearchService {
    * provider payloads, headers or credentials.
    */
   /**
-   * Reads only completed Market Research ledger entries. This path is deliberately
+   * Reads completed and failed Market Research ledger entries. This path is deliberately
    * isolated from acquisition and semantic mining, so restoring a saved run can
    * never invoke a provider or an LLM.
    */
@@ -422,17 +425,17 @@ export class MarketResearchService {
   history(projectId: string, limit = 10): readonly MarketResearchRun[] {
     const safeLimit = Math.min(Math.max(limit, 1), 10);
     const rows = this.database.connection.prepare(`
-      SELECT id, output_data
+      SELECT id, status, output_data
       FROM generations
-      WHERE project_id = ? AND agent_key = ? AND status = 'COMPLETED'
+      WHERE project_id = ? AND agent_key = ? AND status IN ('COMPLETED', 'FAILED')
       ORDER BY completed_at DESC, created_at DESC, id DESC
       LIMIT 50
-    `).all(projectId, MARKET_RESEARCH_AGENT_KEY) as Array<{ id: string; output_data: string | null }>;
+    `).all(projectId, MARKET_RESEARCH_AGENT_KEY) as Array<{ id: string; status: "COMPLETED" | "FAILED"; output_data: string | null }>;
 
     const runs: MarketResearchRun[] = [];
     for (const row of rows) {
       const run = restorePersistedMarketResearchRun(row.output_data, projectId, row.id);
-      if (run !== null) runs.push(run);
+      if (run !== null && (row.status === "FAILED") === (run.analysis.analyzer === null)) runs.push(run);
       if (runs.length === safeLimit) break;
     }
     return runs;

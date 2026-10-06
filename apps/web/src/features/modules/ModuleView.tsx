@@ -197,7 +197,8 @@ function AutomaticSourcesPanel({projectId,savedFocus}:{projectId:string;savedFoc
   useEffect(()=>{if(!running){setPhase(0);return;}const timer=window.setInterval(()=>setPhase(current=>Math.min(current+1,MARKET_RESEARCH_PROGRESS_PHASES.length-1)),1500);return()=>window.clearInterval(timer);},[running]);
 
   const available=status?.providers.filter(provider=>provider.state==="available")??[];
-  const canRun=!running&&topic.trim().length>=3&&selected.length>0;
+  const analyzerAvailable=status?.analyzers.primary.state==="available"||status?.analyzers.fallback.state==="available";
+  const canRun=!running&&topic.trim().length>=3&&selected.length>0&&analyzerAvailable;
   const investigate=async()=>{
     setRunning(true);setError(null);setOpenFindingId(null);
     try{
@@ -222,10 +223,11 @@ function AutomaticSourcesPanel({projectId,savedFocus}:{projectId:string;savedFoc
     <label>Tema a investigar<input value={topic} disabled={running||status===null} onChange={event=>{setTopicEdited(true);setTopic(event.target.value);}} placeholder="organización de fotografías digitales"/></label>
     <div className="button-row"><button type="button" className="button primary" disabled={!canRun} onClick={()=>void investigate()}>{running?"Investigando…":"Investigar mercado"}</button>{status&&<small>Análisis: {marketResearchAnalyzerLabel(status.analyzers.primary.analyzer)} · {status.analyzers.primary.model} · {marketResearchProviderStateLabel(status.analyzers.primary.state)} · respaldo {marketResearchAnalyzerLabel(status.analyzers.fallback.analyzer)} · {marketResearchProviderStateLabel(status.analyzers.fallback.state)}</small>}</div>
     {status&&available.length===0&&<p className="form-hint">Ningún proveedor automático está configurado. Puedes importar Demo o texto manual sin APIs.</p>}
+    {status&&!analyzerAvailable&&<p className="form-hint" role="status">Configura DeepSeek o Gemini para analizar las señales antes de investigar.</p>}
     {running&&<p className="form-hint" role="status">{MARKET_RESEARCH_PROGRESS_PHASES[phase]}</p>}
     {error&&<InlineError message={error} onRetry={()=>setReload(value=>value+1)}/>}
-    {run&&<p className="form-hint"><strong>{run.runId===latestRunId?"Última investigación guardada":"Investigación guardada"}</strong> · {new Date(run.completedAt).toLocaleString("es")} · {run.topic}</p>}
-    {history.length>0&&<details className="analysis-details"><summary>Investigaciones anteriores ({history.length})</summary><div className="history-list">{history.map(item=><button type="button" className={run?.runId===item.runId?"active":""} key={item.runId} onClick={()=>{setRun(item);setOpenFindingId(null);}}><strong>{item.topic}</strong><small>{new Date(item.completedAt).toLocaleString("es")} · {marketResearchAnalyzerLabel(item.analysis.analyzer??"deepseek")} · {item.metrics.uniqueSignals} señales</small></button>)}</div></details>}
+    {run&&<p className="form-hint" role={run.analysis.analyzer===null?"alert":undefined}><strong>{run.analysis.analyzer===null?"Investigación fallida":run.runId===latestRunId?"Última investigación guardada":"Investigación guardada"}</strong> · {new Date(run.completedAt).toLocaleString("es")} · {run.topic}{run.analysis.analyzer===null&&" · No se obtuvieron hallazgos; revisa los analizadores y vuelve a intentar."}</p>}
+    {history.length>0&&<details className="analysis-details"><summary>Investigaciones anteriores ({history.length})</summary><div className="history-list">{history.map(item=><button type="button" className={run?.runId===item.runId?"active":""} key={item.runId} onClick={()=>{setRun(item);setOpenFindingId(null);}}><strong>{item.topic}</strong><small>{new Date(item.completedAt).toLocaleString("es")} · {item.analysis.analyzer===null?"Fallida":marketResearchAnalyzerLabel(item.analysis.analyzer)} · {item.metrics.uniqueSignals} señales</small></button>)}</div></details>}
     {run&&summary&&<div className="market-research-result"><p className="form-hint">Estas señales pertenecen a esta investigación guardada; no se añaden automáticamente al conjunto local que usa Problemas. Una cita puede proceder de una web comercial o de un comentario: no implica demanda validada ni demuestra causalidad.</p>
       <div className="metric-strip"><div><strong>{summary.totalFound}</strong><span>señales</span></div><div><strong>{summary.valid}</strong><span>válidas</span></div><div><strong>{summary.unique}</strong><span>únicas</span></div><div><strong>{summary.analyzed}</strong><span>analizadas</span></div></div>
       <div className="structured-output">

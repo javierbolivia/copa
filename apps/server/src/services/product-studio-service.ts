@@ -1316,7 +1316,7 @@ export class ProductStudioService {
         result.usage.outputTokens ??
         Math.ceil(JSON.stringify(output).length / 4),
       estimatedCost = result.usage.estimatedCost ?? estimateTokenCost(
-        ratesForModel(providerName, result.reportedModel ?? model, "powerful", {inputPerMillion:1.25,outputPerMillion:10}),
+        ratesForModel(providerName, model, "powerful", {inputPerMillion:1.25,outputPerMillion:10}),
         inputTokens,
         outputTokens,
       );

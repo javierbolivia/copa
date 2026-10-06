@@ -759,7 +759,7 @@ export class ModuleService {
             mapped.push(...mappedItems.filter((value):value is Record<string,unknown>=>typeof value==="object"&&value!==null&&!Array.isArray(value)));
             const observedInputTokens=mappedResult.usage.inputTokens??0,observedOutputTokens=mappedResult.usage.outputTokens??0;
             mapInputTokens+=observedInputTokens;mapOutputTokens+=observedOutputTokens;
-            mapCost+=mappedResult.usage.estimatedCost??estimateCost(selectedProvider,mappedResult.reportedModel??model,modelTierFor(key),observedInputTokens,observedOutputTokens,this.options);
+            mapCost+=mappedResult.usage.estimatedCost??estimateCost(selectedProvider,model,modelTierFor(key),observedInputTokens,observedOutputTokens,this.options);
             reportedModel=mappedResult.reportedModel;
           }
           mappedCandidates = mapped;
@@ -798,7 +798,7 @@ export class ModuleService {
       usage = problemMetrics ? {
         inputTokens:(usage.inputTokens??0)+(generated.usage.inputTokens??0),
         outputTokens:(usage.outputTokens??0)+(generated.usage.outputTokens??0),
-        estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??estimateCost(selectedProvider,generated.reportedModel??model,modelTierFor(key),generated.usage.inputTokens??0,generated.usage.outputTokens??0,this.options)),
+        estimatedCost:(usage.estimatedCost??0)+(generated.usage.estimatedCost??estimateCost(selectedProvider,model,modelTierFor(key),generated.usage.inputTokens??0,generated.usage.outputTokens??0,this.options)),
         currency:"USD",usageKind:"estimated",
       } : generated.usage;
       reportedModel = generated.reportedModel;
@@ -1070,7 +1070,7 @@ export class ModuleService {
     };
     const inputTokens = key === "sources" ? 0 : usage.inputTokens || Math.max(20, Math.ceil(JSON.stringify(inputSnapshot).length / 4));
     const outputTokens = key === "sources" ? 0 : usage.outputTokens || Math.ceil(JSON.stringify(output).length / 4);
-    const estimatedCost = key === "sources" ? 0 : usage.estimatedCost ?? estimateCost(persistedProvider, reportedModel??model, modelTierFor(key), inputTokens, outputTokens, this.options);
+    const estimatedCost = key === "sources" ? 0 : usage.estimatedCost ?? estimateCost(persistedProvider, model, modelTierFor(key), inputTokens, outputTokens, this.options);
     const now = new Date().toISOString();
 
     const existing = this.db.connection.prepare(

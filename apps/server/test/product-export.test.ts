@@ -73,6 +73,20 @@ describe("Product Studio physical assets and exports", () => {
     }
   });
 
+  it("devuelve 404 al consultar o exportar un documento inexistente", async () => {
+    const projectResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Export inexistente", niche: "QA" } });
+    const project = projectResponse.json<Project>();
+    const base = `/api/projects/${project.id}/product-documents/00000000-0000-4000-8000-000000000000/exports`;
+    for (const request of [
+      { method: "GET" as const, url: base },
+      { method: "POST" as const, url: base, payload: { format: "html" } },
+    ]) {
+      const response = await app.inject(request);
+      expect(response.statusCode, `${request.method} ${request.url}: ${response.body}`).toBe(404);
+      expect(response.json()).toMatchObject({ error: "not_found" });
+    }
+  });
+
   it.each([
     { width: 3200, height: 1600, orientation: 1, expectedWidth: 2400, expectedHeight: 1200 },
     { width: 800, height: 400, orientation: 6, expectedWidth: 400, expectedHeight: 800 },

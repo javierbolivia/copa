@@ -159,6 +159,9 @@ export class ProductExportService {
         .all(projectId) as unknown as AssetRow[]
     ).map((row) => this.assetDto(row));
   }
+  hasDocument(projectId: string, documentId: string): boolean {
+    return Boolean(this.db.connection.prepare("SELECT 1 FROM product_documents WHERE project_id=? AND id=?").get(projectId, documentId));
+  }
   async addImage(
     projectId: string,
     input: {

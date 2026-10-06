@@ -183,12 +183,11 @@ export function registerProductExportRoutes(
   app.get<{ Params: { id: string; documentId: string } }>(
     "/api/projects/:id/product-documents/:documentId/exports",
     { schema: { params: Document } },
-    async (request) => ({
-      exports: service.listExports(
-        request.params.id,
-        request.params.documentId,
-      ),
-    }),
+    async (request, reply) => {
+      if (!service.hasDocument(request.params.id, request.params.documentId))
+        return reply.code(404).send({ error: "not_found", message: "El documento no existe." });
+      return { exports: service.listExports(request.params.id, request.params.documentId) };
+    },
   );
   app.post<{
     Params: { id: string; documentId: string };
@@ -197,6 +196,8 @@ export function registerProductExportRoutes(
     "/api/projects/:id/product-documents/:documentId/exports",
     { schema: { params: Document, body: ExportBody } },
     async (request, reply) => {
+      if (!service.hasDocument(request.params.id, request.params.documentId))
+        return reply.code(404).send({ error: "not_found", message: "El documento no existe." });
       try {
         return reply
           .code(201)

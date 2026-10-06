@@ -1,13 +1,16 @@
 import {useState} from 'react';
+import type {GenerationProvider} from '../../api/client';
 
 export interface LandingPreparationProps {
   onGenerate?:(instructions?:string)=>void|Promise<void>;
   running?:boolean;
-  provider?:"mock"|"openai"|"gemini"|"deepseek";
-  onProviderChange?:(provider:"mock"|"openai"|"gemini"|"deepseek")=>void;
+  provider?:GenerationProvider;
+  onProviderChange?:(provider:GenerationProvider)=>void;
   openAiConfigured?:boolean|null;
   geminiConfigured?:boolean|null;
   deepSeekConfigured?:boolean|null;
+  groqConfigured?:boolean|null;
+  openRouterConfigured?:boolean|null;
 }
 
 export function LandingPreparation({
@@ -17,7 +20,9 @@ export function LandingPreparation({
   onProviderChange,
   openAiConfigured=false,
   geminiConfigured=true,
-  deepSeekConfigured=false
+  deepSeekConfigured=false,
+  groqConfigured=false,
+  openRouterConfigured=false
 }:LandingPreparationProps){
   const [instructions,setInstructions]=useState('');
 
@@ -60,12 +65,14 @@ export function LandingPreparation({
             <select
               value={provider}
               disabled={running}
-              onChange={e=>onProviderChange(e.target.value as any)}
+              onChange={e=>onProviderChange(e.target.value as GenerationProvider)}
               style={{padding:"8px 12px",borderRadius:"8px",border:"1px solid #cbd5e1"}}
             >
               <option value="gemini" disabled={!geminiConfigured}>Gemini (Recomendado)</option>
-              <option value="openai" disabled={!openAiConfigured}>OpenAI</option>
-              <option value="deepseek" disabled={!deepSeekConfigured}>DeepSeek</option>
+              <option value="openai" disabled={!openAiConfigured}>OpenAI{openAiConfigured?"":" · No configurado"}</option>
+              <option value="deepseek" disabled={!deepSeekConfigured}>DeepSeek{deepSeekConfigured?"":" · No configurado"}</option>
+              <option value="groq" disabled={!groqConfigured}>Groq{groqConfigured?"":" · No configurado"}</option>
+              <option value="openrouter" disabled={!openRouterConfigured}>OpenRouter{openRouterConfigured?"":" · No configurado"}</option>
               {provider==="mock"&&<option value="mock" disabled>Demo / Mock no disponible para esta Landing</option>}
             </select>
           </label>
@@ -74,7 +81,7 @@ export function LandingPreparation({
         <button
           className="button primary"
           style={{padding:"12px 28px",fontSize:"1rem",fontWeight:700,borderRadius:"8px",cursor:running?"wait":"pointer"}}
-          disabled={running||!onGenerate||provider==="mock"}
+          disabled={running||!onGenerate||provider==="mock"||(provider==="gemini"&&!geminiConfigured)||(provider==="openai"&&!openAiConfigured)||(provider==="deepseek"&&!deepSeekConfigured)||(provider==="groq"&&!groqConfigured)||(provider==="openrouter"&&!openRouterConfigured)}
           onClick={handleGenerate}
         >
           {running?"Generando Landing Completa con IA…":"🚀 Generar Landing Completa con IA"}

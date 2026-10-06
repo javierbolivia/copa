@@ -17,7 +17,7 @@ export type Source=Static<typeof SourceSchema>;export type Comment=Static<typeof
 
 export const ModuleResultSchema=Type.Object({moduleKey:ModuleKeySchema,artifactId:Type.String({format:"uuid"}),versionId:Type.String({format:"uuid"}),versionNumber:Type.Integer(),freshness:Type.String(),status:Type.String(),outputData:Type.Unknown(),createdAt:Type.String({format:"date-time"})});
 export const ModuleResultListSchema=Type.Object({results:Type.Array(ModuleResultSchema)});
-export const RunModuleSchema=Type.Object({provider:Type.Optional(Type.Union([Type.Literal("mock"),Type.Literal("openai"),Type.Literal("gemini"),Type.Literal("deepseek")])),instructions:Type.Optional(Type.String()),demo:Type.Optional(Type.Boolean())});
+export const RunModuleSchema=Type.Object({provider:Type.Optional(Type.Union([Type.Literal("mock"),Type.Literal("openai"),Type.Literal("gemini"),Type.Literal("deepseek"),Type.Literal("groq"),Type.Literal("openrouter")])),instructions:Type.Optional(Type.String()),demo:Type.Optional(Type.Boolean())});
 export type ModuleResult=Static<typeof ModuleResultSchema>;export type RunModuleInput=Static<typeof RunModuleSchema>;
 
 export const JobSchema=Type.Object({id:Type.String({format:"uuid"}),projectId:Type.String({format:"uuid"}),jobType:Type.String(),status:Type.Union([Type.Literal("QUEUED"),Type.Literal("RUNNING"),Type.Literal("COMPLETED"),Type.Literal("FAILED"),Type.Literal("CANCELLED")]),progress:Type.Integer({minimum:0,maximum:100}),message:Type.Union([Type.String(),Type.Null()]),createdAt:Type.String({format:"date-time"}),completedAt:Type.Union([Type.String(),Type.Null()])});

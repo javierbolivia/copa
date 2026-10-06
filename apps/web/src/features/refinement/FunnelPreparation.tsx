@@ -1,14 +1,17 @@
 import { useState } from "react";
+import type {GenerationProvider} from "../../api/client";
 import { GitBranch, ShieldCheck, Sparkles, ArrowRight, Zap, AlertCircle } from "lucide-react";
 
 interface FunnelPreparationProps {
   onGenerate: (instructions?: string) => void;
   running: boolean;
-  provider: "mock" | "openai" | "gemini" | "deepseek";
-  onProviderChange: (provider: "mock" | "openai" | "gemini" | "deepseek") => void;
+  provider: GenerationProvider;
+  onProviderChange: (provider: GenerationProvider) => void;
   openAiConfigured: boolean | null;
   geminiConfigured: boolean | null;
   deepSeekConfigured: boolean | null;
+  groqConfigured: boolean | null;
+  openRouterConfigured: boolean | null;
 }
 
 export function FunnelPreparation({
@@ -19,6 +22,8 @@ export function FunnelPreparation({
   openAiConfigured,
   geminiConfigured,
   deepSeekConfigured,
+  groqConfigured,
+  openRouterConfigured,
 }: FunnelPreparationProps) {
   const [instructions, setInstructions] = useState("");
 
@@ -77,7 +82,7 @@ export function FunnelPreparation({
             <select
               id="funnel-provider"
               value={provider}
-              onChange={(e) => onProviderChange(e.target.value as "mock" | "openai" | "gemini" | "deepseek")}
+              onChange={(e) => onProviderChange(e.target.value as GenerationProvider)}
               disabled={running}
             >
               <option value="gemini" disabled={!geminiConfigured}>
@@ -90,6 +95,8 @@ export function FunnelPreparation({
               <option value="openai" disabled={!openAiConfigured}>
                 OpenAI {openAiConfigured ? "" : "· No configurado"}
               </option>
+              <option value="groq" disabled={!groqConfigured}>Groq {groqConfigured ? "" : "· No configurado"}</option>
+              <option value="openrouter" disabled={!openRouterConfigured}>OpenRouter {openRouterConfigured ? "" : "· No configurado"}</option>
             </select>
           </div>
 
@@ -101,6 +108,8 @@ export function FunnelPreparation({
               (provider === "gemini" && !geminiConfigured) ||
               (provider === "openai" && !openAiConfigured) ||
               (provider === "deepseek" && !deepSeekConfigured)
+              || (provider === "groq" && !groqConfigured)
+              || (provider === "openrouter" && !openRouterConfigured)
             }
             onClick={() => onGenerate(instructions.trim() || undefined)}
           >

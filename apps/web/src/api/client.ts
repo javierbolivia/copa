@@ -40,12 +40,16 @@ export class ApiClientError extends Error {
   }
 }
 
+export type GenerationProvider = "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter";
+
 export interface ProviderStatus {
   generationBlock?: {code:string;message:string}|null;
   openai: { configured: boolean; economyModel: string; powerfulModel: string };
   gemini:{configured:boolean;economyModel:string;powerfulModel:string};
   deepseek: { configured: boolean; model: string };
-  defaultProvider: "mock" | "openai" | "gemini" | "deepseek";
+  groq: { configured: boolean; model: string };
+  openrouter: { configured: boolean; model: string };
+  defaultProvider: GenerationProvider;
 }
 export interface YouTubeResearchVideo {videoId:string;title:string;description?:string;channelId:string;channelTitle:string;publishedAt:string;thumbnailUrl?:string;duration?:string;viewCount?:number;likeCount?:number;commentCount?:number;researchScore:number;scoreExplanation:string;alreadyImported:boolean}
 export interface TraceabilityNode {

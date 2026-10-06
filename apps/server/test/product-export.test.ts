@@ -149,6 +149,23 @@ describe("Product Studio physical assets and exports", () => {
     }
   });
 
+  it("no deja un archivo huérfano si SQLite no puede iniciar la transacción del export", async () => {
+    const { project, document } = await createReadyDocument();
+    const base = `/api/projects/${project.id}/product-documents/${document.id}/exports`;
+    const blocker = new DatabaseSync(databasePath);
+    blocker.exec("BEGIN IMMEDIATE");
+    try {
+      const response = await app.inject({ method: "POST", url: base, payload: { format: "html" } });
+      expect(response.statusCode, response.body).toBe(422);
+    } finally {
+      blocker.exec("ROLLBACK");
+      blocker.close();
+    }
+    expect((await app.inject({ method: "GET", url: base })).json<{ exports: unknown[] }>().exports).toHaveLength(0);
+    const generatedDirectory = join(root, "data", "generated", project.id, "product-studio");
+    expect(existsSync(generatedDirectory) ? readdirSync(generatedDirectory) : []).toHaveLength(0);
+  });
+
   it.each([
     { width: 3200, height: 1600, orientation: 1, expectedWidth: 2400, expectedHeight: 1200 },
     { width: 800, height: 400, orientation: 6, expectedWidth: 400, expectedHeight: 800 },

@@ -374,8 +374,8 @@ export class ProductExportService {
       id = uuidv7(),
       createdAt = new Date().toISOString(),
       relativePath = relative(this.root, path).replaceAll("\\", "/");
-    this.db.connection.exec("BEGIN IMMEDIATE");
     try {
+      this.db.connection.exec("BEGIN IMMEDIATE");
       const current = this.documents.get(projectId, documentId);
       if (!current || current.version.id !== document.version.id || current.freshness !== "fresh")
         throw new Error("El documento cambió o quedó obsoleto durante la exportación.");

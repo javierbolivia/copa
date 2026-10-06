@@ -34,4 +34,20 @@ describe("Project budget API", () => {
     expect(rejected.statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url })).json<ProjectSettings>().maxBudget).toBe(12);
   });
+
+  it("does not present a missing project as an empty workflow or artifact history", async () => {
+    const missing = "00000000-0000-4000-8000-000000000000";
+    for (const resource of ["workflow", "artifacts"]) {
+      const response = await app.inject({ method: "GET", url: `/api/projects/${missing}/${resource}` });
+      expect(response.statusCode, `${resource}: ${response.body}`).toBe(404);
+      expect(response.json()).toMatchObject({ error: "not_found" });
+    }
+    const existingBase = url.replace(/\/settings$/, "");
+    const workflow = await app.inject({ method: "GET", url: `${existingBase}/workflow` });
+    const artifacts = await app.inject({ method: "GET", url: `${existingBase}/artifacts` });
+    expect(workflow.statusCode).toBe(200);
+    expect(workflow.json<{ steps: unknown[] }>().steps.length).toBeGreaterThan(0);
+    expect(artifacts.statusCode).toBe(200);
+    expect(artifacts.json()).toMatchObject({ versions: [] });
+  });
 });

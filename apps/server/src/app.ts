@@ -215,7 +215,7 @@ export async function createApp(
   app.get("/api/technical-reviews",async(_request,reply)=>{reply.header("Cache-Control","no-store");return technicalReviews.read();});
   registerHealthRoute(app, database);
   registerProjectRoutes(app, projects);
-  registerProjectSystemRoutes(app, settings, workflow, backups, modules);
+  registerProjectSystemRoutes(app, projects, settings, workflow, backups, modules);
   registerResearchFocusRoutes(app, settings, database);
   registerSourceRoutes(app, sources, jobs, youtubeImports, productStudio);
   registerModuleRoutes(app, projects, modules);

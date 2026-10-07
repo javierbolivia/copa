@@ -755,3 +755,11 @@ Validation:
 - Alcance visual: además del preview estrecho (425 px), el override solicitado de 1280 px quedó limitado por el host del navegador a `innerWidth=1600` (`clientWidth=1581`), con preview de 650 px y sin overflow; el pedido de 390 px se limitó a `innerWidth=487`, con preview de 412 px. El override se restauró al terminar. No se declara inspección pixel-completa en breakpoints exactos. Pendiente QA visual de Antigravity en su navegador y tamaños objetivo.
 - Verificación final read-only: Landing sigue v12 `draft/fresh`, Avatar workflow devuelve `COMPLETED`, el API no muestra una versión nueva durante la inspección y la consola del tab no registró errores ni warnings. No se usaron proveedores ni se guardó contenido.
 - QA visual de Avatar: Overview muestra `13/13 etapas ejecutadas`, `0 en curso` y la etapa Avatar como `Ejecutada`; al seleccionar Avatar v7, la tarjeta muestra `Aprobada · Vigente`. Confirmado el estado visible frente al endpoint; la selección fue solo de lectura y luego se volvió a Landing.
+
+### Revalidación visual aislada de Landing v12 — 2026-10-07
+
+- El runtime se abrió sobre una copia SQLite aislada del proyecto; los diez proveedores se iniciaron sin claves y no se ejecutó ninguna acción de generación, guardado, aprobación ni archivo. La base original no se usó como runtime.
+- En la UI, Landing v12 continúa `Borrador · Vigente` y Landing v11 sigue `Aprobada · Vigente`. La imagen del Hero carga y su CTA apunta a `#section-11`, que corresponde al bloque Oferta existente. No se cambió el linaje ni el contenido.
+- En el viewport disponible (`innerWidth=403`, `innerHeight=880`), el documento mide 385 px de ancho, sin overflow horizontal de página. Esto es una comprobación limitada al tamaño que ofreció el navegador, no un pase de todos los breakpoints.
+- Hallazgo para QA/editorial: FAQ muestra dos preguntas dentro de un solo texto de cuerpo y el editor de Preguntas y respuestas indica `Sin elementos registrados` (`items` vacío). No se separó ni reescribió el contenido porque hacerlo requiere preservar la intención editorial; mantener v12 como borrador hasta revisión.
+- Resultado: QA funcional/visual acotado; no declarar `VISUAL_PASS` global. Sin llamadas a proveedores ni cambios de datos del proyecto.

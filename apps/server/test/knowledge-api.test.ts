@@ -81,7 +81,7 @@ describe("Knowledge API end-to-end",()=>{
     const demo=(await app.inject({method:"POST",url:"/api/demo/projects"})).json<{project:Project}>().project;
     const stranger=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Otro",niche:"Otro nicho"}})).json<Project>();
     const library=(await app.inject({method:"POST",url:`/api/projects/${demo.id}/knowledge/libraries`,payload:{name:"Voz aprobada",scope:"PROJECT"}})).json<KnowledgeLibrary>();
-    await app.inject({method:"POST",url:`/api/projects/${demo.id}/knowledge/libraries/${library.id}/documents`,payload:{title:"Regla editorial",fileType:"manual",text:"Toda propuesta debe ser específica, comprobable y evitar urgencia artificial. Usar lenguaje claro y sobrio."}});
+    const document=(await app.inject({method:"POST",url:`/api/projects/${demo.id}/knowledge/libraries/${library.id}/documents`,payload:{title:"Regla editorial",fileType:"manual",text:"Toda propuesta debe ser específica, comprobable y evitar urgencia artificial. Usar lenguaje claro y sobrio."}})).json<KnowledgeDocument>();
 
     const outsider=await app.inject({method:"GET",url:`/api/projects/${stranger.id}/knowledge/libraries`});
     expect(outsider.json<{libraries:KnowledgeLibrary[]}>().libraries.some(item=>item.id===library.id)).toBe(false);
@@ -92,6 +92,11 @@ describe("Knowledge API end-to-end",()=>{
     const used=await app.inject({method:"GET",url:`/api/projects/${demo.id}/generations/${generation.id}/knowledge`});
     expect(used.statusCode).toBe(200);
     expect(JSON.stringify(used.json())).toContain("Regla editorial");
+
+    const deleteUsedSource=await app.inject({method:"DELETE",url:`/api/projects/${demo.id}/knowledge/documents/${document.id}`});
+    expect(deleteUsedSource.statusCode).toBe(409);
+    const historyAfterDeleteAttempt=(await app.inject({method:"GET",url:`/api/projects/${demo.id}/generations/${generation.id}/knowledge`})).json<{items:Array<{title:string|null;libraryName:string|null;content:string|null}>}>();
+    expect(historyAfterDeleteAttempt.items).toEqual(expect.arrayContaining([expect.objectContaining({title:"Regla editorial",libraryName:"Voz aprobada",content:expect.stringContaining("Toda propuesta debe ser específica")})]));
 
     const product=run.json<ModuleResult>();
     const trace=await app.inject({method:"GET",url:`/api/projects/${demo.id}/versions/${product.versionId}/traceability`});

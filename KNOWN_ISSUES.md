@@ -30,4 +30,3 @@ Ninguno conocido.
 - El launcher recompila sólo cuando faltan los artefactos `dist`; después de actualizar el código, ejecuta `npm.cmd run build` una vez antes de usarlo.
 - El canvas de Funnel ofrece nodos, activación, edición y reordenación sencilla; deliberadamente no es un editor de grafos libre.
 - OpenAI y YouTube permanecen `IMPLEMENTED_NOT_LIVE_VERIFIED` porque no se proporcionaron claves reales.
-- Si se elimina una fuente después de una generación, el excerpt histórico permanece inmutable, pero título/biblioteca pueden mostrarse vacíos aunque su metadata siga en la cita persistida.

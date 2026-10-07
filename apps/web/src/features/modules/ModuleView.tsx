@@ -59,6 +59,7 @@ function ResearchFocusPanel({projectId,onChanged,onSaved}:{projectId:string;onCh
   const requests=useRequestGuard(projectId);
   const [value,setValue]=useState("");
   const [saved,setSaved]=useState<string|null>(null);
+  const [savedSource,setSavedSource]=useState<"user"|"youtube_query"|null>(null);
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState<{message:string;retry:"load"|"save"}|null>(null);
   useEffect(()=>{
@@ -68,6 +69,7 @@ function ResearchFocusPanel({projectId,onChanged,onSaved}:{projectId:string;onCh
       if(!current())return;
       setValue(focus.value??"");
       setSaved(focus.value);
+      setSavedSource(focus.source);
     }).catch(reason=>{
       if(current())setError({message:messageOf(reason),retry:"load"});
     });
@@ -82,6 +84,7 @@ function ResearchFocusPanel({projectId,onChanged,onSaved}:{projectId:string;onCh
       if(!current())return;
       setValue(focus.value);
       setSaved(focus.value);
+      setSavedSource(focus.source);
       onSaved(focus.value);
       onChanged();
     }catch(reason){
@@ -94,7 +97,11 @@ function ResearchFocusPanel({projectId,onChanged,onSaved}:{projectId:string;onCh
     if(error?.retry==="save")void save();
     else setReload(current=>current+1);
   };
-  return <section className="content-section"><article className="detail-card research-focus-panel"><span className="eyebrow">RESEARCH FOCUS</span><label>Foco activo de Research y Problemas<input maxLength={240} value={value} disabled={saving} onChange={event=>setValue(event.target.value)} placeholder="Tema o problema a investigar"/></label><div className="button-row"><button type="button" className="button primary" disabled={saving||value.trim().length<3} onClick={()=>void save()}>Guardar</button>{saved&&<small>Activo: {saved}</small>}</div>{error&&<InlineError message={error.message} onRetry={retry}/>}</article></section>;
+  const normalizedValue=value.trim().replace(/\s+/gu," ");
+  const normalizedSaved=saved?.trim().replace(/\s+/gu," ");
+  const unchangedManualFocus=savedSource==="user"&&normalizedValue===normalizedSaved;
+  const pinDerivedFocus=savedSource==="youtube_query"&&normalizedValue===normalizedSaved;
+  return <section className="content-section"><article className="detail-card research-focus-panel"><span className="eyebrow">RESEARCH FOCUS</span><label>Foco activo de Research y Problemas<input maxLength={240} value={value} disabled={saving} onChange={event=>setValue(event.target.value)} placeholder="Tema o problema a investigar"/></label><div className="button-row"><button type="button" className="button primary" disabled={saving||normalizedValue.length<3||unchangedManualFocus} onClick={()=>void save()}>{pinDerivedFocus?"Guardar como foco manual":"Guardar"}</button>{saved&&<small>Activo: {saved}</small>}</div>{error&&<InlineError message={error.message} onRetry={retry}/>}</article></section>;
 }
 
 function GeneratedModuleView({projectId,moduleKey,onOpenEvidence,onChanged}:{projectId:string;moduleKey:ModuleKey;onOpenEvidence:(commentId:string)=>void;onChanged:()=>void}) {

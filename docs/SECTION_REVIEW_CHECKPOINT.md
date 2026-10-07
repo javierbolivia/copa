@@ -3,9 +3,9 @@
 ## Scope and environment
 
 Primary visual project: **Perros Reactivos – Seed QA**, `01a0289f-9377-70b0-b9ac-a0eb5a9dd35a`.
-Keep the original database at `data/our-platform.db` and the project `.env`. Development is running with `npm.cmd run dev`, frontend 5173 → backend 4310. No paid provider requests, commits, pushes or deployment. Do not create new projects or perform destructive experiments in the real project. Mutation/error fixtures belong in isolated test databases.
+Keep the original database at `data/our-platform.db` and the project `.env`. Development is running with `npm.cmd run dev`, frontend 5173 → backend 4310. No paid provider requests, pushes or deployment. The local commit for this change was explicitly requested; do not create further commits without authorization. Do not create new projects or perform destructive experiments in the real project. Mutation/error fixtures belong in isolated test databases.
 
-This is the current sequential review, superseding earlier broad visual visits as completion evidence. A visit is not SECTION PASS. Full final test/typecheck/build/diff gate is still pending.
+This is the current sequential review, superseding earlier broad visual visits as completion evidence. A visit is not SECTION PASS. On 2026-10-07 the full offline suite passed (1,142 tests); after the latest UI changes, web typecheck and web build also passed. Global visual review remains open: the complete section coverage and exact target breakpoints still need verification.
 
 ## Order
 
@@ -763,3 +763,12 @@ Validation:
 - En el viewport disponible (`innerWidth=403`, `innerHeight=880`), el documento mide 385 px de ancho, sin overflow horizontal de página. Esto es una comprobación limitada al tamaño que ofreció el navegador, no un pase de todos los breakpoints.
 - Hallazgo para QA/editorial: FAQ muestra dos preguntas dentro de un solo texto de cuerpo y el editor de Preguntas y respuestas indica `Sin elementos registrados` (`items` vacío). No se separó ni reescribió el contenido porque hacerlo requiere preservar la intención editorial; mantener v12 como borrador hasta revisión.
 - Resultado: QA funcional/visual acotado; no declarar `VISUAL_PASS` global. Sin llamadas a proveedores ni cambios de datos del proyecto.
+
+### Continuación Goal — gate integral y acciones responsive de Landing — 2026-10-07
+
+- Suite offline final: `npm.cmd test` pasó **150 archivos / 1.142 pruebas**. Tras los cambios de UI, `npm.cmd run typecheck --workspace @our-platform/web`, las pruebas dirigidas (2 archivos / 4 pruebas) y `npm.cmd run build --workspace @our-platform/web` pasaron. Vite conserva la advertencia de chunk grande de `LandingVisualEditor` (~601.40 kB minificado); no bloquea el build.
+- En la Landing real de Perros Reactivos, el toolbar de cinco acciones se comprimía en una sola fila dentro del pane estrecho: “Abrir constructor visual (Puck)” y “Exportar React (.tsx)” quedaban partidos en varias líneas y eran difíciles de leer. Se cambió solo `refinement.css`: dos columnas bajo 700 px y una bajo 420 px, con objetivos táctiles de 42 px. HMR mostró la distribución legible en el viewport disponible; el build web posterior pasó. No se verificó aún cada breakpoint exacto.
+- En Funnel y Content, `Guardar cambios` estaba habilitado aunque no hubiera ediciones. Ahora permanece deshabilitado sin cambios y durante un guardado. Funnel conserva al serializar nodos los campos existentes de checkout externo, evento de tracking y precio, que antes se omitían al mapear desde el editor. Se añadieron regresiones UI para no-op/edición en ambos módulos y persistencia de esos metadatos en Funnel; las 4 pruebas dirigidas pasan. La UI real confirmó el botón deshabilitado en Funnel sin editar.
+- Se seleccionó v12 para lectura, sin guardarla ni aprobarla. La versión sigue `draft/fresh`; v11 sigue `approved/fresh`. En el panel FAQ, el cuerpo conserva texto con dos preguntas y una nota comercial, mientras `items` está vacío y la vista previa no los presenta como pares estructurados. No hay pérdida del texto; se mantiene como observación editorial, sin inventar respuestas ni alterar la versión.
+- La pestaña local identificó el proyecto correcto. No se ejecutaron proveedores, backups, exportaciones ni acciones de workflow; no hubo escritura de base de datos ni aprobación. El commit local se limitó a los cambios enumerados; no se hizo push.
+- SIGUIENTE: continuar el pase visual global de secciones y breakpoints. El gate de código queda verde para este estado; no declarar `VISUAL_PASS` global ni `DONE` todavía.

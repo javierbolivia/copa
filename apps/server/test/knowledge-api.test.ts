@@ -37,6 +37,26 @@ describe("Knowledge API end-to-end",()=>{
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/knowledge/search?q=presupuesto`})).json<{results:unknown[]}>().results).toHaveLength(0);
   });
 
+  it("mantiene el total global al paginar resultados de Knowledge",async()=>{
+    const project=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Knowledge pagination",niche:"Educación"}})).json<Project>();
+    const library=(await app.inject({method:"POST",url:`/api/projects/${project.id}/knowledge/libraries`,payload:{name:"Paginación",scope:"PROJECT"}})).json<KnowledgeLibrary>();
+    for(const word of ["uno","dos","tres"]){
+      const imported=await app.inject({method:"POST",url:`/api/projects/${project.id}/knowledge/libraries/${library.id}/documents`,payload:{title:`Documento ${word}`,fileType:"manual",text:`paginacionhallaziaunica evidencia ${word}`}});
+      expect(imported.statusCode).toBe(201);
+    }
+
+    const page0=(await app.inject({method:"GET",url:`/api/projects/${project.id}/knowledge/search?q=paginacionhallaziaunica&limit=1&offset=0`})).json<{results:KnowledgeChunkResult[];total:number}>();
+    const page1=(await app.inject({method:"GET",url:`/api/projects/${project.id}/knowledge/search?q=paginacionhallaziaunica&limit=1&offset=1`})).json<{results:KnowledgeChunkResult[];total:number}>();
+    const pagePastEnd=(await app.inject({method:"GET",url:`/api/projects/${project.id}/knowledge/search?q=paginacionhallaziaunica&limit=1&offset=3`})).json<{results:KnowledgeChunkResult[];total:number}>();
+    const noMatches=(await app.inject({method:"GET",url:`/api/projects/${project.id}/knowledge/search?q=palabrainexistente`})).json<{results:KnowledgeChunkResult[];total:number}>();
+
+    expect(page0.results).toHaveLength(1);
+    expect(page1.results).toHaveLength(1);
+    expect(pagePastEnd.results).toHaveLength(0);
+    expect([page0.total,page1.total,pagePastEnd.total]).toEqual([3,3,3]);
+    expect(noMatches).toMatchObject({results:[],total:0});
+  });
+
   it("usa OpenAI configurado para Ask y sólo devuelve citas conocidas",async()=>{
     await app.close();
     const fetchMock=vi.fn(async()=>new Response(JSON.stringify({status:"completed",model:"ask-test",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify({answer:"Un presupuesto realista reduce decisiones impulsivas [K1].",citationIds:["K1","K999"]})}]}],usage:{input_tokens:20,output_tokens:12}}),{status:200,headers:{"content-type":"application/json"}}));

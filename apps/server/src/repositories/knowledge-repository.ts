@@ -121,6 +121,12 @@ interface SearchRow {
   category: string | null; tags_json: string; document_type: KnowledgeDocumentType; raw_score: number;
 }
 
+interface KnowledgeSearchSql {
+  readonly cte: string;
+  readonly fromWhere: string;
+  readonly parameters: readonly SQLInputValue[];
+}
+
 export class KnowledgeRepository {
   constructor(private readonly database: AppDatabase) {}
 
@@ -290,58 +296,31 @@ export class KnowledgeRepository {
   }
 
   search(input: KnowledgeSearchInput): KnowledgeSearchResult[] {
-    const query = input.query.trim();
-    if (!query) return [];
+    const sql = buildKnowledgeSearchSql(input);
+    if (!sql) return [];
+    return this.fetchSearchRows(input, sql);
+  }
+
+  searchPage(input: KnowledgeSearchInput): { readonly results: KnowledgeSearchResult[]; readonly total: number } {
+    const sql = buildKnowledgeSearchSql(input);
+    if (!sql) return { results: [], total: 0 };
+    const count = this.database.connection.prepare(`${sql.cte}
+      SELECT COUNT(*) AS total ${sql.fromWhere}`).get(...sql.parameters) as { total: number };
+    return { results: this.fetchSearchRows(input, sql), total: count.total };
+  }
+
+  private fetchSearchRows(input: KnowledgeSearchInput, sql: KnowledgeSearchSql): KnowledgeSearchResult[] {
     const limit = Math.max(1, Math.min(100, input.limit ?? 10));
     const offset = Math.max(0, input.offset ?? 0);
-    const conditions = [`document.status='READY'`, `library.is_enabled=1`,
-      `((chunk.scope='PROJECT' AND chunk.project_id=? AND selected.library_id IS NOT NULL) OR
-        (chunk.scope='GLOBAL' AND selected.library_id IS NOT NULL))`];
-    const parameters: SQLInputValue[] = [query, input.projectId, input.projectId];
-
-    if (input.libraryIds?.length) {
-      conditions.push(`chunk.library_id IN (${placeholders(input.libraryIds.length)})`);
-      parameters.push(...input.libraryIds);
-    }
-    if (input.categories?.length) {
-      conditions.push(`document.category IN (${placeholders(input.categories.length)})`);
-      parameters.push(...input.categories);
-    }
-    if (input.kinds?.length) {
-      const allowedScopes = input.kinds.map((kind) => kind === "PROJECT_KNOWLEDGE" ? "PROJECT" : "GLOBAL");
-      conditions.push(`chunk.scope IN (${placeholders(allowedScopes.length)})`);
-      parameters.push(...allowedScopes);
-    }
-    if(input.documentTypes?.length){conditions.push(`document.document_type IN (${placeholders(input.documentTypes.length)})`);parameters.push(...input.documentTypes);}
-    for (const tag of input.tags ?? []) {
-      conditions.push("EXISTS (SELECT 1 FROM json_each(document.tags_json) tag WHERE tag.value=?)");
-      parameters.push(tag);
-    }
-    parameters.push(limit, offset);
-    const rows = this.database.connection.prepare(`WITH matches AS MATERIALIZED (
-      SELECT rowid,bm25(knowledge_chunks_fts,5.0,3.0,1.0,2.0) raw_score
-      FROM knowledge_chunks_fts WHERE knowledge_chunks_fts MATCH ?
-    ) SELECT chunk.id chunk_id,chunk.document_id,
+    const rows = this.database.connection.prepare(`${sql.cte}
+      SELECT chunk.id chunk_id,chunk.document_id,
       chunk.library_id,document.title,chunk.content_text,
       chunk.content_text snippet,
       chunk.heading,chunk.page_number,chunk.chunk_index,chunk.scope,chunk.project_id,
       document.category,document.tags_json,document.document_type,matches.raw_score
-      FROM matches
-      JOIN knowledge_chunks chunk ON chunk.rowid=matches.rowid
-      JOIN knowledge_documents document ON document.id=chunk.document_id
-      JOIN knowledge_libraries library ON library.id=chunk.library_id
-      LEFT JOIN project_knowledge_libraries selected
-        ON selected.library_id=library.id AND selected.project_id=? AND selected.is_enabled=1
-      WHERE ${conditions.join(" AND ")}
-      ORDER BY raw_score ASC, chunk.id ASC LIMIT ? OFFSET ?`).all(...parameters) as unknown as SearchRow[];
-    return rows.map((row) => ({
-      chunkId: row.chunk_id, documentId: row.document_id, libraryId: row.library_id,
-      title: row.title, content: row.content_text, snippet: row.snippet, heading: row.heading,
-      pageNumber: row.page_number, chunkIndex: row.chunk_index, scope: row.scope,
-      projectId: row.project_id, kind: row.scope === "PROJECT" ? "PROJECT_KNOWLEDGE" : "GLOBAL_KNOWLEDGE",
-      category: row.category, tags: parseStringArray(row.tags_json), rawScore: row.raw_score,
-      documentType: row.document_type,
-    }));
+      ${sql.fromWhere}
+      ORDER BY raw_score ASC, chunk.id ASC LIMIT ? OFFSET ?`).all(...sql.parameters, limit, offset) as unknown as SearchRow[];
+    return rows.map(mapSearchRow);
   }
 
   saveMemoryDecision(input: {
@@ -477,6 +456,63 @@ function mapDocument(row: DocumentRow): KnowledgeDocument {
     fileSha256: row.file_sha256, bytes: row.byte_size, storedRelativePath: row.stored_relative_path,
     errorCode: row.error_code, errorMessage: row.error_message,
     createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function mapSearchRow(row: SearchRow): KnowledgeSearchResult {
+  return {
+    chunkId: row.chunk_id, documentId: row.document_id, libraryId: row.library_id,
+    title: row.title, content: row.content_text, snippet: row.snippet, heading: row.heading,
+    pageNumber: row.page_number, chunkIndex: row.chunk_index, scope: row.scope,
+    projectId: row.project_id, kind: row.scope === "PROJECT" ? "PROJECT_KNOWLEDGE" : "GLOBAL_KNOWLEDGE",
+    category: row.category, tags: parseStringArray(row.tags_json), rawScore: row.raw_score,
+    documentType: row.document_type,
+  };
+}
+
+function buildKnowledgeSearchSql(input: KnowledgeSearchInput): KnowledgeSearchSql | undefined {
+  const query = input.query.trim();
+  if (!query) return undefined;
+  const conditions = [`document.status='READY'`, `library.is_enabled=1`,
+    `((chunk.scope='PROJECT' AND chunk.project_id=? AND selected.library_id IS NOT NULL) OR
+      (chunk.scope='GLOBAL' AND selected.library_id IS NOT NULL))`];
+  const parameters: SQLInputValue[] = [query, input.projectId, input.projectId];
+
+  if (input.libraryIds?.length) {
+    conditions.push(`chunk.library_id IN (${placeholders(input.libraryIds.length)})`);
+    parameters.push(...input.libraryIds);
+  }
+  if (input.categories?.length) {
+    conditions.push(`document.category IN (${placeholders(input.categories.length)})`);
+    parameters.push(...input.categories);
+  }
+  if (input.kinds?.length) {
+    const allowedScopes = input.kinds.map((kind) => kind === "PROJECT_KNOWLEDGE" ? "PROJECT" : "GLOBAL");
+    conditions.push(`chunk.scope IN (${placeholders(allowedScopes.length)})`);
+    parameters.push(...allowedScopes);
+  }
+  if (input.documentTypes?.length) {
+    conditions.push(`document.document_type IN (${placeholders(input.documentTypes.length)})`);
+    parameters.push(...input.documentTypes);
+  }
+  for (const tag of input.tags ?? []) {
+    conditions.push("EXISTS (SELECT 1 FROM json_each(document.tags_json) tag WHERE tag.value=?)");
+    parameters.push(tag);
+  }
+
+  return {
+    cte: `WITH matches AS MATERIALIZED (
+      SELECT rowid,bm25(knowledge_chunks_fts,5.0,3.0,1.0,2.0) raw_score
+      FROM knowledge_chunks_fts WHERE knowledge_chunks_fts MATCH ?
+    )`,
+    fromWhere: `FROM matches
+      JOIN knowledge_chunks chunk ON chunk.rowid=matches.rowid
+      JOIN knowledge_documents document ON document.id=chunk.document_id
+      JOIN knowledge_libraries library ON library.id=chunk.library_id
+      LEFT JOIN project_knowledge_libraries selected
+        ON selected.library_id=library.id AND selected.project_id=? AND selected.is_enabled=1
+      WHERE ${conditions.join(" AND ")}`,
+    parameters,
+  };
 }
 
 function parseStringArray(json: string): string[] {

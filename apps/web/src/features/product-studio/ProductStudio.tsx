@@ -74,8 +74,13 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     retryTimer = useRef<number | undefined>(undefined),
     persisted = useRef(""),
     savingPromise = useRef<Promise<ProductDocument> | null>(null),
+    estimateRequestSequence = useRef(0),
     draftRef = useRef({ blocks, theme, metadata });
   draftRef.current = { blocks, theme, metadata };
+  const invalidateEstimate = () => {
+    estimateRequestSequence.current += 1;
+    setEstimate(null);
+  };
   const draftKey = (documentId: string) =>
     `product-studio-draft:${projectId}:${documentId}`;
   const serialize = (
@@ -84,6 +89,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     nextMetadata: ProductMetadata,
   ) => JSON.stringify({ blocks: nextBlocks, theme: nextTheme, metadata: nextMetadata });
   const applyDocument = (next: ProductDocument, restoreLocal = false) => {
+    invalidateEstimate();
     const serverSerialized = serialize(
       next.version.blocks,
       next.version.theme,
@@ -137,7 +143,7 @@ export function ProductStudio({ projectId }: { projectId: string }) {
     setContext(null);
     setGeneration(null);
     setValidation(null);
-    setEstimate(null);
+    invalidateEstimate();
     setExportFeedback(null);
     persisted.current = "";
     void api
@@ -430,24 +436,41 @@ export function ProductStudio({ projectId }: { projectId: string }) {
       setContext(null);
     }
   };
-  const runPending = () =>
-    act(async () => {
+  const runPending = (targetDocumentId = document?.id) => {
+    if (
+      !document ||
+      !targetDocumentId ||
+      document.id !== targetDocumentId ||
+      document.freshness === "stale" ||
+      busy
+    )
+      return;
+    invalidateEstimate();
+    void act(async () => {
       const result = await api.generatePendingProductChapters(
         projectId,
-        document.id,
+        targetDocumentId,
       );
-      setEstimate(null);
       return "version" in result
         ? result
-        : api.productDocument(projectId, document.id);
+        : api.productDocument(projectId, targetDocumentId);
     });
+  };
   const preparePending = async () => {
+    if (!document || document.freshness === "stale" || busy) return;
+    const targetDocumentId = document.id;
+    const requestSequence = ++estimateRequestSequence.current;
     try {
-      const next = await api.productGenerationEstimate(projectId, document.id);
-      if (next.provider === "mock") return void runPending();
+      const next = await api.productGenerationEstimate(
+        projectId,
+        targetDocumentId,
+      );
+      if (requestSequence !== estimateRequestSequence.current) return;
+      if (next.provider === "mock") return void runPending(targetDocumentId);
       setEstimate(next);
     } catch (cause) {
-      setError(message(cause));
+      if (requestSequence === estimateRequestSequence.current)
+        setError(message(cause));
     }
   };
   return (
@@ -466,11 +489,12 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           </div>
           <button
             className="button secondary"
+            disabled={busy}
             onClick={() => setEstimate(null)}
           >
             Cancelar
           </button>
-          <button className="button primary" onClick={() => void runPending()}>
+          <button className="button primary" disabled={busy} onClick={() => runPending()}>
             Confirmar generación
           </button>
         </div>
@@ -505,18 +529,22 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           <select
             aria-label="Documento activo"
             value={document.id}
+            disabled={busy}
             onChange={(event) => {
               const next = documents.find(
                 (item) => item.id === event.target.value,
               );
-              if (next) void (async () => {
+              if (next) {
+                invalidateEstimate();
+                void (async () => {
                 try {
                   await flushCurrent();
                   applyDocument(next, true);
                 } catch {
                   // Keep the current document and its recoverable local draft.
                 }
-              })();
+                })();
+              }
             }}
           >
             {documents.map((item) => (
@@ -527,7 +555,9 @@ export function ProductStudio({ projectId }: { projectId: string }) {
           </select>
           <button
             className="button secondary"
+            disabled={busy}
             onClick={() => void (async () => {
+              invalidateEstimate();
               try {
                 await flushCurrent();
                 setDocument(null);

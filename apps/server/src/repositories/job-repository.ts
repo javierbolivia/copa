@@ -1,4 +1,4 @@
-import type { Generation, GenerationVersionMetadata, Job, ModuleKey } from "@our-platform/shared";
+import type { Generation, GenerationHistory, GenerationVersionMetadata, Job, ModuleKey } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
 
@@ -67,6 +67,23 @@ export class JobRepository {
     return rows.filter((row):row is typeof row&{artifact_version_id:string}=>typeof row.artifact_version_id==="string")
       .map(row=>({provider:row.provider,model:row.model,artifactVersionId:row.artifact_version_id}));
   }
+  listGenerationHistory(projectId:string):GenerationHistory[]{
+    return this.listGenerations(projectId).map(generation=>({
+      id:generation.id,projectId:generation.projectId,agentKey:generation.agentKey,provider:generation.provider,model:generation.model,
+      status:generation.status,inputTokens:generation.inputTokens,outputTokens:generation.outputTokens,estimatedCost:generation.estimatedCost,
+      costStatus:generation.costStatus,durationMs:generation.durationMs,createdAt:generation.createdAt,artifactVersionId:generation.artifactVersionId,
+      versionNumber:generation.versionNumber,errorCode:generation.errorCode??null,result:generationHistoryPreview(generation.outputData,generation.agentKey),
+    }));
+  }
 }
 
 function parseJson(value:string|null):unknown{if(value===null)return null;try{return JSON.parse(value) as unknown;}catch{return null;}}
+function generationHistoryPreview(value:unknown,agentKey:string):GenerationHistory["result"]{
+  const title=humanize(agentKey);
+  if(!isRecord(value))return{title,summary:"No hay una vista previa estructurada disponible para esta ejecución.",fields:[]};
+  const fields=Object.entries(value).slice(0,8).map(([key,item])=>({label:humanize(key),value:previewValue(item)}));
+  return{title,summary:`${fields.length} campos estructurados en esta generación.`,fields};
+}
+function previewValue(value:unknown):string{if(Array.isArray(value))return `${value.length} elementos`;if(isRecord(value))return Object.keys(value).slice(0,5).map(humanize).join(", ")||"Objeto vacío";if(value===null||value===undefined)return"—";return String(value).slice(0,240);}
+function humanize(value:string):string{return value.replace(/([a-z])([A-Z])/g,"$1 $2").replaceAll("_"," ").replace(/\b\w/g,letter=>letter.toUpperCase());}
+function isRecord(value:unknown):value is Record<string,unknown>{return typeof value==="object"&&value!==null&&!Array.isArray(value);}

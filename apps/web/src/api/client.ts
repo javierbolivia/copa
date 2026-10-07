@@ -4,6 +4,7 @@ import type {
   CreateProjectInput,
   CreateSourceInput,
   Generation,
+  GenerationHistory,
   GenerationVersionMetadata,
   GeneratedFile,
   EvidenceSnippet,
@@ -218,6 +219,8 @@ export const api = {
     request<Job>(`/api/projects/${id}/jobs/${jobId}/retry`, json("POST")),
   generations: (id: string) =>
     request<{ generations: Generation[] }>(`/api/projects/${id}/generations`),
+  generationHistory: (id: string) =>
+    request<{ generations: GenerationHistory[] }>(`/api/projects/${id}/generation-history`),
   generationVersionMetadata: (id: string, moduleKey: ModuleKey) =>
     request<{ generations: GenerationVersionMetadata[] }>(`/api/projects/${id}/generation-version-metadata?moduleKey=${encodeURIComponent(moduleKey)}`),
   files: (id: string) =>

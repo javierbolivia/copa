@@ -24,8 +24,17 @@ export type IntegrationErrorCode =
   | "unsupported_model"
   | "request_budget_exceeded";
 
+const YOUTUBE_REMOTE_REASON_CODES = [
+  "dailyLimitExceeded",
+  "quotaExceeded",
+  "userRateLimitExceeded",
+] as const;
+type YouTubeRemoteReasonCode = (typeof YOUTUBE_REMOTE_REASON_CODES)[number];
+
 export interface IntegrationErrorOptions {
   readonly status?: number;
+  /** Allowlisted provider reason only; never a raw error message or response body. */
+  readonly remoteReasonCode?: YouTubeRemoteReasonCode;
   readonly retryable?: boolean;
   readonly cause?: unknown;
   readonly validationIssues?: readonly JsonSchemaValidationIssue[];
@@ -36,6 +45,7 @@ export interface IntegrationErrorOptions {
 export class IntegrationError extends Error {
   readonly code: IntegrationErrorCode;
   readonly status: number | undefined;
+  readonly remoteReasonCode: YouTubeRemoteReasonCode | undefined;
   readonly retryable: boolean;
   readonly validationIssues: readonly JsonSchemaValidationIssue[] | undefined;
   readonly attemptCount: number | undefined;
@@ -46,6 +56,7 @@ export class IntegrationError extends Error {
     this.name = "IntegrationError";
     this.code = code;
     this.status = options.status;
+    this.remoteReasonCode = options.remoteReasonCode;
     this.retryable = options.retryable ?? false;
     this.validationIssues = options.validationIssues;
     this.attemptCount = options.attemptCount;
@@ -80,20 +91,27 @@ export async function readErrorType(response: Response): Promise<string | undefi
 }
 
 export function httpIntegrationError(service: string, status: number, remoteType?: string): IntegrationError {
+  const remoteReasonCode = service === "YouTube"
+    ? YOUTUBE_REMOTE_REASON_CODES.find((reason) => reason === remoteType)
+    : undefined;
+  const diagnostics = {
+    status,
+    ...(remoteReasonCode === undefined ? {} : { remoteReasonCode }),
+  };
   if (remoteType === "insufficient_quota" || remoteType === "quotaExceeded" || remoteType === "dailyLimitExceeded") {
-    return new IntegrationError("quota_exceeded", `${service} informó que la cuota disponible se agotó.`, { status });
+    return new IntegrationError("quota_exceeded", `${service} informó que la cuota disponible se agotó.`, diagnostics);
   }
   if (remoteType === "rate_limit_error" || remoteType === "userRateLimitExceeded") {
-    return new IntegrationError("rate_limited", `${service} limitó temporalmente las solicitudes.`, { status, retryable: true });
+    return new IntegrationError("rate_limited", `${service} limitó temporalmente las solicitudes.`, { ...diagnostics, retryable: true });
   }
   if (status === 401 || status === 403) {
-    return new IntegrationError("authentication_failed", `${service} rechazó las credenciales configuradas.`, { status });
+    return new IntegrationError("authentication_failed", `${service} rechazó las credenciales configuradas.`, diagnostics);
   }
   if (status === 429) {
-    return new IntegrationError("rate_limited", `${service} limitó temporalmente las solicitudes.`, { status, retryable: true });
+    return new IntegrationError("rate_limited", `${service} limitó temporalmente las solicitudes.`, { ...diagnostics, retryable: true });
   }
   return new IntegrationError("http_error", `${service} respondió con HTTP ${status}.`, {
-    status,
+    ...diagnostics,
     retryable: status >= 500,
   });
 }

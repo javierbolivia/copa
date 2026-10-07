@@ -71,6 +71,8 @@ interface ProviderAcquisition {
   readonly signals: readonly NormalizedMarketSignal[];
   readonly latencyMs: number;
   readonly failure: string | null;
+  readonly httpStatus?: number;
+  readonly remoteReasonCode?: string;
   readonly usage: number | null;
   readonly credits: number | null;
   readonly youtube?: YouTubeDeepAcquisitionMetrics;
@@ -80,9 +82,21 @@ const RECENT_WINDOW_MS = 90 * 24 * 60 * 60 * 1_000;
 const MIN_USABLE_TEXT_LENGTH = 20;
 const BOILERPLATE_LINE = /^(?:cookies?|aceptar cookies|accept cookies|subscribe|suscr[ií]bete|share|compartir|advertisement|publicidad|men[uú]|skip to content|sign in|log in|iniciar sesi[oó]n)\b/iu;
 
-/** Safe failure category only; provider bodies and headers are never surfaced. */
-function failureCode(error: unknown): string {
-  return error instanceof IntegrationError ? error.code : "unknown";
+/** Safe failure category and allowlisted status codes only; provider bodies and headers stay private. */
+function failureDiagnostics(
+  provider: MarketResearchProvider,
+  error: unknown,
+): Pick<ProviderAcquisition, "failure" | "httpStatus" | "remoteReasonCode"> {
+  if (!(error instanceof IntegrationError)) return { failure: "unknown" };
+  return {
+    failure: error.code,
+    ...(provider !== "youtube" || error.status === undefined || error.status < 100 || error.status > 599
+      ? {}
+      : { httpStatus: error.status }),
+    ...(provider !== "youtube" || error.remoteReasonCode === undefined
+      ? {}
+      : { remoteReasonCode: error.remoteReasonCode }),
+  };
 }
 
 function parsedYouTubeRelevance(value: unknown): MarketResearchYouTubeRelevanceProvenance | undefined {
@@ -248,7 +262,7 @@ async function acquireProvider(
         youtube: acquisition.metrics,
       };
     } catch (error) {
-      return { ...empty, state: "temporary_error", latencyMs: Date.now() - startedAt, failure: failureCode(error) };
+      return { ...empty, state: "temporary_error", latencyMs: Date.now() - startedAt, ...failureDiagnostics(provider, error) };
     }
   }
 
@@ -276,7 +290,7 @@ async function acquireProvider(
       credits: discovery.metadata.credits ?? null,
     };
   } catch (error) {
-    return { ...empty, state: "temporary_error", latencyMs: Date.now() - startedAt, failure: failureCode(error) };
+    return { ...empty, state: "temporary_error", latencyMs: Date.now() - startedAt, ...failureDiagnostics(provider, error) };
   }
 }
 
@@ -449,6 +463,8 @@ export async function acquireMarketResearchSignals(
     scrapedPages: acquisition.provider === "firecrawl" ? scrapedPages : 0,
     latencyMs: Math.max(0, Math.round(acquisition.latencyMs)),
     failure: acquisition.failure,
+    ...(acquisition.httpStatus === undefined ? {} : { httpStatus: acquisition.httpStatus }),
+    ...(acquisition.remoteReasonCode === undefined ? {} : { remoteReasonCode: acquisition.remoteReasonCode }),
     usage: acquisition.usage,
     credits: acquisition.credits,
     ...(acquisition.youtube === undefined ? {} : { youtube: acquisition.youtube }),

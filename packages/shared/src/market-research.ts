@@ -330,6 +330,14 @@ export const MarketResearchProviderReportSchema = Type.Object({
   latencyMs: Type.Integer({ minimum: 0 }),
   /** Safe IntegrationError category; never a provider body or header. */
   failure: Type.Union([Type.String(), Type.Null()]),
+  /** HTTP response status for a failed YouTube acquisition, absent on older runs. */
+  httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
+  /** Allowlisted provider reason code; raw remote messages are never persisted. */
+  remoteReasonCode: Type.Optional(Type.String({
+    minLength: 1,
+    maxLength: 64,
+    pattern: "^[A-Za-z][A-Za-z0-9_.-]*$",
+  })),
   usage: Type.Union([Type.Number(), Type.Null()]),
   credits: Type.Union([Type.Number(), Type.Null()]),
   /** Bounded deterministic acquisition telemetry for the YouTube provider. */

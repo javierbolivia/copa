@@ -149,6 +149,8 @@ function restorePersistedMarketResearchRun(
         returned: report.returned, valid: report.valid, unique: report.unique,
         duplicates: report.duplicates, analyzed: report.analyzed, scrapedPages: report.scrapedPages,
         latencyMs: report.latencyMs, failure: report.failure, usage: report.usage, credits: report.credits,
+        ...(report.httpStatus === undefined ? {} : { httpStatus: report.httpStatus }),
+        ...(report.remoteReasonCode === undefined ? {} : { remoteReasonCode: report.remoteReasonCode }),
         ...(report.youtube === undefined ? {} : { youtube: {
           queries: report.youtube.queries,
           ...(report.youtube.queryPlanComparison === undefined ? {} : {

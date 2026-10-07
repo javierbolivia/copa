@@ -28,6 +28,7 @@ describe("failed generation history", () => {
     expect(html).toContain("EJECUCIÓN FALLIDA");
     expect(html).toContain('role="alert"');
     expect(html).toContain("No se pudo establecer conexión con DeepSeek. No se guardó un resultado.");
+    expect(html).toContain("No informado");
     expect(html).toContain("transport_error");
     expect(html).not.toContain("Resultado estructurado guardado.");
     expect(html).not.toContain("partial");
@@ -46,11 +47,17 @@ describe("mixed provider history", () => {
     const generations = [
       { ...failedGeneration, id: "mock", provider: "mock", model: "demo", status: "COMPLETED", estimatedCost: 2 },
       { ...failedGeneration, id: "local", provider: "local", model: "local-sources-v1", status: "COMPLETED", estimatedCost: 4 },
-      { ...failedGeneration, id: "gemini", provider: "gemini", status: "COMPLETED", estimatedCost: 0.5 },
+      { ...failedGeneration, id: "gemini", provider: "gemini", status: "COMPLETED", estimatedCost: 0.5, inputTokens: 10, costStatus: "estimated" },
+      { ...failedGeneration, id: "reported", provider: "openai", status: "COMPLETED", estimatedCost: 0.25, inputTokens: 8, costStatus: "reported" },
+      { ...failedGeneration, id: "unknown", provider: "deepseek", costStatus: "unknown" },
     ];
     const html = renderToStaticMarkup(createElement(AnalyticsHistory, { generations, demoMode: false }));
-    expect(html).toContain('Coste total</span><strong>$0.50</strong>');
-    expect(html).toContain('Coste por proyecto');
+    expect(html).toContain('Importe con dato</span><strong>$0.75</strong>');
+    expect(html).toContain("Importe con dato por proyecto");
+    expect(html).toContain("estimado");
+    expect(html).toContain("reportado");
+    expect(html).toContain("sin dato");
+    expect(html).toContain("no es una factura");
     expect(html).not.toContain('$6.50');
     expect(html).not.toContain('$2.00');
     expect(html).not.toContain('$4.00');

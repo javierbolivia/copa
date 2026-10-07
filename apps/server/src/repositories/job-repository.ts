@@ -4,9 +4,9 @@ import type { AppDatabase } from "../database/database.js";
 
 interface JobRow {id:string;project_id:string;job_type:string;status:Job["status"];progress:number;message:string|null;created_at:string;completed_at:string|null}
 export interface JobRecord extends Job {sourceId:string|null;payload:Record<string,unknown>;attempts:number;maxAttempts:number;cancelRequested:boolean}
-interface GenerationRow {id:string;project_id:string;agent_key:string;provider:string;model:string;status:string;input_tokens:number;output_tokens:number;estimated_cost:number;duration_ms:number;created_at:string;prompt_version:string|null;output_data:string|null;artifact_version_id:string|null;version_number:number|null;error_code:string|null}
+interface GenerationRow {id:string;project_id:string;agent_key:string;provider:string;model:string;status:string;input_tokens:number;output_tokens:number;estimated_cost:number;cost_status:Generation["costStatus"];duration_ms:number;created_at:string;prompt_version:string|null;output_data:string|null;artifact_version_id:string|null;version_number:number|null;error_code:string|null}
 const toJob=(r:JobRow):Job=>({id:r.id,projectId:r.project_id,jobType:r.job_type,status:r.status,progress:r.progress,message:r.message,createdAt:r.created_at,completedAt:r.completed_at});
-const toGeneration=(r:GenerationRow):Generation=>({id:r.id,projectId:r.project_id,agentKey:r.agent_key,provider:r.provider,model:r.model,status:r.status,inputTokens:r.input_tokens,outputTokens:r.output_tokens,estimatedCost:r.estimated_cost,durationMs:r.duration_ms,createdAt:r.created_at,promptVersion:r.prompt_version,outputData:parseJson(r.output_data),artifactVersionId:r.artifact_version_id,versionNumber:r.version_number,errorCode:r.error_code});
+const toGeneration=(r:GenerationRow):Generation=>({id:r.id,projectId:r.project_id,agentKey:r.agent_key,provider:r.provider,model:r.model,status:r.status,inputTokens:r.input_tokens,outputTokens:r.output_tokens,estimatedCost:r.estimated_cost,costStatus:r.cost_status,durationMs:r.duration_ms,createdAt:r.created_at,promptVersion:r.prompt_version,outputData:parseJson(r.output_data),artifactVersionId:r.artifact_version_id,versionNumber:r.version_number,errorCode:r.error_code});
 
 export class JobRepository {
   constructor(private readonly database:AppDatabase){}
@@ -49,9 +49,14 @@ export class JobRepository {
     }
   }
   listGenerations(projectId:string):Generation[]{return (this.database.connection.prepare(`SELECT g.*,
+    CASE WHEN g.provider IN ('mock','local') THEN 'not_applicable'
+      WHEN usage.id IS NULL THEN CASE WHEN g.input_tokens>0 OR g.output_tokens>0 OR g.estimated_cost>0 THEN 'estimated' ELSE 'unknown' END
+      WHEN usage.is_estimate=0 THEN 'reported'
+      WHEN usage.input_tokens=0 AND usage.output_tokens=0 AND usage.estimated_cost=0 THEN 'unknown'
+      ELSE 'estimated' END cost_status,
     (SELECT v.id FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) artifact_version_id,
     (SELECT v.version_number FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) version_number
-    FROM generations g WHERE g.project_id=? ORDER BY g.created_at DESC`).all(projectId) as unknown as GenerationRow[]).map(toGeneration);}
+    FROM generations g LEFT JOIN llm_usage usage ON usage.project_id=g.project_id AND usage.generation_id=g.id WHERE g.project_id=? ORDER BY g.created_at DESC`).all(projectId) as unknown as GenerationRow[]).map(toGeneration);}
 }
 
 function parseJson(value:string|null):unknown{if(value===null)return null;try{return JSON.parse(value) as unknown;}catch{return null;}}

@@ -56,6 +56,7 @@ describe("pipeline real de modulos con OpenAI", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ moduleKey: "research", outputData: { summary: "Resultado real" } });
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/generations` })).json<{ generations: Array<{ costStatus: string }> }>().generations[0]).toMatchObject({ costStatus: "estimated" });
     expect(fetchMock).toHaveBeenCalledOnce();
     const calls = fetchMock.mock.calls as unknown as Array<[unknown, RequestInit]>;
     const requestBody = JSON.parse(String(calls[0]![1].body));
@@ -108,8 +109,8 @@ describe("pipeline real de modulos con OpenAI", () => {
     app=await createApp({databasePath:":memory:",serveFrontend:false,openAI:{apiKey:"test-key",fetch:fetchMock as typeof fetch}});
     const project=(await app.inject({method:"POST",url:"/api/projects",payload:{name:"Failure",niche:"Prueba"}})).json<Project>();
     expect((await app.inject({method:"POST",url:`/api/projects/${project.id}/modules/research/run`,payload:{provider:"openai"}})).statusCode).toBe(409);
-    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{status:string;artifactVersionId:string|null}>}>().generations;
-    expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({status:"FAILED",artifactVersionId:null});
+    const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{status:string;artifactVersionId:string|null;costStatus:string}>}>().generations;
+    expect(generations).toHaveLength(1);expect(generations[0]).toMatchObject({status:"FAILED",artifactVersionId:null,costStatus:"unknown"});
     expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/modules/research`})).json()).toEqual({results:[]});
   });
 

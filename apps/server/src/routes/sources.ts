@@ -1,5 +1,5 @@
-import { ApiErrorSchema, CommentSchema, CreateSourceSchema, EvidenceSnippetSchema, GenerationSchema, JobSchema, SourceBundleSchema, SourceSchema,
-  type ApiError,type Comment,type CreateSourceInput,type EvidenceSnippet,type Generation,type Job,type Source,type SourceBundle } from "@our-platform/shared";
+import { ApiErrorSchema, CommentSchema, CreateSourceSchema, EvidenceSnippetSchema, GenerationSchema, GenerationVersionMetadataSchema, JobSchema, ModuleKeySchema, SourceBundleSchema, SourceSchema,
+  type ApiError,type Comment,type CreateSourceInput,type EvidenceSnippet,type Generation,type GenerationVersionMetadata,type Job,type ModuleKey,type Source,type SourceBundle } from "@our-platform/shared";
 import { Type } from "@sinclair/typebox";
 import type { FastifyInstance } from "fastify";
 import type { JobRepository } from "../repositories/job-repository.js";
@@ -8,11 +8,12 @@ import { YouTubeImportError, type YouTubeImportService } from "../services/youtu
 import { ProductStudioConflictError, type ProductStudioService } from "../services/product-studio-service.js";
 
 const ProjectParams=Type.Object({id:Type.String({format:"uuid"})});
+const GenerationVersionMetadataQuery=Type.Object({moduleKey:ModuleKeySchema});
 const SourceParams=Type.Object({id:Type.String({format:"uuid"}),sourceId:Type.String({format:"uuid"})});
 const JobParams=Type.Object({id:Type.String({format:"uuid"}),jobId:Type.String({format:"uuid"})});
 const SourceListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:300})),sourceType:Type.Optional(Type.Union([Type.Literal("youtube"),Type.Literal("manual"),Type.Literal("demo")]))});
 const CommentListQuery=Type.Object({query:Type.Optional(Type.String({maxLength:300})),sourceId:Type.Optional(Type.String({format:"uuid"})),replies:Type.Optional(Type.Boolean()),minLikes:Type.Optional(Type.Integer({minimum:0})),analysis:Type.Optional(Type.Union([Type.Literal("all"),Type.Literal("included"),Type.Literal("excluded")])),limit:Type.Optional(Type.Integer({minimum:1,maximum:1000})),offset:Type.Optional(Type.Integer({minimum:0}))});
-const SourcesResponse=Type.Object({sources:Type.Array(SourceSchema)}),AnalysisSetResponse=Type.Object({comments:Type.Array(CommentSchema)}),CommentsResponse=Type.Object({comments:Type.Array(CommentSchema),total:Type.Integer({minimum:0}),eligibleIncluded:Type.Integer({minimum:0})}),JobsResponse=Type.Object({jobs:Type.Array(JobSchema)}),GenerationsResponse=Type.Object({generations:Type.Array(GenerationSchema)});
+const SourcesResponse=Type.Object({sources:Type.Array(SourceSchema)}),AnalysisSetResponse=Type.Object({comments:Type.Array(CommentSchema)}),CommentsResponse=Type.Object({comments:Type.Array(CommentSchema),total:Type.Integer({minimum:0}),eligibleIncluded:Type.Integer({minimum:0})}),JobsResponse=Type.Object({jobs:Type.Array(JobSchema)}),GenerationsResponse=Type.Object({generations:Type.Array(GenerationSchema)}),GenerationVersionMetadataResponse=Type.Object({generations:Type.Array(GenerationVersionMetadataSchema)});
 const YouTubeQueuedResponse=Type.Object({source:SourceSchema,job:JobSchema});
 const EvidenceParams=Type.Object({id:Type.String({format:"uuid"}),evidenceId:Type.String({format:"uuid"})});
 const YouTubeSearchQuery=Type.Object({q:Type.String({minLength:2,maxLength:300}),pageToken:Type.Optional(Type.String({maxLength:500}))});
@@ -72,5 +73,9 @@ export function registerSourceRoutes(app:FastifyInstance,sources:SourceRepositor
     }
   });
   app.get<{Params:{id:string};Reply:{generations:Generation[]}}>("/api/projects/:id/generations",{schema:{params:ProjectParams,response:{200:GenerationsResponse}}},async(req)=>({generations:jobs.listGenerations(req.params.id)}));
+  app.get<{Params:{id:string};Querystring:{moduleKey:ModuleKey};Reply:{generations:GenerationVersionMetadata[]}|ApiError}>("/api/projects/:id/generation-version-metadata",{schema:{params:ProjectParams,querystring:GenerationVersionMetadataQuery,response:{200:GenerationVersionMetadataResponse,404:ApiErrorSchema}}},async(req,reply)=>{
+    if(!sources.projectExists(req.params.id))return reply.code(404).send(missing("El proyecto no existe."));
+    return {generations:jobs.listGenerationVersionMetadata(req.params.id,req.query.moduleKey)};
+  });
   app.get<{Params:{id:string;evidenceId:string};Reply:EvidenceSnippet|ApiError}>("/api/projects/:id/evidence/:evidenceId",{schema:{params:EvidenceParams,response:{200:EvidenceSnippetSchema,404:ApiErrorSchema}}},async(req,reply)=>sources.getEvidence(req.params.id,req.params.evidenceId)??reply.code(404).send(missing("La evidencia no existe en este proyecto.")));
 }

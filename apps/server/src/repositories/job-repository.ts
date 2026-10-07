@@ -1,4 +1,4 @@
-import type { Generation, Job } from "@our-platform/shared";
+import type { Generation, GenerationVersionMetadata, Job, ModuleKey } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
 import type { AppDatabase } from "../database/database.js";
 
@@ -57,6 +57,16 @@ export class JobRepository {
     (SELECT v.id FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) artifact_version_id,
     (SELECT v.version_number FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey') AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft')) ORDER BY v.version_number DESC LIMIT 1) version_number
     FROM generations g LEFT JOIN llm_usage usage ON usage.project_id=g.project_id AND usage.generation_id=g.id WHERE g.project_id=? ORDER BY g.created_at DESC`).all(projectId) as unknown as GenerationRow[]).map(toGeneration);}
+  listGenerationVersionMetadata(projectId:string,moduleKey:ModuleKey):GenerationVersionMetadata[]{
+    const rows=this.database.connection.prepare(`SELECT g.provider,g.model,
+      (SELECT v.id FROM artifact_versions v JOIN artifacts a ON a.id=v.artifact_id
+        WHERE v.project_id=g.project_id AND a.artifact_type=json_extract(g.input_snapshot,'$.moduleKey')
+          AND (json_extract(v.input_snapshot,'$.generationId')=g.id OR (json_extract(v.input_snapshot,'$.generationId') IS NULL AND v.output_data=g.output_data AND v.status<>'draft'))
+        ORDER BY v.version_number DESC LIMIT 1) artifact_version_id
+      FROM generations g WHERE g.project_id=? AND json_extract(g.input_snapshot,'$.moduleKey')=? ORDER BY g.created_at DESC`).all(projectId,moduleKey) as Array<{provider:string;model:string;artifact_version_id:string|null}>;
+    return rows.filter((row):row is typeof row&{artifact_version_id:string}=>typeof row.artifact_version_id==="string")
+      .map(row=>({provider:row.provider,model:row.model,artifactVersionId:row.artifact_version_id}));
+  }
 }
 
 function parseJson(value:string|null):unknown{if(value===null)return null;try{return JSON.parse(value) as unknown;}catch{return null;}}

@@ -26,7 +26,7 @@ describe("generated module provider selection", () => {
     vi.spyOn(api, "moduleResults").mockResolvedValue({ results: [] });
     vi.spyOn(api, "files").mockResolvedValue({ files: [] });
     vi.spyOn(api, "providerStatus").mockResolvedValue(providerStatus(provider));
-    vi.spyOn(api, "generations").mockResolvedValue({ generations: [] });
+    vi.spyOn(api, "generationVersionMetadata").mockResolvedValue({ generations: [] });
     const runModule = vi.spyOn(api, "runModule").mockResolvedValue(generation);
     const previous = globalThis.IS_REACT_ACT_ENVIRONMENT;
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -56,7 +56,7 @@ describe("generated module provider selection", () => {
     vi.spyOn(api, "moduleResults").mockResolvedValue({ results: [] });
     vi.spyOn(api, "files").mockResolvedValue({ files: [] });
     vi.spyOn(api, "providerStatus").mockResolvedValue(providerStatus("groq", null));
-    vi.spyOn(api, "generations").mockResolvedValue({ generations: [] });
+    vi.spyOn(api, "generationVersionMetadata").mockResolvedValue({ generations: [] });
     const runModule = vi.spyOn(api, "runModule");
     const previous = globalThis.IS_REACT_ACT_ENVIRONMENT;
     globalThis.IS_REACT_ACT_ENVIRONMENT = true;

@@ -58,6 +58,10 @@ describe("Sources API",()=>{
     expect(generated.json().outputData).toMatchObject({sourceCount:1,commentCount:2,isDemo:false});
     const generations=(await app.inject({method:"GET",url:`/api/projects/${project.id}/generations`})).json<{generations:Array<{agentKey:string;provider:string;model:string;inputTokens:number;outputTokens:number;estimatedCost:number}>}>().generations;
     expect(generations.find(item=>item.agentKey==="sources")).toMatchObject({provider:"local",model:"local-sources-v1",inputTokens:0,outputTokens:0,estimatedCost:0});
+    const metadata=await app.inject({method:"GET",url:`/api/projects/${project.id}/generation-version-metadata?moduleKey=sources`});
+    expect(metadata.statusCode).toBe(200);
+    expect(metadata.json()).toEqual({generations:[{provider:"local",model:"local-sources-v1",artifactVersionId:generated.json().versionId}]});
+    expect((await app.inject({method:"GET",url:`/api/projects/${project.id}/generation-version-metadata?moduleKey=funnel`})).json()).toEqual({generations:[]});
   });
 
   it("segmenta texto manual, filtra y elimina en cascada",async()=>{

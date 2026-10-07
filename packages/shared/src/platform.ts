@@ -25,6 +25,8 @@ export const GenerationCostStatusSchema=Type.Union([Type.Literal("reported"),Typ
 export const GenerationSchema=Type.Object({id:Type.String({format:"uuid"}),projectId:Type.String({format:"uuid"}),agentKey:Type.String(),provider:Type.String(),model:Type.String(),status:Type.String(),inputTokens:Type.Integer(),outputTokens:Type.Integer(),estimatedCost:Type.Number(),costStatus:GenerationCostStatusSchema,durationMs:Type.Integer(),createdAt:Type.String({format:"date-time"}),promptVersion:Type.Union([Type.String(),Type.Null()]),outputData:Type.Unknown(),artifactVersionId:Type.Union([Type.String({format:"uuid"}),Type.Null()]),versionNumber:Type.Union([Type.Integer(),Type.Null()]),errorCode:Type.Optional(Type.Union([Type.String(),Type.Null()]))});
 export type Job=Static<typeof JobSchema>;export type Generation=Static<typeof GenerationSchema>;
 export type GenerationCostStatus=Static<typeof GenerationCostStatusSchema>;
+export const GenerationVersionMetadataSchema=Type.Object({provider:Type.String(),model:Type.String(),artifactVersionId:Type.String({format:"uuid"})});
+export type GenerationVersionMetadata=Static<typeof GenerationVersionMetadataSchema>;
 
 export const GeneratedFileSchema=Type.Object({id:Type.String({format:"uuid"}),projectId:Type.String({format:"uuid"}),artifactVersionId:Type.Union([Type.String({format:"uuid"}),Type.Null()]),fileRole:Type.String(),format:Type.String(),relativePath:Type.String(),checksum:Type.String(),bytes:Type.Integer({minimum:0}),createdAt:Type.String({format:"date-time"}),downloadUrl:Type.String()});
 export type GeneratedFile=Static<typeof GeneratedFileSchema>;

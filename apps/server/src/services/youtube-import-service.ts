@@ -15,8 +15,11 @@ export class YouTubeImportError extends Error {
 export class YouTubeImportService {
   static readonly DEFAULT_TOP_LEVEL_COMMENTS = 500;
   static readonly MAX_TOP_LEVEL_COMMENTS = 2_000;
+  static readonly MAX_CONCURRENT_IMPORTS = 3;
   private readonly adapter:YouTubeAdapter;
   private closed=false;
+  private activeRuns=0;
+  private readonly pendingRuns:Array<{projectId:string;jobId:string}>=[];
   /**
    * Optional. When absent, transcript acquisition is skipped entirely: comment
    * import must never depend on captions being fetchable. Injected here (not
@@ -24,7 +27,7 @@ export class YouTubeImportService {
    */
   constructor(private readonly sources:SourceRepository,private readonly jobs:JobRepository,apiKey:string|undefined=process.env.YOUTUBE_API_KEY,adapter?:YouTubeAdapter,private readonly transcripts?:YouTubeTranscriptClient){this.adapter=adapter??new YouTubeAdapter(apiKey===undefined?{}:{apiKey});}
   isConfigured():boolean{return this.adapter.configured;}
-  close():void{this.closed=true;}
+  close():void{this.closed=true;this.pendingRuns.length=0;}
   async search(query:string,pageToken?:string):Promise<{items:ResearchScoredVideo[];nextPageToken?:string}>{
     if(!this.isConfigured())throw new YouTubeImportError("youtube_not_configured","YouTube no está configurado.");
     const hits=await this.adapter.searchVideos(query,pageToken),metadata=await this.adapter.getVideos(hits.items.map(hit=>hit.videoId));
@@ -46,7 +49,16 @@ export class YouTubeImportService {
   retry(projectId:string,jobId:string):Job|undefined{const record=this.jobs.getRecord(projectId,jobId),job=this.jobs.retry(projectId,jobId);if(job?.status==="QUEUED"&&record?.sourceId&&(record.status==="FAILED"||record.status==="CANCELLED")){this.sources.markImportPending(projectId,record.sourceId);this.schedule(projectId,jobId);}return job;}
   resumePending():void{const pending=this.jobs.recoverYouTubeImports();if(!this.isConfigured()){this.jobs.failPendingYouTubeWithoutProvider();return;}for(const job of pending)this.schedule(job.projectId,job.jobId);}
 
-  private schedule(projectId:string,jobId:string):void{queueMicrotask(()=>{void this.run(projectId,jobId);});}
+  private schedule(projectId:string,jobId:string):void{this.pendingRuns.push({projectId,jobId});queueMicrotask(()=>this.pump());}
+  private pump():void{
+    if(this.closed){this.pendingRuns.length=0;return;}
+    while(this.activeRuns<YouTubeImportService.MAX_CONCURRENT_IMPORTS&&this.pendingRuns.length){
+      const next=this.pendingRuns.shift()!;
+      if(this.jobs.get(next.projectId,next.jobId)?.status!=="QUEUED")continue;
+      this.activeRuns++;
+      void this.run(next.projectId,next.jobId).finally(()=>{this.activeRuns--;this.pump();});
+    }
+  }
   private async run(projectId:string,jobId:string):Promise<void>{
     if(this.closed)return;
     if(this.jobs.get(projectId,jobId)?.status!=="QUEUED")return;

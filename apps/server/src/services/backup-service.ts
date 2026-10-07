@@ -7,6 +7,7 @@ import { backup, DatabaseSync } from "node:sqlite";
 
 import type { AppDatabase } from "../database/database.js";
 import { LATEST_SCHEMA_VERSION } from "../database/migrations.js";
+import { markRestoreCommitted, writeRestoreManifest } from "../database/restore-recovery.js";
 
 export class BackupService {
   readonly directory: string;
@@ -71,6 +72,19 @@ export class BackupService {
       this.validateKnowledge(stagedDatabase, directories[1]!.prepared);
       this.validateAssets(stagedDatabase, directories[2]!.prepared);
       const safetyBackup = await this.create("pre-restore");
+      const rollbackRoot = join(stage, "rollback"), rollbackDatabase = join(rollbackRoot, "rollback.sqlite");
+      mkdirSync(rollbackRoot);
+      const safetyPath = join(this.directory, safetyBackup.filename);
+      copyFileSync(safetyPath, rollbackDatabase);
+      for (const [name, suffix] of [["generated", ".files"], ["knowledge", ".knowledge"], ["assets", ".assets"]] as const) {
+        const directory = join(rollbackRoot, name), sidecar = `${safetyPath}${suffix}`;
+        if (existsSync(sidecar)) this.copyDirectoryIfPresent(sidecar, directory);
+        else mkdirSync(directory);
+      }
+      this.validateGenerated(rollbackDatabase, join(rollbackRoot, "generated"));
+      this.validateKnowledge(rollbackDatabase, join(rollbackRoot, "knowledge"));
+      this.validateAssets(rollbackDatabase, join(rollbackRoot, "assets"));
+      writeRestoreManifest(stage, this.database.path);
       try {
         // No awaits from the first swap until commit/rollback is complete.
         for (const directory of directories) {
@@ -82,6 +96,7 @@ export class BackupService {
           directory.installed = true;
         }
         this.database.restoreFrom(stagedDatabase);
+        markRestoreCommitted(stage);
       } catch (error) {
         const rollbackErrors: unknown[] = [];
         for (const directory of [...directories].reverse()) {

@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { LATEST_SCHEMA_VERSION, migrations } from "./migrations.js";
+import { recoverInterruptedRestore } from "./restore-recovery.js";
 
 export class AppDatabase {
   connection: DatabaseSync;
@@ -11,6 +12,7 @@ export class AppDatabase {
   constructor(readonly path: string) {
     if (path !== ":memory:") {
       mkdirSync(dirname(path), { recursive: true });
+      recoverInterruptedRestore(path);
     }
 
     this.connection = new DatabaseSync(path);

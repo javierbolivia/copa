@@ -151,6 +151,20 @@ describe("YouTubeAdapter", () => {
     await expect(adapter.getVideo("video1")).rejects.toMatchObject({ code: "quota_exceeded", retryable: false });
   });
 
+  it.each([
+    { reason: "commentsDisabled", status: 403, code: "comments_disabled", message: "Este video no permite consultar comentarios.", operation: "comments" },
+    { reason: "keyInvalid", status: 400, code: "authentication_failed", message: "La clave API de YouTube no es válida.", operation: "metadata" },
+  ])("clasifica correctamente el error de YouTube $reason", async ({ reason, status, code, message, operation }) => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { code: status, errors: [{ reason }] } }), { status }));
+    const adapter = new YouTubeAdapter({ apiKey: "configured-test-key", fetch: fetchMock as typeof fetch });
+    const request = operation === "comments"
+      ? adapter.listCommentThreads({ videoId: "video1" })
+      : adapter.getVideo("video1");
+
+    await expect(request).rejects.toMatchObject({ code, status, retryable: false, message });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("expone errores como IntegrationError", async () => {
     const adapter = new YouTubeAdapter({
       apiKey: "test-key",

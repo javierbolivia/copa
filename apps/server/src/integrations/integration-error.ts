@@ -22,7 +22,8 @@ export type IntegrationErrorCode =
   | "invalid_schema"
   | "empty_completion"
   | "unsupported_model"
-  | "request_budget_exceeded";
+  | "request_budget_exceeded"
+  | "comments_disabled";
 
 const YOUTUBE_REMOTE_REASON_CODES = [
   "dailyLimitExceeded",
@@ -103,6 +104,12 @@ export function httpIntegrationError(service: string, status: number, remoteType
   }
   if (remoteType === "rate_limit_error" || remoteType === "userRateLimitExceeded") {
     return new IntegrationError("rate_limited", `${service} limitó temporalmente las solicitudes.`, { ...diagnostics, retryable: true });
+  }
+  if (service === "YouTube" && remoteType === "commentsDisabled") {
+    return new IntegrationError("comments_disabled", "Este video no permite consultar comentarios.", diagnostics);
+  }
+  if (service === "YouTube" && remoteType === "keyInvalid") {
+    return new IntegrationError("authentication_failed", "La clave API de YouTube no es válida.", diagnostics);
   }
   if (status === 401 || status === 403) {
     return new IntegrationError("authentication_failed", `${service} rechazó las credenciales configuradas.`, diagnostics);

@@ -94,6 +94,53 @@ describe("YouTube import attempt ownership", () => {
     expect(db.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
+  it("fails safely when YouTube returns no public metadata for a video", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => new Response(JSON.stringify({ items: [] }), { status: 200 }));
+    const adapter = new YouTubeAdapter({ apiKey: "fake", fetch: fetchMock as typeof fetch });
+    const service = new YouTubeImportService(sources, jobs, "fake", adapter);
+    const queued = service.queue(projectId, video.videoId);
+    await tick();
+
+    expect(jobs.get(projectId, queued.job.id)?.status).toBe("FAILED");
+    expect(db.connection.prepare("SELECT error_code,error_message FROM jobs WHERE id=?").get(queued.job.id)).toMatchObject({
+      error_code: "invalid_response",error_message: expect.stringContaining("no es público o no está disponible"),
+    });
+    expect(sources.get(projectId, queued.source.id)).toMatchObject({ status: "failed" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]![0])).toContain("/videos?");
+    expect(db.connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("bounds concurrent YouTube imports across queued videos", async () => {
+    const adapter = new YouTubeAdapter({ apiKey: "fake" });
+    const commentRequests: Array<{ videoId: string; resolve: (value: YouTubePage<YouTubeThread>) => void }> = [];
+    let active = 0, peak = 0;
+    vi.spyOn(adapter, "getVideo").mockImplementation(async videoId => ({ ...video, videoId }));
+    const comments = vi.spyOn(adapter, "listCommentThreads").mockImplementation(({ videoId }) => {
+      const request = deferred<YouTubePage<YouTubeThread>>();
+      active++;peak=Math.max(peak,active);
+      commentRequests.push({ videoId, resolve: value => { active--;request.resolve(value); } });
+      return request.promise;
+    });
+    const service = new YouTubeImportService(sources, jobs, "fake", adapter);
+    const ids = ["dQw4w9WgXcQ", "9bZkp7q19f0", "J---aiyznGQ", "3JZ_D3ELwOQ"];
+    const queued = ids.map(videoId => service.queue(projectId, videoId));
+    await tick();await tick();
+
+    expect(comments).toHaveBeenCalledTimes(3);
+    expect(active).toBe(3);
+    commentRequests[0]!.resolve({ items: [] });
+    await tick();await tick();
+    expect(comments).toHaveBeenCalledTimes(4);
+    expect(peak).toBe(3);
+
+    for(const request of commentRequests.slice(1))request.resolve({ items: [] });
+    for(let attempt=0;attempt<8&&queued.some(item=>jobs.get(projectId,item.job.id)?.status!=="COMPLETED");attempt++)await tick();
+    expect(queued.every(item=>jobs.get(projectId,item.job.id)?.status==="COMPLETED")).toBe(true);
+    expect(peak).toBe(3);
+    service.close();
+  });
+
   it.each(["comments", "replies"])("stops repeated %s pagination tokens without an unbounded quota loop", async resource => {
     const adapter = new YouTubeAdapter({ apiKey: "fake" });
     vi.spyOn(adapter, "getVideo").mockResolvedValue(video);

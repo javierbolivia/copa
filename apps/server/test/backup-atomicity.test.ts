@@ -1,6 +1,6 @@
-import {mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,writeFileSync} from "node:fs";
+import {copyFileSync,cpSync,existsSync,mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
-import {join,resolve,sep} from "node:path";
+import {basename,join,resolve,sep} from "node:path";
 import {afterEach,describe,expect,it,vi} from "vitest";
 import {AppDatabase} from "../src/database/database.js";
 import {ProjectRepository} from "../src/repositories/project-repository.js";
@@ -51,6 +51,65 @@ describe("restore preserves the whole previous state on failure",()=>{
   it("preserves committed WAL data when installing the replacement DB fails",async()=>{
     const {service,saved}=await fixture();fault.renameTo=db!.path;
     await expect(service.restore(saved.filename)).rejects.toThrow("SIMULATED_RENAME_FAILURE");expectCurrent();
+  });
+  it("recovers the prior snapshot before opening after an interrupted restore",async()=>{
+    const {service}=await fixture();
+    const path=db!.path,snapshot=await service.create("recovery");
+    const snapshotPath=join(service.directory,snapshot.filename);
+    const stage=mkdtempSync(join(root!,".restore-stage-crash-"));
+    const rollbackRoot=join(stage,"rollback");mkdirSync(rollbackRoot);
+    copyFileSync(snapshotPath,join(rollbackRoot,"rollback.sqlite"));
+    for(const [name,suffix] of [["generated",".files"],["knowledge",".knowledge"],["assets",".assets"]] as const){
+      const target=join(rollbackRoot,name),source=`${snapshotPath}${suffix}`;
+      if(readdirSync(service.directory).includes(`${snapshot.filename}${suffix}`))cpSync(source,target,{recursive:true});
+      else mkdirSync(target);
+    }
+    writeFileSync(join(stage,"restore-manifest.json"),JSON.stringify({version:1,databaseFile:basename(path)}));
+
+    db!.close();db=undefined;
+    for(const suffix of ["","-wal","-shm"])rmSync(`${path}${suffix}`,{force:true});
+    for(const name of ["generated","knowledge","assets"])rmSync(join(root!,name),{recursive:true,force:true});
+    fault.renameTo=path;
+    expect(()=>new AppDatabase(path)).toThrow("SIMULATED_RENAME_FAILURE");
+    expect(existsSync(path)).toBe(false);
+    fault.renameTo="";
+    db=new AppDatabase(path);
+
+    expectCurrent();
+    expect(readdirSync(root!).some(name=>name.startsWith(".restore-stage-"))).toBe(false);
+  });
+  it("fails closed when an interrupted restore has a damaged manifest",async()=>{
+    await fixture();const path=db!.path;
+    const stage=mkdtempSync(join(root!,".restore-stage-damaged-"));
+    writeFileSync(join(stage,"restore-manifest.json"),"{");
+    db!.close();db=undefined;
+    for(const suffix of ["","-wal","-shm"])rmSync(`${path}${suffix}`,{force:true});
+
+    expect(()=>new AppDatabase(path)).toThrow("manifiesto de recuperación está dañado");
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(root!).some(name=>name===basename(stage))).toBe(true);
+  });
+  it("fails closed on a non-empty restore stage without a journal",async()=>{
+    await fixture();const path=db!.path;
+    const stage=mkdtempSync(join(root!,".restore-stage-untracked-"));
+    writeFileSync(join(stage,"candidate.sqlite"),"partial stage");
+    db!.close();db=undefined;
+    for(const suffix of ["","-wal","-shm"])rmSync(`${path}${suffix}`,{force:true});
+
+    expect(()=>new AppDatabase(path)).toThrow("restauración sin manifiesto");
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(root!).some(name=>name===basename(stage))).toBe(true);
+  });
+  it("keeps a completed restore when cleaning its journal on restart",async()=>{
+    await fixture();const path=db!.path;
+    const stage=mkdtempSync(join(root!,".restore-stage-committed-"));
+    writeFileSync(join(stage,"restore-manifest.json"),JSON.stringify({version:1,databaseFile:basename(path)}));
+    writeFileSync(join(stage,"restore-committed"),"");
+    db!.close();db=undefined;
+    db=new AppDatabase(path);
+
+    expectCurrent();
+    expect(readdirSync(root!).some(name=>name.startsWith(".restore-stage-"))).toBe(false);
   });
   it("restores DB and files together and retains the safety backup",async()=>{
     const {service,saved}=await fixture();const result=await service.restore(saved.filename);

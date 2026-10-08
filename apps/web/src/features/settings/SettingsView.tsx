@@ -1,9 +1,11 @@
 import type { BackupInfo, ProjectSettings } from "@our-platform/shared";
 import type { FormEvent } from "react";
 import type { ProviderStatus } from "../../api/client";
+import { hasUnsavedProjectSettings } from "./settings-dirty";
 
-export function SettingsView({settings,providerStatus,setSettings,onSave,backups,onBackup,onRestore}:{settings:ProjectSettings|null;providerStatus:ProviderStatus|null;setSettings:(settings:ProjectSettings)=>void;onSave:(event:FormEvent)=>void;backups:BackupInfo[];onBackup:()=>void;onRestore:(filename:string)=>void}) {
+export function SettingsView({settings,savedSettings,providerStatus,setSettings,onSave,saving,backups,onBackup,onRestore}:{settings:ProjectSettings|null;savedSettings:ProjectSettings|null;providerStatus:ProviderStatus|null;setSettings:(settings:ProjectSettings)=>void;onSave:(event:FormEvent)=>void;saving:boolean;backups:BackupInfo[];onBackup:()=>void;onRestore:(filename:string)=>void}) {
   if(!settings)return <section className="content-section"><div className="skeleton-card">Cargando configuración…</div></section>;
+  const hasChanges=hasUnsavedProjectSettings(settings,savedSettings);
   const field=(key:keyof ProjectSettings,value:string|number|boolean|null)=>setSettings({...settings,[key]:value});
   const providerChecking=providerStatus===null;
   const selectedProvider=settings.preferredLlmProvider??"mock";
@@ -23,7 +25,7 @@ export function SettingsView({settings,providerStatus,setSettings,onSave,backups
       <label>Presupuesto máximo<input type="number" min="0" value={settings.maxBudget??""} onChange={(event)=>field("maxBudget",event.target.value?Number(event.target.value):null)}/></label>
       <label className="settings-toggle"><input type="checkbox" checked={settings.knowledgeEnabled} onChange={(event)=>field("knowledgeEnabled",event.target.checked)}/> Usar Knowledge Engine en generaciones</label>
       <label>Notas generales<textarea rows={5} value={settings.generalNotes??""} onChange={(event)=>field("generalNotes",event.target.value||null)}/></label>
-      <button className="button primary">Guardar configuración</button>
+      <button className="button primary" disabled={!hasChanges||saving}>Guardar configuración</button>
     </form>
     <article className="detail-card"><span className="eyebrow">SEGURIDAD LOCAL</span><h2>Backups</h2><p>Incluyen SQLite, archivos generados y documentos de Knowledge. Nunca incluyen `.env` ni claves.</p><button className="button primary" type="button" onClick={onBackup}>Crear backup</button><div className="backup-list">{backups.length===0?<p>No hay backups todavía.</p>:backups.map((backup)=><div key={backup.filename}><div><strong>{backup.filename}</strong><small>{(backup.bytes/1024).toFixed(1)} KB · schema {backup.schemaVersion}</small></div><button onClick={()=>onRestore(backup.filename)}>Restaurar</button></div>)}</div></article>
   </section>;

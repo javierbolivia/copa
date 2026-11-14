@@ -1111,16 +1111,15 @@ async function renderMermaid(source: string): Promise<string> {
         "mermaid/dist/mermaid.esm.min.mjs",
       ),
     ).href,
-    temp = resolve(process.cwd(), "data", "generated", ".diagram"),
-    htmlPath = resolve(temp, `${uuidv7()}.html`);
-  mkdirSync(temp, { recursive: true });
-  writeFileSync(
-    htmlPath,
-    `<!doctype html><meta charset="utf-8"><div id="out"></div><script type="module">import mermaid from ${JSON.stringify(mermaidModule)};mermaid.initialize({startOnLoad:false,securityLevel:'strict',htmlLabels:false});try{await mermaid.parse(${JSON.stringify(source)});const {svg}=await mermaid.render('graph',${JSON.stringify(source)});document.getElementById('out').innerHTML=svg;document.body.dataset.render='ready'}catch(e){document.body.dataset.render='error';document.body.textContent=String(e)}</script>`,
-    "utf8",
-  );
-  const profile = mkdtempSync(resolve(tmpdir(), "hallazia-mermaid-profile-"));
+    temp = mkdtempSync(resolve(tmpdir(), "hallazia-mermaid-")),
+    htmlPath = resolve(temp, "diagram.html"),
+    profile = resolve(temp, "browser-profile");
   try {
+    writeFileSync(
+      htmlPath,
+      `<!doctype html><meta charset="utf-8"><div id="out"></div><script type="module">import mermaid from ${JSON.stringify(mermaidModule)};mermaid.initialize({startOnLoad:false,securityLevel:'strict',htmlLabels:false});try{await mermaid.parse(${JSON.stringify(source)});const {svg}=await mermaid.render('graph',${JSON.stringify(source)});document.getElementById('out').innerHTML=svg;document.body.dataset.render='ready'}catch(e){document.body.dataset.render='error';document.body.textContent=String(e)}</script>`,
+      "utf8",
+    );
     for (let attempt = 1; attempt <= MAX_MERMAID_RENDER_ATTEMPTS; attempt++) {
       const result = spawnSync(
         edge,
@@ -1161,8 +1160,7 @@ async function renderMermaid(source: string): Promise<string> {
       `Mermaid no completó el render tras ${MAX_MERMAID_RENDER_ATTEMPTS} intentos.`,
     );
   } finally {
-    rmSync(htmlPath, { force: true });
-    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(temp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 }
 export function sanitizeSvg(svg: string) {

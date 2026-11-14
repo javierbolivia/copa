@@ -17,3 +17,6 @@ export const ArtifactVersionSchema = Type.Object({
 });
 export const ArtifactVersionListSchema = Type.Object({ versions: Type.Array(ArtifactVersionSchema) });
 export type ArtifactVersion = Static<typeof ArtifactVersionSchema>;
+export const ArtifactVersionSummarySchema = Type.Omit(ArtifactVersionSchema, ["inputSnapshot", "outputData"]);
+export const ArtifactVersionSummaryListSchema = Type.Object({ versions: Type.Array(ArtifactVersionSummarySchema) });
+export type ArtifactVersionSummary = Static<typeof ArtifactVersionSummarySchema>;

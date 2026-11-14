@@ -37,7 +37,10 @@ describe("Problem analysis details UI",()=>{
 
   it("clusters rechazados no aparecen como problemas validados en la UI",()=>{
     // The validated problems list only renders items from value.items (already filtered by engine)
-    expect(source).toContain("problem-quality-list");
+    expect(source).toContain("<ProblemCompactList items={items} onOpenEvidence={onOpenEvidence}/>");
+    const listSource=readFileSync(resolve(import.meta.dirname,"../../web/src/features/modules/ProblemCompactList.tsx"),"utf8");
+    expect(listSource).toContain("problem-quality-list");
+    expect(listSource).not.toContain("postMergeClusters");
     // Audit clusters are rendered ONLY inside analysis-details, not in the main list
     expect(source).toMatch(/cluster-audit-list/);
     // items is always value.items.filter(isRecord) — only validated problems

@@ -1,7 +1,7 @@
 import type { ImportKnowledgeDocumentInput } from "@our-platform/shared";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
 import type { AppDatabase } from "../database/database.js";
@@ -60,14 +60,16 @@ export class KnowledgeIngestionService {
       .get(projectId, documentId, projectId) as { stored_relative_path: string | null; scope:"GLOBAL"|"PROJECT" } | undefined;
     if (!row) return false;
     if(row.scope==="GLOBAL")throw new Error("Los documentos globales no pueden borrarse desde un proyecto consumidor.");
+    const absolutePath = row.stored_relative_path ? this.safeAbsolutePath(row.stored_relative_path) : undefined;
     const deleted = this.repository.deleteDocument(documentId);
-    if (deleted && row.stored_relative_path) rmSync(this.safeAbsolutePath(row.stored_relative_path), { force: true });
+    if (deleted && absolutePath) rmSync(absolutePath, { force: true });
     return deleted;
   }
 
   private safeAbsolutePath(relativePath: string): string {
     const absolute = resolve(this.dataRoot, relativePath);
-    if (!absolute.startsWith(`${this.dataRoot}\\`) && absolute !== this.dataRoot) throw new Error("Ruta de conocimiento inválida.");
+    const child = relative(this.dataRoot, absolute);
+    if (!child || child === ".." || child.startsWith("../") || child.startsWith("..\\") || isAbsolute(child)) throw new Error("Ruta de conocimiento inválida.");
     return absolute;
   }
 

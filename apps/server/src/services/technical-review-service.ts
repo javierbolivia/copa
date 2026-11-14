@@ -6,7 +6,7 @@ import {fileURLToPath} from "node:url";
 const sharedUi=["apps/web/src/styles.css","apps/web/src/components/TechnicalReviewStamp.tsx","apps/web/src/components/AppShell.tsx","apps/web/src/features/modules/ModuleReviewSummary.tsx"];
 const moduleUi=["apps/web/src/features/modules/ModuleView.tsx","apps/server/src/services/module-service.ts","apps/server/src/services/module-output-schema.ts","apps/server/src/routes/modules.ts"];
 const editorUi=[...moduleUi,"apps/web/src/features/refinement/RefinedModuleOutput.tsx","apps/web/src/features/refinement/EditorScaffold.tsx","apps/web/src/features/refinement/refinement.css","apps/web/src/features/refinement/types.ts"];
-// Only sections whose technical review is complete. This never changes artifact dates.
+// Sections with automatic code-change tracking. This is not a review attestation.
 export const REVIEW_FILES={
   overview:[...sharedUi,"apps/web/src/features/overview/OverviewView.tsx"],
   research:[...sharedUi,...moduleUi,"prompts/research.md","apps/server/src/services/research-output-validator.ts"],
@@ -19,6 +19,8 @@ export const REVIEW_FILES={
   beliefs:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/BeliefsEditor.tsx","apps/web/src/features/refinement/beliefs-adapter.ts","apps/server/src/services/beliefs-output-validator.ts","prompts/beliefs-agent.md"],
   offer:[...sharedUi,...moduleUi,...editorUi,"apps/web/src/features/refinement/OfferEditor.tsx","apps/web/src/features/refinement/offer-adapter.ts","apps/server/src/services/offer-output-validator.ts","prompts/offer-builder.md"],
 } as const;
+// Keep the historical on-disk field name so existing tracking dates are preserved.
+// It records detection of a changed fingerprint, never a verified technical review.
 type ReviewEntry={reviewedAt:string;fingerprint:string};
 type ReviewStore={schemaVersion:1;sections:Record<string,ReviewEntry>};
 export class TechnicalReviewService {
@@ -28,7 +30,7 @@ export class TechnicalReviewService {
     if(store.schemaVersion!==1||!store.sections||typeof store.sections!=="object")throw new Error("Registro de revisión técnica no válido; se conserva para recuperación.");
     let changed=false;
     for(const [section,paths] of Object.entries(this.files)){
-      // A build/source tree without these files must retain its saved review, never invent one.
+      // A build/source tree without these files must retain its saved tracking date.
       if(paths.some(path=>!existsSync(resolve(this.repoRoot,path))))continue;
       const hash=createHash("sha256");
       for(const path of paths){hash.update(path);hash.update(readFileSync(resolve(this.repoRoot,path)));}
@@ -36,6 +38,6 @@ export class TechnicalReviewService {
       if(store.sections[section]?.fingerprint!==fingerprint){store.sections[section]={reviewedAt:this.now().toISOString(),fingerprint};changed=true;}
     }
     if(changed){mkdirSync(dirname(this.filename),{recursive:true});const temporary=`${this.filename}.tmp`;writeFileSync(temporary,JSON.stringify(store,null,2)+"\n","utf8");renameSync(temporary,this.filename);}
-    return {sections:Object.fromEntries(Object.entries(store.sections).filter(([key])=>key in this.files).map(([key,value])=>[key,{reviewedAt:value.reviewedAt}]))};
+    return {sections:Object.fromEntries(Object.entries(store.sections).filter(([key])=>key in this.files).map(([key,value])=>[key,{codeUpdatedAt:value.reviewedAt}]))};
   }
 }

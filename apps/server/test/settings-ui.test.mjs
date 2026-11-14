@@ -24,9 +24,10 @@ describe("Settings provider disclosure", () => {
   });
 
   it("does not apply a late settings save to a newly selected project", () => {
-    expect(appSource).toContain('const current=systemRequests.capture();setBusy(true);');
-    expect(appSource).toContain('const saved=await api.saveSettings(selected.id,input);if(current()){setSettings(saved);setSavedSettings(saved);}');
-    expect(appSource).toContain('catch(reason){if(current())setError(messageOf(reason));}finally{if(current())setBusy(false);}');
+    expect(appSource).toContain('projectId=selected.id,current=systemRequests.capture()');
+    expect(appSource).toContain('setSettings(latest=>hasUnsavedProjectSettings(latest,settings)?latest:saved)');
+    expect(appSource).toContain('pendingSettingsSaves.current.delete(projectId)');
+    expect(appSource).toContain('saving={savingSettingsProjectIds.includes(selected.id)}');
   });
 
   it("does not expose a save action when settings match the persisted snapshot", () => {
@@ -53,6 +54,12 @@ describe("settings change detection", () => {
 
   it("ignores snapshot metadata and unchanged field values", () => {
     expect(hasUnsavedProjectSettings({ ...saved, updatedAt: "2026-10-08T01:00:00.000Z" }, saved)).toBe(false);
+  });
+
+  it.each(["targetMarket", "generalNotes", "economyModel", "powerfulModel"])("treats null and empty %s as the same visible value", (field) => {
+    expect(hasUnsavedProjectSettings({ ...saved, [field]: "" }, saved)).toBe(false);
+    expect(hasUnsavedProjectSettings(saved, { ...saved, [field]: "" })).toBe(false);
+    expect(hasUnsavedProjectSettings({ ...saved, [field]: " " }, saved)).toBe(true);
   });
 
   it.each([

@@ -1,5 +1,5 @@
 import {TechnicalReviewStamp} from "./components/TechnicalReviewStamp";
-import type { ArtifactVersion, BackupInfo, CreateProjectInput, Health, Project, ProjectSettings, Workflow } from "@our-platform/shared";
+import type { ArtifactVersionSummary, BackupInfo, CreateProjectInput, Health, Project, ProjectSettings, Workflow } from "@our-platform/shared";
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { api, type ProviderStatus } from "./api/client";
 import { useRequestGuard } from "./api/useRequestGuard";
@@ -23,14 +23,28 @@ export function App() {
   const [evidenceFocus,setEvidenceFocus]=useState<string|null>(null);
   const [health,setHealth]=useState<Health|null>(null),[workflow,setWorkflow]=useState<Workflow|null>(null),[settings,setSettings]=useState<ProjectSettings|null>(null),[savedSettings,setSavedSettings]=useState<ProjectSettings|null>(null);
   const [providerStatus,setProviderStatus]=useState<ProviderStatus|null>(null);
-  const [artifacts,setArtifacts]=useState<ArtifactVersion[]>([]),[backups,setBackups]=useState<BackupInfo[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
+  const [artifacts,setArtifacts]=useState<ArtifactVersionSummary[]|null>(null),[backups,setBackups]=useState<BackupInfo[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState<string|null>(null);
+  const pendingSettingsSaves=useRef(new Set<string>());
+  const [savingSettingsProjectIds,setSavingSettingsProjectIds]=useState<string[]>([]);
 
   const systemRequests=useRequestGuard(selected?.id??""),projectRequests=useRequestGuard("projects");
   const loadProjects=async()=>{const current=projectRequests.begin();try{const response=await api.projects();if(current()){setProjects(response.projects);projectsLoaded.current=true;setProjectsLoading(false);setProjectsLoadError(null);setSelected(selected=>selected?response.projects.find(project=>project.id===selected.id&&project.status==="active")??null:null);if(!workspaceLinkInitialized.current){workspaceLinkInitialized.current=true;const link=parseWorkspaceLink(window.location.search);const linkedProject=link&&response.projects.find(project=>project.id===link.projectId&&project.status==="active");if(link&&linkedProject){setSelected(linkedProject);setActive(link.section);}setWorkspaceLinkReady(true);}return response.projects;}return null;}catch(reason){if(current()&&!projectsLoaded.current){setProjectsLoading(false);setProjectsLoadError(messageOf(reason));}throw reason;}};
   const retryProjects=()=>{setProjectsLoading(true);setProjectsLoadError(null);void loadProjects().catch(()=>{});};
-  const loadProjectSystem=async(projectId:string)=>{const alive=systemRequests.capture();if(!alive())return;const current=systemRequests.begin();setError(null);try{const [nextWorkflow,nextSettings,nextArtifacts,nextProviderStatus]=await Promise.all([api.workflow(projectId),api.settings(projectId),api.artifacts(projectId),api.providerStatus(projectId)]);if(!current())return;setWorkflow(nextWorkflow);setSettings(nextSettings);setSavedSettings(nextSettings);setArtifacts(nextArtifacts.versions);setProviderStatus(nextProviderStatus);}catch(reason){if(current())setError(messageOf(reason));}};
-  useEffect(()=>{let alive=true;void loadProjects().catch(()=>{});void api.health().then(setHealth).catch((reason)=>{if(alive)setError(messageOf(reason));});void api.backups().then((response)=>setBackups(response.backups)).catch((reason)=>{if(alive)setError(messageOf(reason));});return()=>{alive=false;};},[]);
-  useEffect(()=>{setWorkflow(null);setSettings(null);setSavedSettings(null);setArtifacts([]);setProviderStatus(null);setError(null);if(selected)void loadProjectSystem(selected.id);},[selected?.id]);
+  const loadProjectSystem=async(projectId:string)=>{
+    const alive=systemRequests.capture();if(!alive())return;
+    const current=systemRequests.begin();setError(null);
+    try{
+      await Promise.all([
+        api.workflow(projectId).then(value=>{if(current())setWorkflow(value);}),
+        api.settings(projectId).then(value=>{if(current()){setSettings(value);setSavedSettings(value);}}),
+        api.artifactSummaries(projectId).then(value=>{if(current())setArtifacts(value.versions);}),
+        api.providerStatus(projectId).then(value=>{if(current())setProviderStatus(value);}),
+      ]);
+    }catch(reason){if(current())setError(messageOf(reason));}
+  };
+  useEffect(()=>{let alive=true;void loadProjects().catch(()=>{});void api.health().then(value=>{if(alive)setHealth(value);}).catch((reason)=>{if(alive)setError(messageOf(reason));});return()=>{alive=false;};},[]);
+  useEffect(()=>{setWorkflow(null);setSettings(null);setSavedSettings(null);setArtifacts(null);setProviderStatus(null);setError(null);if(selected)void loadProjectSystem(selected.id);},[selected?.id]);
+  useEffect(()=>{if(active!=="settings"||!selected)return;let alive=true;void api.backups().then(response=>{if(alive)setBackups(response.backups);}).catch(reason=>{if(alive)setError(messageOf(reason));});return()=>{alive=false;};},[active,selected?.id]);
   useEffect(()=>{if(!workspaceLinkReady)return;const href=workspaceLinkUrl(window.location.href,selected?.id??null,active);window.history.replaceState(window.history.state,"",href);},[workspaceLinkReady,selected?.id,active]);
 
   const saveProject=async(input:CreateProjectInput,project?:Project)=>{setBusy(true);setError(null);try{const saved=project?await api.updateProject(project.id,input):await api.createProject(input);if(selected?.id===saved.id)setSelected(saved);await loadProjects();}catch(reason){setError(messageOf(reason));throw reason;}finally{setBusy(false);}};
@@ -38,7 +52,18 @@ export function App() {
   const archive=async(project:Project)=>{await api.archiveProject(project.id);if(selected?.id===project.id)setSelected(null);await loadProjects();};
   const restore=async(project:Project)=>{await api.restoreProject(project.id);await loadProjects();};
   const remove=async(project:Project)=>{await api.deleteProject(project.id);if(selected?.id===project.id)setSelected(null);await loadProjects();};
-  const saveSettings=async(event:FormEvent)=>{event.preventDefault();if(!selected||!settings||!hasUnsavedProjectSettings(settings,savedSettings))return;const current=systemRequests.capture();setBusy(true);try{const {projectId:_,updatedAt:__,...input}=settings;const saved=await api.saveSettings(selected.id,input);if(current()){setSettings(saved);setSavedSettings(saved);}}catch(reason){if(current())setError(messageOf(reason));}finally{if(current())setBusy(false);}};
+  const saveSettings=async(event:FormEvent)=>{
+    event.preventDefault();
+    if(!selected||!settings||!hasUnsavedProjectSettings(settings,savedSettings)||pendingSettingsSaves.current.has(selected.id))return;
+    const projectId=selected.id,current=systemRequests.capture();
+    pendingSettingsSaves.current.add(projectId);setSavingSettingsProjectIds([...pendingSettingsSaves.current]);
+    try{
+      const {projectId:_,updatedAt:__,...input}=settings;
+      const saved=await api.saveSettings(projectId,input);
+      if(current()){setSettings(latest=>hasUnsavedProjectSettings(latest,settings)?latest:saved);setSavedSettings(saved);}
+    }catch(reason){if(current())setError(messageOf(reason));}
+    finally{pendingSettingsSaves.current.delete(projectId);setSavingSettingsProjectIds([...pendingSettingsSaves.current]);}
+  };
   const createBackup=async()=>{try{await api.createBackup();setBackups((await api.backups()).backups);}catch(reason){setError(messageOf(reason));}};
   const restoreBackup=async(filename:string)=>{if(!window.confirm(`Se creará un backup de seguridad. ¿Restaurar ${filename}?`))return;try{await api.restoreBackup(filename);window.location.reload();}catch(reason){setError(messageOf(reason));}};
   const refresh=()=>{if(selected&&systemRequests.capture()())void Promise.all([loadProjectSystem(selected.id),loadProjects()]).catch((reason)=>setError(messageOf(reason)));};
@@ -48,7 +73,7 @@ export function App() {
     {error&&<div className="error-banner global" role="alert"><div><strong>La operación no se completó</strong><span>{error}</span></div><button aria-label="Cerrar error" onClick={()=>setError(null)}>×</button></div>}
     {!selected?<ProjectsView projects={projects} loading={projectsLoading} loadError={projectsLoadError} onRetry={retryProjects} onOpen={(project)=>{setSelected(project);setActive("overview");}} onSave={saveProject} onArchive={archive} onRestore={restore} onDelete={remove} onCreateDemo={createDemo} busy={busy}/>
     :active==="overview"?<OverviewView project={selected} workflow={workflow?.steps.some(step=>step.projectId!==selected.id)?null:workflow} artifacts={artifacts} loadError={error} onRetry={()=>void loadProjectSystem(selected.id)} onEdit={()=>setActive("settings")} onNavigate={(key)=>{if(isNavigationKey(key))setActive(key);}}/>
-    :active==="settings"?<Suspense fallback={<ScreenState title="Cargando configuración" message="Preparando los ajustes del proyecto…"/>}><SettingsWorkspace settings={settings} savedSettings={savedSettings} providerStatus={providerStatus} setSettings={setSettings} onSave={saveSettings} saving={busy} backups={backups} onBackup={()=>void createBackup()} onRestore={(filename)=>void restoreBackup(filename)}/></Suspense>
+    :active==="settings"?<Suspense fallback={<ScreenState title="Cargando configuración" message="Preparando los ajustes del proyecto…"/>}><SettingsWorkspace settings={settings} savedSettings={savedSettings} providerStatus={providerStatus} setSettings={setSettings} onSave={saveSettings} saving={savingSettingsProjectIds.includes(selected.id)} backups={backups} onBackup={()=>void createBackup()} onRestore={(filename)=>void restoreBackup(filename)}/></Suspense>
     :active==="history"?<Suspense fallback={<ScreenState title="Cargando historial" message="Preparando las generaciones guardadas…"/>}><HistoryWorkspace projectId={selected.id}/></Suspense>
     :active==="knowledge"?<Suspense fallback={<ScreenState title="Cargando biblioteca" message="Preparando los documentos de conocimiento…"/>}><KnowledgeWorkspace projectId={selected.id}/></Suspense>
     :isModuleKey(active)?<Suspense fallback={<ScreenState title="Cargando módulo" message="Preparando la vista y sus datos…"/>}><ModuleWorkspace key={`${selected.id}:${active}`} projectId={selected.id} moduleKey={active} evidenceFocus={evidenceFocus} onOpenEvidence={(commentId)=>{setEvidenceFocus(commentId);setActive("sources");}} onChanged={refresh}/></Suspense>

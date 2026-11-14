@@ -20,16 +20,58 @@ export class BackupService {
 
   async create(prefix = "backup"): Promise<BackupInfo> {
     mkdirSync(this.directory, { recursive: true });
-    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-    let filename = `${prefix}-${stamp}.sqlite`, sequence = 1;
-    while (existsSync(join(this.directory, filename))) filename = `${prefix}-${stamp}-${sequence++}.sqlite`;
+    const { filename, stage } = this.reserveFilename(prefix);
     const path = join(this.directory, filename);
-    await backup(this.database.connection, path);
-    const dataRoot = dirname(this.database.path);
-    this.copyDirectoryIfPresent(join(dataRoot, "generated"), `${path}.files`);
-    this.copyDirectoryIfPresent(join(dataRoot, "knowledge"), `${path}.knowledge`);
-    this.copyDirectoryIfPresent(join(dataRoot, "assets"), `${path}.assets`);
-    return this.inspect(filename);
+    const stagedDatabase = join(stage, "snapshot.sqlite");
+    const publishedSidecars: string[] = [];
+    try {
+      await backup(this.database.connection, stagedDatabase);
+      const dataRoot = dirname(this.database.path);
+      for (const [name, suffix] of [["generated", ".files"], ["knowledge", ".knowledge"], ["assets", ".assets"]] as const) {
+        this.copyDirectoryIfPresent(join(dataRoot, name), `${stagedDatabase}${suffix}`);
+      }
+      this.validateGenerated(stagedDatabase, `${stagedDatabase}.files`);
+      this.validateKnowledge(stagedDatabase, `${stagedDatabase}.knowledge`);
+      this.validateAssets(stagedDatabase, `${stagedDatabase}.assets`);
+      const result = this.inspect(filename, stagedDatabase);
+      for (const suffix of [".files", ".knowledge", ".assets"]) {
+        if (!existsSync(`${stagedDatabase}${suffix}`)) continue;
+        const target = `${path}${suffix}`;
+        renameSync(`${stagedDatabase}${suffix}`, target);
+        publishedSidecars.push(target);
+      }
+      // The final SQLite name is the publication marker; list/restore cannot see a partial set.
+      renameSync(stagedDatabase, path);
+      return result;
+    } catch (error) {
+      for (const sidecar of publishedSidecars) {
+        try { rmSync(sidecar, { recursive: true, force: true }); } catch { /* An orphan is not listed and its name is never reused. */ }
+      }
+      throw error;
+    } finally {
+      try { rmSync(stage, { recursive: true, force: true }); } catch { /* Keep an incomplete reservation hidden if cleanup is unavailable. */ }
+    }
+  }
+
+  private reserveFilename(prefix: string): { filename: string; stage: string } {
+    if (!/^[-a-z]+$/.test(prefix)) throw new Error("Prefijo de backup inválido.");
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    for (let sequence = 0; ; sequence++) {
+      const filename = `${prefix}-${stamp}${sequence ? `-${sequence}` : ""}.sqlite`;
+      const path = join(this.directory, filename);
+      const occupied = () => ["", ".files", ".knowledge", ".assets"].some((suffix) => existsSync(`${path}${suffix}`));
+      if (occupied()) continue;
+      const stage = `${path}.pending`;
+      try {
+        // mkdir is exclusive even when another process is choosing a name at the same time.
+        mkdirSync(stage);
+        // A creator may have published and released its reservation since the first check.
+        if (occupied()) { rmSync(stage, { recursive: true }); continue; }
+        return { filename, stage };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    }
   }
 
   list(): BackupInfo[] {
@@ -118,8 +160,8 @@ export class BackupService {
     }
   }
 
-  private inspect(filename: string): BackupInfo {
-    const path = join(this.directory, filename), probe = new DatabaseSync(path, { readOnly: true });
+  private inspect(filename: string, path = join(this.directory, filename)): BackupInfo {
+    const probe = new DatabaseSync(path, { readOnly: true });
     let schemaVersion = 0;
     try {
       const integrity = probe.prepare("PRAGMA integrity_check").get() as { integrity_check: string };

@@ -1,4 +1,4 @@
-import type { ArtifactVersion, Project, Workflow } from "@our-platform/shared";
+import type { ArtifactVersionSummary, Project, Workflow } from "@our-platform/shared";
 import { Activity, ArrowRight, Check, CircleDashed, Clock3, FileOutput, Layers3, Settings2, Sparkles } from "lucide-react";
 import { SectionHeader, StatusBadge } from "../../components/ProductUI";
 
@@ -10,7 +10,7 @@ const workflowGroups=[
   {label:"Entrega",description:"Output final trazable",keys:["final_product"]},
 ] as const;
 
-export function OverviewView({project,workflow,artifacts,onEdit,onNavigate,loadError,onRetry}:{project:Project;workflow:Workflow|null;artifacts:ArtifactVersion[];onEdit:()=>void;onNavigate:(step:string)=>void;loadError?:string|null;onRetry?:()=>void}) {
+export function OverviewView({project,workflow,artifacts,onEdit,onNavigate,loadError,onRetry}:{project:Project;workflow:Workflow|null;artifacts:ArtifactVersionSummary[]|null;onEdit:()=>void;onNavigate:(step:string)=>void;loadError?:string|null;onRetry?:()=>void}) {
   if(!workflow)return <section className="content-section overview-workspace"><h1>{project.name}</h1><div className="detail-card" role={loadError?"alert":"status"}><h2>{loadError?"No se pudo cargar el resumen":"Cargando el resumen…"}</h2><p>{loadError??"Consultando las etapas y versiones guardadas del proyecto."}</p>{loadError&&onRetry&&<button className="button secondary" onClick={onRetry}>Reintentar resumen</button>}</div></section>;
   const steps=[...workflow.steps].sort((a,b)=>a.position-b.position);
   const displayPositionByKey=new Map(steps.map((step,index)=>[step.stepKey,index+1] as const));
@@ -24,9 +24,9 @@ export function OverviewView({project,workflow,artifacts,onEdit,onNavigate,loadE
   const progress=total?Math.round(completed/total*100):0;
   const pendingStep=steps.find(step=>step.state!=="COMPLETED");
   const currentStep=pendingStep??steps.at(-1);
-  const sortedArtifacts=[...artifacts].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt));
+  const sortedArtifacts=[...(artifacts??[])].sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt));
   const recentArtifacts=sortedArtifacts.slice(0,5);
-  const lastActivity=new Date(Math.max(Date.parse(project.updatedAt),...steps.map(step=>Date.parse(step.updatedAt)),...artifacts.map(version=>Date.parse(version.createdAt))));
+  const lastActivity=new Date(Math.max(Date.parse(project.updatedAt),...steps.map(step=>Date.parse(step.updatedAt)),...sortedArtifacts.map(version=>Date.parse(version.createdAt))));
   return <section className="content-section overview-workspace">
     <header className="command-hero">
       <div className="command-hero-glow"/>
@@ -40,11 +40,11 @@ export function OverviewView({project,workflow,artifacts,onEdit,onNavigate,loadE
 
       <aside className="overview-side-stack">
         <section className="current-work-panel"><div className="panel-icon violet"><Sparkles size={17}/></div><span className="eyebrow">SIGUIENTE ETAPA</span><h2>{pendingStep?pendingStep.label:total?"Revisión de resultados":"No hay etapas disponibles"}</h2><p>{pendingStep?stateLabel[pendingStep.state]??pendingStep.state:total?`Las ${total} etapas tienen ejecución registrada. Revisa el producto final y la aprobación editorial de sus versiones.`:"No se recibió un workflow para este proyecto."}</p>{pendingStep?.staleReason&&<p>{pendingStep.staleReason}</p>}{currentStep&&<button className="text-action" onClick={()=>onNavigate(currentStep.stepKey)}>Abrir etapa<ArrowRight size={14}/></button>}</section>
-        <section className="activity-panel"><SectionHeader eyebrow="ACTIVIDAD" title="Actividad reciente" aside={<Activity size={16}/>}/>{recentArtifacts.length===0?<p className="muted-copy">Aún no hay actividad registrada.</p>:<div className="activity-stream">{recentArtifacts.map(version=><div key={version.id}><span className={`activity-dot ${version.freshness}`}/><div><strong>{humanize(version.artifactType)} · v{version.versionNumber}</strong><small>{humanize(version.status)} · {new Date(version.createdAt).toLocaleString("es")}</small></div></div>)}</div>}</section>
+        <section className="activity-panel"><SectionHeader eyebrow="ACTIVIDAD" title="Actividad reciente" aside={<Activity size={16}/>}/>{artifacts===null?<p className="muted-copy" role="status">Consultando actividad…</p>:recentArtifacts.length===0?<p className="muted-copy">Aún no hay actividad registrada.</p>:<div className="activity-stream">{recentArtifacts.map(version=><div key={version.id}><span className={`activity-dot ${version.freshness}`}/><div><strong>{humanize(version.artifactType)} · v{version.versionNumber}</strong><small>{humanize(version.status)} · {new Date(version.createdAt).toLocaleString("es")}</small></div></div>)}</div>}</section>
       </aside>
     </div>
 
-    <section className="outputs-section"><SectionHeader eyebrow="VERSIONES GUARDADAS" title="Documentos del proyecto" description="Fechas originales, estado editorial y vigencia de cada documento." aside={<span className="output-count"><FileOutput size={14}/>{artifacts.length} versiones</span>}/>{artifacts.length===0?<div className="empty-state">Aún no hay artefactos. Empieza en Investigación o importa la fuente Demo.</div>:<div className="artifact-output-grid">{sortedArtifacts.map((version)=><article className={`artifact-output ${version.freshness}`} key={version.id}><div className="artifact-output-icon"><FileOutput size={16}/></div><div><span className="eyebrow">{humanize(version.artifactType)}</span><h3>Versión {version.versionNumber}</h3><StatusBadge tone={version.freshness==="fresh"?"success":"warning"}>{humanize(version.status)} · {humanize(version.freshness)}</StatusBadge>{version.staleReason&&<p>{version.staleReason}</p>}</div><time>{new Date(version.createdAt).toLocaleString("es")}</time></article>)}</div>}</section>
+    <section className="outputs-section"><SectionHeader eyebrow="VERSIONES GUARDADAS" title="Documentos del proyecto" description="Fechas originales, estado editorial y vigencia de cada documento." aside={artifacts===null?undefined:<span className="output-count"><FileOutput size={14}/>{artifacts.length} versiones</span>}/>{artifacts===null?<div className="empty-state" role={loadError?"alert":"status"}>{loadError?<><p>No se pudieron cargar los documentos: {loadError}</p>{onRetry&&<button className="button secondary" onClick={onRetry}>Reintentar documentos</button>}</>:"Cargando documentos…"}</div>:artifacts.length===0?<div className="empty-state">Aún no hay artefactos. Empieza en Investigación o importa la fuente Demo.</div>:<div className="artifact-output-grid">{sortedArtifacts.map((version)=><article className={`artifact-output ${version.freshness}`} key={version.id}><div className="artifact-output-icon"><FileOutput size={16}/></div><div><span className="eyebrow">{humanize(version.artifactType)}</span><h3>Versión {version.versionNumber}</h3><StatusBadge tone={version.freshness==="fresh"?"success":"warning"}>{humanize(version.status)} · {humanize(version.freshness)}</StatusBadge>{version.staleReason&&<p>{version.staleReason}</p>}</div><time>{new Date(version.createdAt).toLocaleString("es")}</time></article>)}</div>}</section>
   </section>;
 }
 

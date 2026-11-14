@@ -1,5 +1,6 @@
 import type {
   ArtifactVersion,
+  ArtifactVersionSummary,
   BackupInfo,
   CreateProjectInput,
   CreateSourceInput,
@@ -156,7 +157,7 @@ const json = (method: string, body?: unknown): RequestInit =>
       };
 
 export const api = {
-  technicalReviews:()=>request<{sections:Record<string,{reviewedAt:string}>}>("/api/technical-reviews"),
+  technicalReviews:()=>request<{sections:Record<string,{codeUpdatedAt:string}>}>("/api/technical-reviews"),
   health: () => request<Health>("/api/health"),
   projects: () => request<ProjectList>("/api/projects?includeArchived=true"),
   createProject: (input: CreateProjectInput) =>
@@ -187,6 +188,8 @@ export const api = {
     ),
   artifacts: (id: string) =>
     request<{ versions: ArtifactVersion[] }>(`/api/projects/${id}/artifacts`),
+  artifactSummaries: (id: string) =>
+    request<{ versions: ArtifactVersionSummary[] }>(`/api/projects/${id}/artifacts/summary`),
   backups: () => request<{ backups: BackupInfo[] }>("/api/backups"),
   createBackup: () => request<BackupInfo>("/api/backups", json("POST")),
   restoreBackup: (filename: string) =>

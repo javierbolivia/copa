@@ -14,6 +14,20 @@ describe("Overview truthful project state",()=>{
     expect(html).not.toContain("Las 14 etapas tienen ejecución registrada");
     expect(html).not.toContain("Aún no hay actividad registrada");
   });
+  it("shows the workflow while artifact metadata is still loading without claiming empty history",()=>{
+    const html=render({artifacts:null});
+    expect(html).toContain("Recorrido del proyecto");
+    expect(html).toContain("Cargando documentos…");
+    expect(html).toContain("Consultando actividad…");
+    expect(html).not.toContain("Aún no hay actividad registrada");
+    expect(html).not.toContain("Aún no hay artefactos");
+  });
+  it("offers a retry when metadata fails after workflow has loaded",()=>{
+    const html=render({artifacts:null,loadError:"Error de metadatos",onRetry:()=>{}});
+    expect(html).toContain("Recorrido del proyecto");
+    expect(html).toContain("Reintentar documentos");
+    expect(html).not.toContain("Aún no hay artefactos");
+  });
   it("uses current workflow progress instead of an older project-list snapshot",()=>{
     const html=render();
     expect(html).toContain("0/1");

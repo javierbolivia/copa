@@ -59,7 +59,7 @@ export function AppShell({ project, active, workflow, health, onNavigate, onProj
           <span className="topbar-context-icon" aria-hidden="true"><Icon size={16} strokeWidth={1.8}/></span>
           <div className="topbar-copy"><span className="topbar-breadcrumb"><span className="topbar-project">{project ? project.name : "Workspace"}</span><span className="topbar-sep">/</span><span className="topbar-module">{project ? info.label : "Mis Proyectos"}</span></span><span className="topbar-description">{project ? info.description : "Organiza y abre tus espacios de trabajo"}</span></div>
         </div>
-        <div className="topbar-actions"><span className={`topbar-system ${health?.status==="ok"?"online":""}`}><i/>Local</span>{project && <button className="button secondary topbar-back" onClick={onProjects}>Todos los proyectos</button>}</div>
+        <div className="topbar-actions"><span className={`topbar-system ${health?.status==="ok"?"online":""}`}><i/>Local</span>{project && <button type="button" className="button primary topbar-studio-pro" onClick={()=>{window.sessionStorage.setItem("hallazia:open-studio-pro","1");window.dispatchEvent(new CustomEvent("hallazia:open-studio-pro"));onNavigate("landing");}}>✨ Creative Studio PRO</button>}{project && <button className="button secondary topbar-back" onClick={onProjects}>Todos los proyectos</button>}</div>
       </header>
       {children}
     </main>

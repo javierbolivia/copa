@@ -1,5 +1,6 @@
-import {lazy,Suspense,useEffect,useRef,useState} from "react";
+import {lazy,Suspense,useEffect,useMemo,useRef,useState} from "react";
 import {
+  auditLandingQuality,
   landingCheckoutUrl,
   renderLandingHtml,
   renderLandingReactCode,
@@ -13,6 +14,7 @@ import {Field} from "./EditorScaffold";
 import {api,type ProductAsset} from "../../api/client";
 import {useRequestGuard} from "../../api/useRequestGuard";
 import {applyLandingSectionImage,createLandingSectionId,fromLanding,withStableLandingSectionIds} from "./landing-adapter";
+import {LandingStudioPro} from "./LandingStudioPro";
 import type {LandingEditorValue,LandingPreviewMode,LandingVersion} from "./types";
 import "./refinement.css";
 
@@ -70,6 +72,7 @@ export function LandingBuilder({
   onOpenTraceability
 }:LandingBuilderProps){
   const [visual,setVisual]=useState(false);
+  const [studioPro,setStudioPro]=useState(false);
   const [draft,setDraft]=useState(()=>withStableLandingSectionIds(structuredClone(value)));
   const [editing,setEditing]=useState(false);
   const [error,setError]=useState<string|null>(null);
@@ -91,9 +94,28 @@ export function LandingBuilder({
   useEffect(()=>{
     imageRequests.invalidate();
     setDraft(withStableLandingSectionIds(structuredClone(value)));
-    setEditing(false);setVisual(false);setIndex(0);setCompareId("");setError(null);setImagePrompt("");
+    const shouldAutoOpen =
+      typeof window !== "undefined" &&
+      (window.sessionStorage.getItem("hallazia:open-studio-pro") === "1" ||
+        new URLSearchParams(window.location.search).get("studio") === "pro");
+    if (shouldAutoOpen && typeof window !== "undefined") {
+      window.sessionStorage.removeItem("hallazia:open-studio-pro");
+    }
+    setEditing(false);setVisual(false);setStudioPro(shouldAutoOpen);setIndex(0);setCompareId("");setError(null);setImagePrompt("");
     setUploading(false);setGeneratingImage(false);
   },[projectId,selectedVersionId]);
+
+  useEffect(()=>{
+    const handleOpenStudio = () => {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("hallazia:open-studio-pro");
+      }
+      setVisual(false);
+      setStudioPro(true);
+    };
+    window.addEventListener("hallazia:open-studio-pro", handleOpenStudio);
+    return () => window.removeEventListener("hallazia:open-studio-pro", handleOpenStudio);
+  },[]);
   useEffect(()=>setAssets([]),[projectId]);
 
   useEffect(()=>{let current=true;void api.productAssets(projectId).then(result=>{if(current)setAssets(result.assets.filter(asset=>asset.kind==="image"));}).catch(()=>{});return()=>{current=false;};},[projectId]);
@@ -101,6 +123,7 @@ export function LandingBuilder({
 
   useEffect(()=>{if(!editing)setDraft(withStableLandingSectionIds(structuredClone(value)));},[value,editing]);
   const shown=editing?draft:value;
+  const liveQuality=useMemo(()=>auditLandingQuality(fromLanding({},shown)),[shown]);
   const section=draft.sections[index];
   const comparison=versions.find(item=>item.id===compareId);
 
@@ -162,19 +185,21 @@ export function LandingBuilder({
     finally{if(current())setGeneratingImage(false);}
   };
 
-  const handleExportReact=()=>{
+  const exportReactValue=(target:LandingEditorValue)=>{
     if(onExportReact){
-      void onExportReact(shown);
-    }else{
-      const code=renderLandingReactCode(fromLanding({},shown));
-      const url=URL.createObjectURL(new Blob([code],{type:"text/typescript;charset=utf-8"}));
-      const anchor=document.createElement("a");
-      anchor.href=url;
-      anchor.download="landing.tsx";
-      anchor.click();
-      URL.revokeObjectURL(url);
+      void onExportReact(target);
+      return;
     }
+    const code=renderLandingReactCode(fromLanding({},target));
+    const url=URL.createObjectURL(new Blob([code],{type:"text/typescript;charset=utf-8"}));
+    const anchor=document.createElement("a");
+    anchor.href=url;
+    anchor.download="landing.tsx";
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
+
+  const handleExportReact=()=>exportReactValue(shown);
 
   const handleRunRegenerateFull=async()=>{
     if(!onRegenerate)return;
@@ -198,6 +223,9 @@ export function LandingBuilder({
         <p>Hasta 15 tipos de bloques, imágenes originales, temas y edición visual. Revisa el contenido antes de aprobar.</p>
       </div>
       <div className="rf-actions">
+        <button className="rf-button rf-button--primary" disabled={saving} onClick={()=>setStudioPro(true)} title="Abrir Creative Studio PRO conectado a los datos de tu proyecto">
+          ✨ Abrir Studio PRO
+        </button>
         {onRegenerate&&<button className="rf-button" disabled={readOnly||regenerating||saving} onClick={()=>setShowRegenPrompt(true)} title="Regenerar con IA usando una instrucción corta">
           {regenerating?"Generando con IA…":"⚡ Regenerar con IA"}
         </button>}
@@ -213,6 +241,16 @@ export function LandingBuilder({
         </button>
       </div>
     </header>
+
+    <div className="hl-studio-pro-banner">
+      <div>
+        <span className="rf-eyebrow">CREATIVE STUDIO PRO · CALIDAD {liveQuality.score}/100 (GRADO {liveQuality.grade})</span>
+        <p>Auditoría en vivo: {liveQuality.metrics.sections} bloques · {liveQuality.metrics.layouts} diseños · {liveQuality.metrics.images} fotos · {liveQuality.metrics.ctas} CTAs. Abre Studio PRO para diseñar con layouts avanzados o usa DeepSeek/Gemini con auto-refinamiento (la vista inferior muestra la versión guardada hasta que apliques o guardes).</p>
+      </div>
+      <button type="button" className="rf-button rf-button--primary" disabled={saving} onClick={()=>setStudioPro(true)}>
+        ✨ Abrir Studio PRO
+      </button>
+    </div>
 
     {showRegenPrompt&&<div className="refinement-dialog-backdrop" onMouseDown={()=>setShowRegenPrompt(false)}>
       <section className="refinement-dialog" role="dialog" aria-modal="true" aria-label="Regenerar landing" onMouseDown={e=>e.stopPropagation()}>
@@ -245,6 +283,7 @@ export function LandingBuilder({
     </div>}
 
     {visual&&<Suspense fallback={<p role="status">Cargando constructor visual…</p>}><LandingVisualEditor value={value} onSave={onSave} saving={saving} onClose={()=>setVisual(false)}/></Suspense>}
+    {studioPro&&<LandingStudioPro projectId={projectId} selectedVersionId={selectedVersionId} value={shown} readOnly={readOnly} saving={saving} assets={assets} imageConfigured={imageConfigured} onSave={onSave} onApplyToEditor={nextValue=>{setDraft(withStableLandingSectionIds(structuredClone(nextValue)));setEditing(true);setError(null);}} onExportHtml={onExportHtml} onExportReact={exportReactValue} onRegenerate={onRegenerate} onClose={()=>setStudioPro(false)}/>}
     {error&&<p role="alert" className="refinement-feedback">{error}</p>}
 
     <div className="rf-landing-meta">

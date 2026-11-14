@@ -1,0 +1,33 @@
+{
+  "id": "framer-dark-elite",
+  "name": "Framer Dark Elite",
+  "category": "High-Converting SaaS / InfoProduct",
+  "description": "Estética oscura moderna con glassmorphism, bordes sutiles iluminados y acentos en dorado ámbar. Inspirada en las mejores landings de 7 cifras.",
+  "theme": {
+    "bgPrimary": "#0a0a0c",
+    "bgSecondary": "#121217",
+    "bgCard": "rgba(22, 22, 30, 0.75)",
+    "borderColor": "rgba(255, 255, 255, 0.08)",
+    "borderHover": "rgba(245, 158, 11, 0.4)",
+    "textPrimary": "#f8fafc",
+    "textSecondary": "#94a3b8",
+    "accentPrimary": "#f59e0b",
+    "accentGradient": "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+    "buttonText": "#0a0a0c",
+    "fontHeading": "'Plus Jakarta Sans', system-ui, sans-serif",
+    "fontBody": "'Inter', system-ui, sans-serif"
+  },
+  "blocks": [
+    { "id": "announcement-bar", "visible": true, "type": "announcement" },
+    { "id": "hero-section", "visible": true, "type": "hero" },
+    { "id": "problem-reality", "visible": true, "type": "problem" },
+    { "id": "mechanism-solution", "visible": true, "type": "mechanism" },
+    { "id": "curriculum-chapters", "visible": true, "type": "curriculum" },
+    { "id": "social-proof-wall", "visible": true, "type": "social_proof" },
+    { "id": "offer-stack-box", "visible": true, "type": "offer" },
+    { "id": "bonuses-section", "visible": true, "type": "bonuses" },
+    { "id": "guarantee-seal", "visible": true, "type": "guarantee" },
+    { "id": "faq-accordion", "visible": true, "type": "faq" },
+    { "id": "urgent-cta-footer", "visible": true, "type": "cta_footer" }
+  ]
+}

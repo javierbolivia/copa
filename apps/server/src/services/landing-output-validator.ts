@@ -11,12 +11,14 @@ export function validateLandingOutput(input:unknown,evidence:readonly {id:string
     for(const [index,raw] of source.sections.entries()){
       const section=record(raw),prefix=`Sección ${index+1}`;
       if(!nonempty(section.type))errors.push(`${prefix}: falta el tipo.`);
-      for(const field of ["eyebrow","headline","subheadline","body","cta"])if(section[field]!==undefined&&(typeof section[field]!=="string"||String(section[field]).length>12000))errors.push(`${prefix}: ${field} debe ser texto de hasta 12000 caracteres.`);
+      for(const field of ["eyebrow","headline","subheadline","body","cta","layout","badge","price","oldPrice","priceNote","beforeLabel","afterLabel"])if(section[field]!==undefined&&(typeof section[field]!=="string"||String(section[field]).length>12000))errors.push(`${prefix}: ${field} debe ser texto de hasta 12000 caracteres.`);
+      if(section.bullets!==undefined&&(!Array.isArray(section.bullets)||section.bullets.length>20||section.bullets.some(b=>typeof b!=="string"||b.trim().length===0||b.length>400)))errors.push(`${prefix}: las viñetas deben ser una lista de hasta 20 textos.`);
+      if(section.stats!==undefined&&(!Array.isArray(section.stats)||section.stats.length>12||section.stats.some(s=>{const stat=record(s);return !nonempty(stat.value)||!nonempty(stat.label);})))errors.push(`${prefix}: las cifras deben incluir valor y etiqueta.`);
       if(section.imageUrl!==undefined&&section.imageUrl!==""&&!landingImageUrl(section.imageUrl))errors.push(`${prefix}: la imagen necesita una URL HTTPS o ruta local válida.`);
       if(section.imageUrl&&(!nonempty(section.imageAlt)||String(section.imageAlt).length>250))errors.push(`${prefix}: describe la imagen con texto alternativo breve.`);
       const items=section.items;
       if(items!==undefined&&(!Array.isArray(items)||items.length>60))errors.push(`${prefix}: lista de elementos no válida.`);
-      if(Array.isArray(items))for(const item of items){const object=record(item);if(section.type==="faq"||object.q!==undefined){if(!nonempty(object.q)||!nonempty(object.a))errors.push(`${prefix}: completa cada pregunta y respuesta.`);}else if(!(nonempty(item)||nonempty(object.name)||nonempty(object.title)||nonempty(object.description)||nonempty(object.text)))errors.push(`${prefix}: hay un elemento vacío.`);}
+      if(Array.isArray(items))for(const item of items){const object=record(item);if(section.type==="faq"||object.q!==undefined){if(!nonempty(object.q)||!nonempty(object.a))errors.push(`${prefix}: completa cada pregunta y respuesta.`);}else if(!(nonempty(item)||nonempty(object.name)||nonempty(object.title)||nonempty(object.description)||nonempty(object.text)||nonempty(object.before)||nonempty(object.after)))errors.push(`${prefix}: hay un elemento vacío.`);}
       if(![section.headline,section.subheadline,section.body,section.cta].some(nonempty)&&!(Array.isArray(items)&&items.length))errors.push(`${prefix}: añade contenido o retira la sección vacía.`);
       references(section.evidenceIds);
     }

@@ -1,0 +1,33 @@
+{
+  "id": "framer-editorial-warm",
+  "name": "Framer Editorial Warm",
+  "category": "Trusted Editorial / Authority",
+  "description": "Estética cálida y elegante estilo editorial, con fondos crema suaves, tipografía serif de prestigio y detalles en terracota y verde salvia. Transmite rigor científico y empatía.",
+  "theme": {
+    "bgPrimary": "#faf8f5",
+    "bgSecondary": "#f3eee7",
+    "bgCard": "#ffffff",
+    "borderColor": "rgba(44, 40, 36, 0.1)",
+    "borderHover": "rgba(180, 83, 9, 0.4)",
+    "textPrimary": "#1c1917",
+    "textSecondary": "#57534e",
+    "accentPrimary": "#b45309",
+    "accentGradient": "linear-gradient(135deg, #b45309 0%, #92400e 100%)",
+    "buttonText": "#ffffff",
+    "fontHeading": "'Playfair Display', Georgia, serif",
+    "fontBody": "'Inter', system-ui, sans-serif"
+  },
+  "blocks": [
+    { "id": "announcement-bar", "visible": true, "type": "announcement" },
+    { "id": "hero-section", "visible": true, "type": "hero" },
+    { "id": "problem-reality", "visible": true, "type": "problem" },
+    { "id": "mechanism-solution", "visible": true, "type": "mechanism" },
+    { "id": "curriculum-chapters", "visible": true, "type": "curriculum" },
+    { "id": "social-proof-wall", "visible": true, "type": "social_proof" },
+    { "id": "offer-stack-box", "visible": true, "type": "offer" },
+    { "id": "bonuses-section", "visible": true, "type": "bonuses" },
+    { "id": "guarantee-seal", "visible": true, "type": "guarantee" },
+    { "id": "faq-accordion", "visible": true, "type": "faq" },
+    { "id": "urgent-cta-footer", "visible": true, "type": "cta_footer" }
+  ]
+}

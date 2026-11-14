@@ -1,10 +1,10 @@
 import {TechnicalReviewService} from "./services/technical-review-service.js";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { createReadStream, existsSync } from "node:fs";
+import { extname, resolve } from "node:path";
 import { tmpdir } from "node:os";
-
+import { STUDIO_VISUAL_ASSETS } from "./services/studio-visual-assets.js";
 import { AppDatabase } from "./database/database.js";
 import { ProjectRepository } from "./repositories/project-repository.js";
 import { ProjectSettingsRepository } from "./repositories/project-settings-repository.js";
@@ -226,6 +226,7 @@ export async function createApp(
   registerKnowledgeRoutes(app, knowledge, knowledgeIngestion, openAI, settings, modules);
   registerProductStudioRoutes(app, projects, productStudio);
   registerProductExportRoutes(app, projects, productExports, landingImages);
+  registerStudioAssetRoutes(app);
   youtubeImports.resumePending();
 
   if (options.serveFrontend ?? true) {
@@ -242,4 +243,57 @@ export async function createApp(
   }
 
   return app;
+}
+
+
+
+const STUDIO_MIME_BY_EXT: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+function resolveStudioAssetsDir(): string {
+  const candidates = [
+    resolve(import.meta.dirname, "../../../creative-studio-pro/app/assets/images"),
+    resolve(process.cwd(), "creative-studio-pro/app/assets/images"),
+  ];
+  return candidates.find((dir) => existsSync(dir)) ?? candidates[0]!;
+}
+
+function registerStudioAssetRoutes(app: FastifyInstance): void {
+  const assetsDir = resolveStudioAssetsDir();
+
+  app.get("/api/studio-assets", async () => {
+    const assets = STUDIO_VISUAL_ASSETS.filter((item) =>
+      existsSync(resolve(assetsDir, item.filename)),
+    ).map((item) => ({
+      ...item,
+      url: `/api/studio-assets/${item.filename}`,
+    }));
+    return { assets };
+  });
+
+  app.get<{ Params: { filename: string } }>(
+    "/api/studio-assets/:filename",
+    async (request, reply) => {
+      const filename = request.params.filename;
+      if (
+        filename.includes("..") ||
+        !/^[a-zA-Z0-9._-]+\.(?:jpg|jpeg|png|webp|svg)$/i.test(filename)
+      ) {
+        return reply.code(400).send({ error: "invalid_filename", message: "Nombre de archivo no válido." });
+      }
+      const target = resolve(assetsDir, filename);
+      if (!target.startsWith(assetsDir) || !existsSync(target)) {
+        return reply.code(404).send({ error: "not_found", message: "Recurso visual no encontrado." });
+      }
+      const ext = extname(filename).toLowerCase();
+      reply.header("content-type", STUDIO_MIME_BY_EXT[ext] ?? "application/octet-stream");
+      reply.header("cache-control", "public, max-age=3600");
+      return reply.send(createReadStream(target));
+    },
+  );
 }

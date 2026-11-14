@@ -6,7 +6,19 @@ import {recordFinalProductReview, finalProductReviewStatus, type FinalProductRev
 import type {FinalProductReviewInput} from "@our-platform/shared";
 import {validateBeliefsOutput} from "./beliefs-output-validator.js";
 import {validateMechanismOutput} from "./mechanism-output-validator.js";
-import {AVATAR_FIELDS} from "@our-platform/shared";
+import {
+  auditLandingQuality,
+  AVATAR_FIELDS,
+  LANDING_SECTION_LAYOUTS,
+  LANDING_THEME_PRESETS,
+  landingCheckoutUrl,
+  landingImageUrl,
+  landingStats,
+  landingTextList,
+  resolveLandingLayout,
+  type LandingQualityReport,
+} from "@our-platform/shared";
+import { STUDIO_VISUAL_ASSETS, studioAssetUrl } from "./studio-visual-assets.js";
 import {validateAvatarOutput} from "./avatar-output-validator.js";
 import type { ArtifactVersion, LlmGenerateRequest, LlmGenerateResult, LlmPhysicalRequestUsage, LlmProvider, ModuleKey, ModuleResult, ProjectSettings } from "@our-platform/shared";
 import { v7 as uuidv7 } from "uuid";
@@ -1140,6 +1152,275 @@ export class ModuleService {
     } catch(error){if(db.isTransaction)db.exec("ROLLBACK");if(createdVersionId)this.exporter.cleanupVersion(projectId,createdVersionId);throw error;}
   }
 
+  async generateLandingStudioAi(
+    projectId: string,
+    input: {
+      provider?: string | undefined;
+      mode?: "full_page" | "section" | "polish_copy" | undefined;
+      prompt?: string | undefined;
+      sectionIndex?: number | undefined;
+      currentDraft?: unknown;
+      sourceVersionId?: string | undefined;
+    },
+  ): Promise<{
+    outputData: Record<string, unknown>;
+    provider: string;
+    model: string;
+    audit: { ok: boolean; errors: string[] };
+    quality: LandingQualityReport;
+    passes: number;
+  }> {
+    if (this.db.connection.prepare("SELECT 1 FROM validation_sessions WHERE project_id=? AND state IN ('READY','RUNNING') LIMIT 1").get(projectId)) {
+      throw new Error("VALIDATION_PROJECT_LOCKED_NEW_AUTHORIZATION_REQUIRED");
+    }
+    const project = this.db.connection.prepare("SELECT id,name,niche,description FROM projects WHERE id=?").get(projectId) as
+      | { id: string; name: string; niche: string; description: string | null }
+      | undefined;
+    if (!project) throw new Error("El proyecto no existe.");
+
+    const status = this.providerStatus(projectId);
+    const requestedProvider = input.provider?.trim() || status.defaultProvider;
+    if (
+      requestedProvider !== "mock" &&
+      requestedProvider !== "openai" &&
+      requestedProvider !== "gemini" &&
+      requestedProvider !== "deepseek" &&
+      requestedProvider !== "groq" &&
+      requestedProvider !== "openrouter"
+    ) {
+      throw new Error(`Proveedor LLM no soportado: ${requestedProvider}.`);
+    }
+    if (requestedProvider === "openai" && !this.options.openAI.configured) {
+      throw new Error("OpenAI no está configurado. Define OPENAI_API_KEY o usa otro proveedor.");
+    }
+    if (requestedProvider === "gemini" && !this.options.gemini.configured) {
+      throw new Error("Gemini no está configurado. Define GEMINI_API_KEY o usa otro proveedor.");
+    }
+    if (requestedProvider === "deepseek" && !this.options.deepSeek?.configured) {
+      throw new Error("DeepSeek no está configurado. Define DEEPSEEK_API_KEY o usa otro proveedor.");
+    }
+    if (requestedProvider === "groq" && !this.options.groq?.configured) {
+      throw new Error("Groq no está configurado. Define GROQ_API_KEY o usa otro proveedor.");
+    }
+    if (requestedProvider === "openrouter" && !this.options.openRouter?.configured) {
+      throw new Error("OpenRouter no está configurado. Define OPENROUTER_API_KEY o usa otro proveedor.");
+    }
+
+    const mode = input.mode ?? "full_page";
+    const userPrompt = input.prompt?.trim() ?? "";
+    const sourceVersion =
+      (input.sourceVersionId ? this.artifacts.getVersion(input.sourceVersionId) : undefined) ??
+      this.activeVersion(projectId, "landing");
+    const allowedEvidence =
+      sourceVersion && sourceVersion.projectId === projectId && sourceVersion.artifactType === "landing"
+        ? this.avatarEvidence(sourceVersion)
+        : (this.db.connection
+            .prepare(
+              "SELECT e.id, e.quote_text AS quoteText FROM evidence_snippets e JOIN comments c ON c.id=e.comment_id AND c.project_id=e.project_id JOIN sources s ON s.id=e.source_id AND s.project_id=e.project_id WHERE e.project_id=? AND s.include_in_analysis=1 AND c.analysis_eligible=1 AND s.status IN ('ready','completed') ORDER BY c.quality_score DESC,c.likes DESC,e.created_at LIMIT 20",
+            )
+            .all(projectId) as unknown as Array<{ id: string; quoteText: string }>);
+
+    const parentOutputs: Partial<Record<ModuleKey, unknown>> = {};
+    const allVersions = this.artifacts.list(projectId);
+    for (const key of ["problems", "opportunities", "product", "avatar", "mechanism", "beliefs", "offer"] as const) {
+      const approved = this.get(projectId, key);
+      if (approved) {
+        parentOutputs[key] = approved.outputData;
+      } else {
+        const latest = allVersions
+          .filter((v) => v.artifactType === key)
+          .sort((a, b) => b.versionNumber - a.versionNumber)[0];
+        if (latest) parentOutputs[key] = latest.outputData;
+      }
+    }
+
+    const projectSettings = this.settings.get(projectId);
+    const modeResolved = mode;
+    const studioVisualAssetsPayload = STUDIO_VISUAL_ASSETS.map((a) => ({
+      id: a.id,
+      url: studioAssetUrl(a.filename),
+      title: a.title,
+      category: a.category,
+    }));
+    const sectionIndexResolved =
+      typeof input.sectionIndex === "number" && Number.isInteger(input.sectionIndex) ? input.sectionIndex : 0;
+
+    let model = "studio-contextual-v1";
+    let rawOutput: Record<string, unknown>;
+    let normalized: Record<string, unknown>;
+    let quality: LandingQualityReport;
+    let passes = 1;
+
+    if (requestedProvider === "mock") {
+      const base = createContextOutput("landing", project.niche, allowedEvidence, parentOutputs);
+      rawOutput = contextualize(base, "landing", project.niche, allowedEvidence);
+      rawOutput = applyMockPromptHints(rawOutput, userPrompt);
+      normalized = sanitizeStudioLandingOutput({
+        rawOutput,
+        currentDraft: input.currentDraft,
+        allowedEvidence,
+        mode: modeResolved,
+        sectionIndex: input.sectionIndex,
+        fallbackTitle: `${project.name}`,
+        parentOutputs,
+      });
+      quality = auditLandingQuality(normalized);
+    } else {
+      model =
+        requestedProvider === "gemini"
+          ? GEMINI_ANALYSIS_MODEL
+          : requestedProvider === "deepseek"
+            ? this.options.deepSeek!.effectiveModel
+            : requestedProvider === "groq"
+              ? this.options.groq?.effectiveModel || GROQ_DEFAULT_MODEL
+              : requestedProvider === "openrouter"
+                ? this.options.openRouter?.effectiveModel || OPENROUTER_DEFAULT_MODEL
+                : resolveModel("powerful", projectSettings, this.options);
+
+      const providerClient: LlmProvider =
+        requestedProvider === "gemini"
+          ? this.options.gemini
+          : requestedProvider === "deepseek"
+            ? this.options.deepSeek!
+            : requestedProvider === "groq"
+              ? this.options.groq!
+              : requestedProvider === "openrouter"
+                ? this.options.openRouter!
+                : this.options.openAI;
+
+      const basePrompt = getModulePrompt("landing");
+      const evidenceProjection = projectEvidenceForProvider(allowedEvidence);
+      const knowledgePolicy = getAgentKnowledgePolicy("landing");
+      const knowledgeRows =
+        projectSettings?.knowledgeEnabled === false
+          ? []
+          : retrieveKnowledge(this.knowledge, projectId, `${project.niche} landing ${userPrompt}`, knowledgePolicy);
+      const knowledgeContext = buildKnowledgePromptContext(knowledgeRows, knowledgePolicy.maxContextTokens * 4);
+
+      const compactDraft = sanitizeDraftForPrompt(input.currentDraft);
+      const upstreamContext = providerParentOutputs(parentOutputs);
+      const maxTokens = requestedProvider === "deepseek" ? 16_000 : 8_192;
+
+      const rawPayload: Record<string, unknown> = {
+        mode: modeResolved,
+        project: { name: project.name, niche: project.niche, description: project.description },
+        prompt: userPrompt || "Genera una landing profesional de alta conversión, rica visualmente y basada en toda la investigación del proyecto.",
+        upstreamContext,
+        evidence: evidenceProjection.evidence,
+        studioVisualAssets: studioVisualAssetsPayload,
+        knowledge: { advisoryOnly: true, chunks: knowledgeContext },
+        ...(compactDraft ? { currentLanding: compactDraft } : {}),
+        ...(modeResolved === "section" && compactDraft?.sections[sectionIndexResolved]
+          ? { targetSectionIndex: sectionIndexResolved, targetSection: compactDraft.sections[sectionIndexResolved] }
+          : {}),
+      };
+
+      const systemInstructions = buildStudioAiSystemInstructions(
+        basePrompt?.instructions ?? "",
+        modeResolved,
+        userPrompt,
+        sectionIndexResolved,
+      );
+
+      const projected =
+        requestedProvider === "gemini"
+          ? buildGeminiProjection(rawPayload, systemInstructions)
+          : { payload: rawPayload, systemInstructions };
+
+      const generated = await providerClient.generate<Record<string, unknown>>({
+        provider: requestedProvider,
+        model,
+        systemInstructions: projected.systemInstructions,
+        input: JSON.stringify(projected.payload),
+        structuredOutput: {
+          name: "landing_studio_pro_output",
+          jsonSchema: MODULE_OUTPUT_SCHEMAS.landing,
+        },
+        maxOutputTokens: maxTokens,
+      });
+
+      rawOutput = generated.output;
+      if (generated.reportedModel) model = generated.reportedModel;
+
+      normalized = sanitizeStudioLandingOutput({
+        rawOutput,
+        currentDraft: input.currentDraft,
+        allowedEvidence,
+        mode: modeResolved,
+        sectionIndex: input.sectionIndex,
+        fallbackTitle: `${project.name}`,
+        parentOutputs,
+      });
+      quality = auditLandingQuality(normalized);
+
+      if (modeResolved === "full_page" && (quality.score < 82 || quality.issues.some((i) => i.severity === "high"))) {
+        try {
+          const repairPrompt = `REFINAMIENTO AUTOMÁTICO DE CALIDAD (Puntuación actual: ${quality.score}/100, Grado ${quality.grade}). Corrige TODOS los puntos señalados en qualityAuditIssuesToFix mejorando copy, estructuras, layouts variados (split, cards, comparison, steps, checklist, testimonials, accordion, pricing, badge), bullets, stats, precio e imageUrl reales de studioVisualAssets. Instrucción original del usuario: ${userPrompt || "Máxima conversión PRO"}.`;
+          const repairPayload: Record<string, unknown> = {
+            mode: "polish_copy",
+            project: rawPayload.project,
+            prompt: repairPrompt,
+            upstreamContext,
+            evidence: evidenceProjection.evidence,
+            studioVisualAssets: studioVisualAssetsPayload,
+            currentLanding: normalized,
+            qualityAuditIssuesToFix: quality.issues.map((i) => i.message),
+          };
+          const repairInstructions = buildStudioAiSystemInstructions(
+            basePrompt?.instructions ?? "",
+            "polish_copy",
+            repairPrompt,
+            0,
+          );
+          const projectedRepair =
+            requestedProvider === "gemini"
+              ? buildGeminiProjection(repairPayload, repairInstructions)
+              : { payload: repairPayload, systemInstructions: repairInstructions };
+
+          const repairedGen = await providerClient.generate<Record<string, unknown>>({
+            provider: requestedProvider,
+            model,
+            systemInstructions: projectedRepair.systemInstructions,
+            input: JSON.stringify(projectedRepair.payload),
+            structuredOutput: {
+              name: "landing_studio_pro_output",
+              jsonSchema: MODULE_OUTPUT_SCHEMAS.landing,
+            },
+            maxOutputTokens: maxTokens,
+          });
+          passes = 2;
+          const repairedNormalized = sanitizeStudioLandingOutput({
+            rawOutput: repairedGen.output,
+            currentDraft: normalized,
+            allowedEvidence,
+            mode: "full_page",
+            sectionIndex: undefined,
+            fallbackTitle: `${project.name}`,
+            parentOutputs,
+          });
+          const repairedQuality = auditLandingQuality(repairedNormalized);
+          if (repairedQuality.score >= quality.score) {
+            normalized = repairedNormalized;
+            quality = repairedQuality;
+          }
+          if (repairedGen.reportedModel) model = repairedGen.reportedModel;
+        } catch {
+          // Keep pass-1 result cleanly if pass-2 hits rate limit or transient provider error
+        }
+      }
+    }
+
+    const validation = validateLandingOutput(normalized, allowedEvidence);
+    return {
+      outputData: validation.output,
+      provider: requestedProvider,
+      model,
+      audit: validation.audit,
+      quality,
+      passes,
+    };
+  }
+
   private activeVersion(projectId:string,key:ModuleKey):ArtifactVersion|undefined {
     const row=this.db.connection.prepare(`SELECT active_version_id FROM artifacts
       WHERE project_id=? AND artifact_type=? ORDER BY created_at LIMIT 1`).get(projectId,key) as {active_version_id:string|null}|undefined;
@@ -1717,5 +1998,386 @@ function toDiscoveryAudit(
       provider: result.providerMetadata?.provider ?? null,
       model: result.providerMetadata?.model ?? null,
     },
+  };
+}
+
+function buildStudioAiSystemInstructions(
+  basePrompt: string,
+  mode: "full_page" | "section" | "polish_copy",
+  userPrompt: string,
+  sectionIndex: number,
+): string {
+  const layoutMatrix = Object.entries(LANDING_SECTION_LAYOUTS)
+    .map(([type, layouts]) => `  - ${type}: ${layouts.join(" | ")}`)
+    .join("\n");
+
+  const modeGuidance =
+    mode === "full_page"
+      ? `MODO FULL_PAGE PRO (NIVEL AGENCIA / FRAMER ELITE):
+- Actúa como director de arte + copywriter senior de respuesta directa. Genera una landing COMPLETA (entre 11 y 15 bloques canónicos: hero, problem, agitation, mechanism, benefits, product, deliverables, bonuses, proof, objections, faq, offer, guarantee, cta, footer).
+- Incluye designTokens completos coherentes con la instrucción del usuario (theme: "modern"|"warm"|"dark"|"editorial"|"minimal", accent, background, text en hex #RRGGBB, font: "sans"|"serif", width: "compact"|"wide", spacing: "compact"|"relaxed").
+- VARÍA el diseño de cada bloque eligiendo explícitamente el campo "layout" adecuado (NO repitas el mismo layout en toda la página):
+${layoutMatrix}
+- Campos obligatorios de alto impacto por bloque:
+  * hero: layout "split" (o "stats"), badge corto (ej. "GUÍA DIGITAL · LECTURA INMEDIATA"), eyebrow, headline potente de 6-14 palabras con promesa clara, subheadline concreto, 3-4 bullets cortos (viñetas), 3 stats reales ({ "value": "...", "label": "..." }), cta accionable e imageUrl elegido de studioVisualAssets.
+  * problem / agitation: al menos 3-4 escenas reales del avatar (items con { "icon", "name", "description" } o layout "comparison" con beforeLabel, afterLabel e items { "name", "before", "after" }).
+  * mechanism: layout "steps", con 3-5 pasos claros basados en upstreamContext.mechanism.
+  * benefits: layout "checklist", 4-6 transformaciones medibles.
+  * product / deliverables / bonuses: layouts "split" / "cards" / "checklist", entregables y bonos fieles a upstreamContext.offer y upstreamContext.product, con imageUrl de studioVisualAssets.
+  * proof: layout "testimonials" o "stats", con cifras verificables o casos honestos basados en evidence (sin inventar testimonios ficticios con cifras médicas falsas).
+  * objections & faq: layout "accordion", mínimo 4 preguntas reales ({ "q", "a" }).
+  * offer: layout "pricing", badge destacado, price (toma el monto y moneda reales de upstreamContext.offer.pricingSuggestion), priceNote (condiciones/acceso), oldPrice opcional si hay anclaje en offer, bullets de confianza, items con lo que incluye, cta directo al checkout e imageUrl ("/api/studio-assets/bundle.jpg").
+  * guarantee: layout "badge", badge corto (ej. "GARANTÍA TRANSPARENTE"), condiciones honestas en body.
+  * cta: layout "centered" o "split", cierre convincente con cta.`
+      : mode === "section"
+        ? `MODO REESCRITURA DE SECCIÓN (targetSectionIndex=${sectionIndex}):
+- Mantén intactas las demás secciones de currentLanding y reescribe profundamente la sección en el índice ${sectionIndex} eligiendo el layout óptimo (${layoutMatrix.replace(/\n/g, "; ")}) y usando todos los datos de upstreamContext, evidence y studioVisualAssets.`
+        : `MODO PULIDO GLOBAL (polish_copy):
+- Conserva el propósito de las secciones de currentLanding (o completa las secciones faltantes si hay qualityAuditIssuesToFix), mejora layouts variados, titulares de alto impacto (6-14 palabras en hero), bullets, stats, precio en offer, garantía, acordeón FAQ y asigna imageUrl reales de studioVisualAssets donde falten fotos.`;
+
+  return `${basePrompt}
+
+${modeGuidance}
+
+ESTRUCTURA DE ITEMS Y ELEMENTOS PRO:
+- Para bloques problem, agitation, mechanism, benefits, product, deliverables, bonuses y proof: usa objetos { "icon": "✓", "name": "Título conciso", "description": "Explicación concreta respaldada por el proyecto" } (y opcionalmente "before", "after", "role", "rating" 1-5 según el layout).
+- Para bloques faq y objections: usa SIEMPRE objetos { "q": "¿Pregunta clara?", "a": "Respuesta directa y honesta" }.
+
+REGLAS ESTRICTAS:
+- Devuelve EXCLUSIVAMENTE un objeto JSON válido que cumpla el schema de Landing.
+- USA ÚNICAMENTE URLs presentes en studioVisualAssets (formato "/api/studio-assets/archivo.jpg") para imageUrl (al menos en 4 a 6 bloques clave: hero, problem, mechanism, product, proof, offer) acompañadas de imageAlt descriptivo en español. NO inventes URLs externas.
+- CERO texto genérico de relleno ("lorem ipsum", "bloque de contenido", "sin completar").
+- Usa SOLO evidenceIds reales presentes en el arreglo evidence entregado.
+- Instrucción prioritaria del usuario: ${userPrompt || "Máxima calidad editorial, jerarquía visual variada y copy de alta conversión fiel a la investigación."}`;
+}
+
+function sanitizeDraftForPrompt(raw: unknown): { title?: string; sections: Record<string, unknown>[] } | undefined {
+  const rec = asRecord(raw);
+  if (!Array.isArray(rec.sections)) return undefined;
+  return {
+    ...(typeof rec.title === "string" ? { title: rec.title } : {}),
+    sections: rec.sections
+      .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+      .slice(0, 20)
+      .map((sec) => ({
+        id: sec.id,
+        type: sec.type,
+        enabled: sec.enabled,
+        variant: sec.variant,
+        layout: sec.layout,
+        badge: sec.badge,
+        eyebrow: sec.eyebrow,
+        headline: sec.headline,
+        subheadline: sec.subheadline,
+        body: sec.body,
+        cta: sec.cta,
+        price: sec.price,
+        oldPrice: sec.oldPrice,
+        priceNote: sec.priceNote,
+        beforeLabel: sec.beforeLabel,
+        afterLabel: sec.afterLabel,
+        bullets: sec.bullets,
+        stats: sec.stats,
+        imageUrl: sec.imageUrl,
+        imageAlt: sec.imageAlt,
+        items: Array.isArray(sec.items) ? sec.items.slice(0, 12) : undefined,
+        evidenceIds: sec.evidenceIds,
+      })),
+  };
+}
+
+function applyMockPromptHints(doc: Record<string, unknown>, prompt: string): Record<string, unknown> {
+  const lower = prompt.toLowerCase();
+  let nextTokens = asRecord(doc.designTokens);
+  if (/oscuro|dark|framer|cyber|neon/i.test(lower)) nextTokens = { ...nextTokens, ...LANDING_THEME_PRESETS.dark };
+  else if (/editorial|revista|serif|elegante/i.test(lower)) nextTokens = { ...nextTokens, ...LANDING_THEME_PRESETS.editorial };
+  else if (/calid|warm|amber/i.test(lower)) nextTokens = { ...nextTokens, ...LANDING_THEME_PRESETS.warm };
+  else if (/minimal|limpio|clean/i.test(lower)) nextTokens = { ...nextTokens, ...LANDING_THEME_PRESETS.minimal };
+  return { ...doc, designTokens: nextTokens };
+}
+
+function sanitizeStudioSectionItems(type: string, items: unknown): unknown[] | undefined {
+  if (!Array.isArray(items)) return undefined;
+  const isQa = type === "faq" || type === "objections";
+  const cleaned: unknown[] = [];
+  for (const raw of items.slice(0, 60)) {
+    if (typeof raw === "string") {
+      const text = raw.trim();
+      if (!text) continue;
+      if (isQa) cleaned.push({ q: text.endsWith("?") ? text : `¿${text}?`, a: "Consulta el detalle dentro del programa." });
+      else cleaned.push(text);
+      continue;
+    }
+    const obj = asRecord(raw);
+    if (isQa || typeof obj.q === "string") {
+      const q = (typeof obj.q === "string" ? obj.q : typeof obj.name === "string" ? obj.name : typeof obj.title === "string" ? obj.title : "").trim();
+      const a = (typeof obj.a === "string" ? obj.a : typeof obj.description === "string" ? obj.description : typeof obj.text === "string" ? obj.text : "").trim();
+      if (q && a) cleaned.push({ q, a });
+      else if (q) cleaned.push({ q: q.endsWith("?") ? q : `¿${q}?`, a: "Respuesta basada en el alcance del producto." });
+      continue;
+    }
+    const name = (typeof obj.name === "string" ? obj.name : typeof obj.title === "string" ? obj.title : typeof obj.headline === "string" ? obj.headline : "").trim();
+    const before = typeof obj.before === "string" ? obj.before.trim().slice(0, 500) : "";
+    const after = typeof obj.after === "string" ? obj.after.trim().slice(0, 500) : "";
+    const description = (typeof obj.description === "string" ? obj.description : typeof obj.text === "string" ? obj.text : typeof obj.body === "string" ? obj.body : after || before).trim();
+    const icon = typeof obj.icon === "string" ? obj.icon.trim().slice(0, 8) : "";
+    const role = typeof obj.role === "string" ? obj.role.trim().slice(0, 120) : "";
+    const rating = typeof obj.rating === "number" && Number.isFinite(obj.rating) ? Math.max(1, Math.min(5, Math.round(obj.rating))) : undefined;
+    if (name || description || before || after) {
+      cleaned.push({
+        ...(icon ? { icon } : {}),
+        name: name || description.slice(0, 60),
+        description: description || after || before || name,
+        ...(before ? { before } : {}),
+        ...(after ? { after } : {}),
+        ...(role ? { role } : {}),
+        ...(rating !== undefined ? { rating } : {}),
+      });
+    }
+  }
+  return cleaned;
+}
+
+const STUDIO_ASSET_ROLE_PRIORITY: Record<string, string[]> = {
+  hero: ["hero", "bundle", "guide"],
+  problem: ["problem", "foto_perro_tension_urbana"],
+  agitation: ["foto_estallido_reactivo", "foto_perro_tension_urbana"],
+  mechanism: ["foto_master_01_paseo_nocturno", "foto_olfateo_calma", "illustration_signals"],
+  product: ["guide", "bundle", "foto_cuaderno_escritorio"],
+  deliverables: ["foto_mockup_tarjetas_sos", "foto_cuaderno_escritorio"],
+  bonuses: ["foto_masticacion_descompresion", "foto_descompresion_sniffari"],
+  benefits: ["foto_perro_paseo_calmado", "foto_banco_parque_atardecer"],
+  proof: ["testimonial", "foto_perro_grande_pastor", "expert"],
+  offer: ["bundle", "foto_mockup_tarjetas_sos"],
+  guarantee: ["expert", "foto_master_02_consulta_etologia"],
+  cta: ["foto_paseo_nocturno_calmado", "hero"],
+};
+
+function resolveCandidateStudioAsset(rawValue: unknown): { url: string; alt: string } | null {
+  if (typeof rawValue !== "string") return null;
+  const trimmed = rawValue.trim();
+  if (!trimmed) return null;
+  const validDirect = landingImageUrl(trimmed);
+  if (validDirect) {
+    if (validDirect.startsWith("/api/studio-assets/")) {
+      const slug = decodeURIComponent(validDirect.slice("/api/studio-assets/".length));
+      const matched = STUDIO_VISUAL_ASSETS.find((a) => a.filename.toLowerCase() === slug.toLowerCase() || a.id.toLowerCase() === slug.toLowerCase());
+      return matched ? { url: studioAssetUrl(matched.filename), alt: matched.title } : null;
+    }
+    return { url: validDirect, alt: "" };
+  }
+  const byName = STUDIO_VISUAL_ASSETS.find(
+    (a) => a.filename.toLowerCase() === trimmed.toLowerCase() || a.id.toLowerCase() === trimmed.toLowerCase(),
+  );
+  return byName ? { url: studioAssetUrl(byName.filename), alt: byName.title } : null;
+}
+
+function defaultAssetForSectionType(type: string): { url: string; alt: string } | null {
+  const candidates = STUDIO_ASSET_ROLE_PRIORITY[type];
+  if (!candidates) return null;
+  for (const id of candidates) {
+    const asset = STUDIO_VISUAL_ASSETS.find((item) => item.id === id);
+    if (asset) return { url: studioAssetUrl(asset.filename), alt: asset.title };
+  }
+  return null;
+}
+
+function sanitizeStudioLandingOutput({
+  rawOutput,
+  currentDraft,
+  allowedEvidence,
+  mode,
+  sectionIndex,
+  fallbackTitle,
+  parentOutputs,
+}: {
+  rawOutput: Record<string, unknown>;
+  currentDraft: unknown;
+  allowedEvidence: ReadonlyArray<{ id: string }>;
+  mode: "full_page" | "section" | "polish_copy";
+  sectionIndex: number | undefined;
+  fallbackTitle: string;
+  parentOutputs?: Partial<Record<ModuleKey, unknown>> | undefined;
+}): Record<string, unknown> {
+  const allowedIds = new Set(allowedEvidence.map((item) => item.id));
+  const draftRecord = asRecord(currentDraft);
+  const offerRecord = asRecord(parentOutputs?.offer);
+  const pricingRecord = asRecord(offerRecord.pricingSuggestion);
+  const derivedOfferPrice =
+    pricingRecord.amount !== undefined && pricingRecord.amount !== null && String(pricingRecord.amount).trim()
+      ? (String(pricingRecord.currency ?? "").trim().toUpperCase() === "USD"
+          ? `$${String(pricingRecord.amount).trim()} USD`
+          : `${String(pricingRecord.amount).trim()} ${String(pricingRecord.currency ?? "").trim()}`.trim())
+      : "";
+  const existingSections = Array.isArray(draftRecord.sections)
+    ? draftRecord.sections.filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object" && !Array.isArray(s)))
+    : [];
+
+  const filterIds = (ids: unknown): string[] =>
+    Array.isArray(ids) ? [...new Set(ids.filter((id): id is string => typeof id === "string" && allowedIds.has(id)))].slice(0, 40) : [];
+
+  const existingById = new Map(existingSections.filter((s) => typeof s.id === "string" && s.id).map((s) => [String(s.id), s]));
+  const existingByType = new Map(existingSections.filter((s) => typeof s.type === "string" && s.type).map((s) => [String(s.type), s]));
+
+  const strField = (primary: unknown, fallback: unknown, maxLen = 12000) => {
+    const first = typeof primary === "string" ? primary.trim().slice(0, maxLen) : "";
+    if (first) return first;
+    return typeof fallback === "string" ? fallback.trim().slice(0, maxLen) : "";
+  };
+
+  const normalizeOneSection = (
+    sec: Record<string, unknown>,
+    idx: number,
+    prevMatch?: Record<string, unknown>,
+    allowAutoAsset = false,
+  ): Record<string, unknown> => {
+    const type = typeof sec.type === "string" && sec.type.trim() ? sec.type.trim() : typeof prevMatch?.type === "string" ? prevMatch.type : "benefits";
+    const id = typeof sec.id === "string" && sec.id.trim() ? sec.id.trim() : typeof prevMatch?.id === "string" && prevMatch.id ? prevMatch.id : `studio-${idx + 1}-${type}`;
+    const resolvedSecImg = resolveCandidateStudioAsset(sec.imageUrl);
+    const resolvedPrevImg = resolveCandidateStudioAsset(prevMatch?.imageUrl);
+    const autoImg = !resolvedSecImg && !resolvedPrevImg && allowAutoAsset ? defaultAssetForSectionType(type) : null;
+    const candidateImg = resolvedSecImg?.url ?? resolvedPrevImg?.url ?? autoImg?.url ?? "";
+    const candidateAlt = candidateImg
+      ? (typeof sec.imageAlt === "string" && sec.imageAlt.trim()
+          ? sec.imageAlt.trim().slice(0, 250)
+          : typeof prevMatch?.imageAlt === "string" && prevMatch.imageAlt.trim()
+            ? prevMatch.imageAlt.trim().slice(0, 250)
+            : resolvedSecImg?.alt || resolvedPrevImg?.alt || autoImg?.alt || (typeof sec.headline === "string" && sec.headline.trim() ? sec.headline.trim() : "Imagen de sección").slice(0, 250))
+      : "";
+
+    const items = sanitizeStudioSectionItems(type, sec.items ?? prevMatch?.items);
+    const headline = typeof sec.headline === "string" ? sec.headline.trim().slice(0, 12000) : "";
+    const subheadline = typeof sec.subheadline === "string" ? sec.subheadline.trim().slice(0, 12000) : "";
+    const body = typeof sec.body === "string" ? sec.body.trim().slice(0, 12000) : "";
+    const eyebrow = typeof sec.eyebrow === "string" ? sec.eyebrow.trim().slice(0, 12000) : "";
+    const cta = typeof sec.cta === "string" ? sec.cta.trim().slice(0, 12000) : "";
+    const badge = strField(sec.badge, prevMatch?.badge, 120) || (type === "guarantee" ? "GARANTÍA TRANSPARENTE" : "");
+    const price = strField(sec.price, prevMatch?.price, 120) || (type === "offer" ? derivedOfferPrice : "");
+    const oldPrice = strField(sec.oldPrice, prevMatch?.oldPrice, 120);
+    const priceNote = strField(sec.priceNote, prevMatch?.priceNote, 240);
+    const beforeLabel = strField(sec.beforeLabel, prevMatch?.beforeLabel, 120);
+    const afterLabel = strField(sec.afterLabel, prevMatch?.afterLabel, 120);
+    const bullets = landingTextList(sec.bullets !== undefined ? sec.bullets : prevMatch?.bullets, 10);
+    const stats = landingStats(sec.stats !== undefined ? sec.stats : prevMatch?.stats);
+    const layout = resolveLandingLayout({
+      type,
+      layout: typeof sec.layout === "string" && sec.layout.trim() ? sec.layout : prevMatch?.layout,
+      imageUrl: candidateImg,
+    });
+    const hasContent = Boolean(headline || subheadline || body || cta || (items && items.length) || stats.length || bullets.length);
+
+    return {
+      id,
+      type,
+      enabled: typeof sec.enabled === "boolean" ? sec.enabled : typeof prevMatch?.enabled === "boolean" ? prevMatch.enabled : true,
+      variant: sec.variant === "centered" ? "centered" : sec.variant === "editorial" ? "editorial" : prevMatch?.variant === "centered" ? "centered" : "editorial",
+      layout,
+      ...(badge ? { badge } : {}),
+      ...(eyebrow ? { eyebrow } : {}),
+      headline: headline || (hasContent ? headline : "Propuesta principal"),
+      ...(subheadline ? { subheadline } : {}),
+      body: body || (!hasContent ? "Consulta el contenido completo de esta sección dentro de la guía." : body),
+      ...(cta ? { cta } : {}),
+      ...(price ? { price } : {}),
+      ...(oldPrice ? { oldPrice } : {}),
+      ...(priceNote ? { priceNote } : {}),
+      ...(beforeLabel ? { beforeLabel } : {}),
+      ...(afterLabel ? { afterLabel } : {}),
+      ...(bullets.length ? { bullets } : {}),
+      ...(stats.length ? { stats } : {}),
+      ...(candidateImg ? { imageUrl: candidateImg, imageAlt: candidateAlt } : {}),
+      ...(items !== undefined ? { items } : {}),
+      evidenceIds: filterIds(sec.evidenceIds ?? prevMatch?.evidenceIds),
+    };
+  };
+
+  let generatedSections = Array.isArray(rawOutput.sections)
+    ? rawOutput.sections.filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object" && !Array.isArray(s)))
+    : [];
+
+  if (mode === "section" && existingSections.length > 0 && typeof sectionIndex === "number" && existingSections[sectionIndex]) {
+    const targetPrev = existingSections[sectionIndex]!;
+    const replacement =
+      generatedSections[sectionIndex] ??
+      generatedSections.find((s) => s.id === targetPrev.id) ??
+      generatedSections.find((s) => s.type === targetPrev.type) ??
+      generatedSections[0];
+    generatedSections = existingSections.map((prev, idx) =>
+      idx === sectionIndex && replacement ? normalizeOneSection(replacement, idx, prev, false) : normalizeOneSection(prev, idx, prev, false),
+    );
+  } else if (generatedSections.length > 0) {
+    const existingImages = generatedSections.filter((sec) => Boolean(resolveCandidateStudioAsset(sec.imageUrl))).length;
+    const allowAuto = mode === "full_page" && existingImages < 4;
+    generatedSections = generatedSections.slice(0, 40).map((sec, idx) => {
+      const prevMatch =
+        (typeof sec.id === "string" ? existingById.get(sec.id) : undefined) ??
+        (typeof sec.type === "string" ? existingByType.get(sec.type) : undefined);
+      return normalizeOneSection(sec, idx, prevMatch, allowAuto);
+    });
+  } else if (existingSections.length > 0) {
+    generatedSections = existingSections.map((prev, idx) => normalizeOneSection(prev, idx, prev, mode === "full_page"));
+  }
+
+  if (generatedSections.length > 0 && !generatedSections.some((s) => s.enabled !== false)) {
+    generatedSections[0] = { ...generatedSections[0]!, enabled: true };
+  }
+
+  const rawTokens = asRecord(rawOutput.designTokens);
+  const draftTokens = asRecord(draftRecord.designTokens);
+  const theme = typeof rawTokens.theme === "string" && rawTokens.theme in LANDING_THEME_PRESETS
+    ? rawTokens.theme as keyof typeof LANDING_THEME_PRESETS
+    : typeof draftTokens.theme === "string" && draftTokens.theme in LANDING_THEME_PRESETS
+      ? draftTokens.theme as keyof typeof LANDING_THEME_PRESETS
+      : "modern";
+  const preset = LANDING_THEME_PRESETS[theme] ?? {
+    theme: "modern",
+    accent: "#2563eb",
+    background: "#f8fafc",
+    text: "#0f172a",
+    font: "sans" as const,
+    width: "compact" as const,
+    spacing: "relaxed" as const,
+  };
+  const hex = (val: unknown, alt: unknown, fallback: string) =>
+    typeof val === "string" && /^#[0-9a-f]{6}$/i.test(val.trim())
+      ? val.trim()
+      : typeof alt === "string" && /^#[0-9a-f]{6}$/i.test(alt.trim())
+        ? alt.trim()
+        : fallback;
+
+  const designTokens = {
+    theme,
+    accent: hex(rawTokens.accent, draftTokens.accent, preset.accent),
+    background: hex(rawTokens.background, draftTokens.background, preset.background),
+    text: hex(rawTokens.text, draftTokens.text, preset.text),
+    font: rawTokens.font === "serif" || rawTokens.font === "sans" ? rawTokens.font : draftTokens.font === "serif" ? "serif" : preset.font,
+    width: rawTokens.width === "wide" || rawTokens.width === "compact" ? rawTokens.width : draftTokens.width === "wide" ? "wide" : preset.width,
+    spacing: rawTokens.spacing === "compact" || rawTokens.spacing === "relaxed" ? rawTokens.spacing : draftTokens.spacing === "compact" ? "compact" : preset.spacing,
+  };
+
+  const title =
+    (typeof rawOutput.title === "string" && rawOutput.title.trim()) ||
+    (typeof draftRecord.title === "string" && draftRecord.title.trim()) ||
+    fallbackTitle ||
+    "Landing del proyecto";
+
+  const footerNote =
+    (typeof rawOutput.footerNote === "string" && rawOutput.footerNote) ||
+    (typeof draftRecord.footerNote === "string" && draftRecord.footerNote) ||
+    "";
+
+  const checkout = asRecord(draftRecord.externalCheckout);
+  const hasValidCheckout =
+    ["none", "hotmart", "skool", "custom"].includes(String(checkout.platform)) &&
+    (checkout.platform === "none" || landingCheckoutUrl(checkout.checkoutUrl));
+
+  return {
+    schemaVersion: 1,
+    title: title.slice(0, 12000),
+    footerNote: footerNote.slice(0, 12000),
+    designTokens,
+    sections: generatedSections,
+    ...(hasValidCheckout ? { externalCheckout: checkout } : {}),
+    evidenceIds: filterIds(rawOutput.evidenceIds ?? draftRecord.evidenceIds),
   };
 }

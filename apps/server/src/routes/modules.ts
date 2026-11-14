@@ -23,6 +23,22 @@ const ParamsSchema = Type.Object({
 });
 const VersionParamsSchema=Type.Object({id:Type.String({format:"uuid"}),key:ModuleKeySchema,versionId:Type.String({format:"uuid"})});
 const EditModuleSchema=Type.Object({outputData:Type.Unknown(),expectedBaseVersionId:Type.Optional(Type.String({format:"uuid"})),sourceVersionId:Type.Optional(Type.String({format:"uuid"}))},{additionalProperties:false});
+const LandingStudioAiBodySchema = Type.Object({
+  provider: Type.Optional(Type.String()),
+  mode: Type.Optional(Type.Union([Type.Literal("full_page"), Type.Literal("section"), Type.Literal("polish_copy")])),
+  prompt: Type.Optional(Type.String()),
+  sectionIndex: Type.Optional(Type.Integer({ minimum: 0 })),
+  currentDraft: Type.Optional(Type.Unknown()),
+  sourceVersionId: Type.Optional(Type.String({ format: "uuid" })),
+}, { additionalProperties: false });
+const LandingStudioAiResponseSchema = Type.Object({
+  outputData: Type.Record(Type.String(), Type.Unknown()),
+  provider: Type.String(),
+  model: Type.String(),
+  audit: Type.Object({ ok: Type.Boolean(), errors: Type.Array(Type.String()) }),
+  quality: Type.Optional(Type.Unknown()),
+  passes: Type.Optional(Type.Number()),
+});
 
 interface Params { id: string; key: ModuleKey }
 
@@ -119,6 +135,40 @@ export function registerModuleRoutes(
       try{return modules.archiveDraft(request.params.id,request.params.key,request.params.versionId)
         ?? reply.code(404).send({error:"not_found",message:"El borrador no existe en este módulo."});}
       catch(error){return reply.code(409).send({error:"archive_blocked",message:error instanceof Error?error.message:"No se pudo archivar el borrador."});}
+    },
+  );
+
+  app.post<{
+    Params: { id: string };
+    Body: {
+      provider?: string;
+      mode?: "full_page" | "section" | "polish_copy";
+      prompt?: string;
+      sectionIndex?: number;
+      currentDraft?: unknown;
+      sourceVersionId?: string;
+    };
+  }>(
+    "/api/projects/:id/modules/landing/studio-ai",
+    {
+      schema: {
+        params: Type.Object({ id: Type.String({ format: "uuid" }) }),
+        body: LandingStudioAiBodySchema,
+        response: { 200: LandingStudioAiResponseSchema, 404: ApiErrorSchema, 409: ApiErrorSchema },
+      },
+    },
+    async (request, reply) => {
+      if (!projects.get(request.params.id)) {
+        return reply.code(404).send({ error: "not_found", message: "El proyecto no existe." });
+      }
+      try {
+        return await modules.generateLandingStudioAi(request.params.id, request.body);
+      } catch (error) {
+        return reply.code(409).send({
+          error: "studio_ai_blocked",
+          message: error instanceof Error ? error.message : "No se pudo generar contenido con Studio PRO IA.",
+        });
+      }
     },
   );
 }

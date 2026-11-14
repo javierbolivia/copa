@@ -1,0 +1,33 @@
+{
+  "id": "framer-direct-response",
+  "name": "Framer Direct Response",
+  "category": "High-Converting Launch / Hotmart Top",
+  "description": "Estética de alto impacto comercial, diseñada para maximizar el ratio de clics y conversiones en tráfico frío de Meta Ads y YouTube. Contrastes altos, badges dinámicos y llamada a la acción irresistible.",
+  "theme": {
+    "bgPrimary": "#0f172a",
+    "bgSecondary": "#1e293b",
+    "bgCard": "#1e293b",
+    "borderColor": "rgba(56, 189, 248, 0.2)",
+    "borderHover": "rgba(56, 189, 248, 0.6)",
+    "textPrimary": "#f8fafc",
+    "textSecondary": "#94a3b8",
+    "accentPrimary": "#0284c7",
+    "accentGradient": "linear-gradient(135deg, #0284c7 0%, #0369a1 100%)",
+    "buttonText": "#ffffff",
+    "fontHeading": "'Outfit', system-ui, sans-serif",
+    "fontBody": "'Inter', system-ui, sans-serif"
+  },
+  "blocks": [
+    { "id": "announcement-bar", "visible": true, "type": "announcement" },
+    { "id": "hero-section", "visible": true, "type": "hero" },
+    { "id": "problem-reality", "visible": true, "type": "problem" },
+    { "id": "mechanism-solution", "visible": true, "type": "mechanism" },
+    { "id": "curriculum-chapters", "visible": true, "type": "curriculum" },
+    { "id": "social-proof-wall", "visible": true, "type": "social_proof" },
+    { "id": "offer-stack-box", "visible": true, "type": "offer" },
+    { "id": "bonuses-section", "visible": true, "type": "bonuses" },
+    { "id": "guarantee-seal", "visible": true, "type": "guarantee" },
+    { "id": "faq-accordion", "visible": true, "type": "faq" },
+    { "id": "urgent-cta-footer", "visible": true, "type": "cta_footer" }
+  ]
+}

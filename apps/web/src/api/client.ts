@@ -30,6 +30,7 @@ import type {
   ProductDocumentVersion,
   MarketResearchRun,
   MarketResearchStatus,
+  LandingQualityReport,
   RunMarketResearchInput,
 } from "@our-platform/shared";
 
@@ -41,6 +42,25 @@ export class ApiClientError extends Error {
     super(message);
     this.name = "ApiClientError";
   }
+}
+
+export type LandingStudioAiMode = "full_page" | "section" | "polish_copy";
+
+export interface LandingStudioAiResponse {
+  outputData: Record<string, unknown>;
+  provider: string;
+  model: string;
+  audit: { ok: boolean; errors: string[] };
+  quality?: LandingQualityReport | undefined;
+  passes?: number | undefined;
+}
+
+export interface StudioVisualAsset {
+  id: string;
+  filename: string;
+  title: string;
+  category: string;
+  url: string;
 }
 
 export type GenerationProvider = "mock" | "openai" | "gemini" | "deepseek" | "groq" | "openrouter";
@@ -239,6 +259,23 @@ export const api = {
     ),
   providerStatus: (id: string) =>
     request<ProviderStatus>(`/api/projects/${id}/providers/status`),
+  studioAssets: () =>
+    request<{ assets: StudioVisualAsset[] }>("/api/studio-assets"),
+  runLandingStudioAi: (
+    id: string,
+    input: {
+      provider?: GenerationProvider | undefined;
+      mode?: LandingStudioAiMode | undefined;
+      prompt?: string | undefined;
+      sectionIndex?: number | undefined;
+      currentDraft?: unknown;
+      sourceVersionId?: string | undefined;
+    },
+  ) =>
+    request<LandingStudioAiResponse>(
+      `/api/projects/${id}/modules/landing/studio-ai`,
+      json("POST", input),
+    ),
   saveModuleDraft: (id: string, key: ModuleKey, outputData: unknown, expectedBaseVersionId?: string, sourceVersionId?: string) =>
     request<ModuleResult>(
       `/api/projects/${id}/modules/${key}/drafts`,

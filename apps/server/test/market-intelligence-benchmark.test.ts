@@ -95,12 +95,12 @@ describe("Phase 20.3 market intelligence benchmark", () => {
   });
 
   it("uses Brave official GET authentication, applies its budget before I/O, and never requests on missing credentials", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ web: { results: Array.from({ length: 6 }, (_, index) => ({ title: `R${index}`, url: `https://example.test/${index}` })) } }), { status: 200 }));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ web: { results: Array.from({ length: 21 }, (_, index) => ({ title: `R${index}`, url: `https://example.test/${index}` })) } }), { status: 200 }));
     const provider = new BraveSearchProvider({ apiKey: "brave-test-key", fetch: fetchMock as typeof fetch });
     const discovery = await provider.discover("workflow", { maxResults: 99 });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [URL, RequestInit];
-    expect(discovery.results).toHaveLength(5);
-    expect(url.searchParams.get("count")).toBe("5");
+    expect(discovery.results).toHaveLength(20);
+    expect(url.searchParams.get("count")).toBe("20");
     expect(init).toMatchObject({ method: "GET", headers: { "X-Subscription-Token": "brave-test-key" } });
 
     const missingFetch = vi.fn();

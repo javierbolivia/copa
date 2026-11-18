@@ -305,6 +305,8 @@ export const api = {
     request<MarketResearchRun | null>(`/api/projects/${id}/market-research/latest`),
   marketResearchHistory: (id: string) =>
     request<import("@our-platform/shared").MarketResearchHistory>(`/api/projects/${id}/market-research/history`),
+  marketResearchSupplement: (id: string, runId: string) =>
+    request<import("@our-platform/shared").MarketResearchSupplement | null>(`/api/projects/${id}/market-research/${runId}/supplement`),
   runMarketResearch: (id: string, input: RunMarketResearchInput) =>
     request<MarketResearchRun>(`/api/projects/${id}/market-research`, json("POST", input)),
   researchFocus: (id:string) => request<{value:string|null;source:"user"|"youtube_query"|null}>(`/api/projects/${id}/research-focus`),

@@ -57,8 +57,10 @@ export interface MarketResearchAcquisitionInput {
 
 export interface MarketResearchAcquisition {
   readonly providers: readonly MarketResearchProviderReport[];
-  /** Deduped, ranked and budget-capped signals ready for semantic analysis. */
+  /** All cleaned and deduplicated evidence captured for the run. */
   readonly signals: readonly MarketResearchSignal[];
+  /** Ranked subset sent to the semantic miner. It applies its own YouTube cap. */
+  readonly analysisCandidates: readonly MarketResearchSignal[];
   readonly metrics: MarketResearchMetrics;
 }
 
@@ -276,7 +278,7 @@ async function acquireProvider(
       provider,
       query: input.topic,
       retrievedAt: input.retrievedAt,
-      results: discovery.results,
+      results: discovery.results.slice(0, requested),
     });
     return {
       ...empty,
@@ -340,16 +342,15 @@ async function deepenSignals(
     .slice(0, MARKET_RESEARCH_BUDGETS.firecrawlScrapePages);
 
   const deepened = new Map<string, string>();
-  let scrapedPages = 0;
-  for (const candidate of candidates) {
-    try {
-      const response = await firecrawl.scrape(candidate.url);
-      scrapedPages += 1;
-      const extracted = boundedAnalysisText(response.results[0]?.text ?? response.results[0]?.snippet ?? "");
+  const scrapeConcurrency = 4;
+  for (let offset = 0; offset < candidates.length; offset += scrapeConcurrency) {
+    const batch = candidates.slice(offset, offset + scrapeConcurrency);
+    const results = await Promise.allSettled(batch.map(async (candidate) => firecrawl.scrape(candidate.url)));
+    for (const [index, result] of results.entries()) {
+      if (result.status === "rejected") continue;
+      const candidate = batch[index]!;
+      const extracted = boundedAnalysisText(result.value.results[0]?.text ?? result.value.results[0]?.snippet ?? "");
       if (extracted.length > candidate.text.length) deepened.set(candidate.id, extracted);
-    } catch {
-      // Deep extraction is optional enrichment: a failure never aborts the run.
-      scrapedPages += 1;
     }
   }
   return {
@@ -357,7 +358,7 @@ async function deepenSignals(
       const text = deepened.get(signal.id);
       return text === undefined ? signal : { ...signal, text, deepened: true };
     }),
-    scrapedPages,
+    scrapedPages: candidates.length,
   };
 }
 
@@ -420,15 +421,11 @@ export async function acquireMarketResearchSignals(
   }
 
   const ranked = rankForAnalysis(uniqueByProvider);
-  // Persist every cleaned YouTube signal for traceability and Evidence Explorer;
-  // the semantic miner enforces its own 12×25 batch ceiling. Other providers
-  // retain the established global analysis budget.
+  // Preserve the semantic input order while retaining unique web evidence beyond it.
   const youtubeRanked = uniqueByProvider.get("youtube") ?? [];
   const nonYoutubeRanked = ranked.filter((entry) => entry.provider !== "youtube");
-  const retained = [
-    ...youtubeRanked,
-    ...nonYoutubeRanked.slice(0, MARKET_RESEARCH_BUDGETS.analysisSignals),
-  ];
+  const retained = [...youtubeRanked, ...nonYoutubeRanked];
+  const analysisEnd = youtubeRanked.length + Math.min(nonYoutubeRanked.length, MARKET_RESEARCH_BUDGETS.analysisSignals);
   const initial: readonly MarketResearchSignal[] = retained.map((entry, index) => ({
     id: `S${index + 1}`,
     provider: entry.provider,
@@ -445,9 +442,12 @@ export async function acquireMarketResearchSignals(
   }));
 
   const firecrawlEnabled = selected.includes("firecrawl");
-  const { signals, scrapedPages } = await deepenSignals(clients.firecrawl, firecrawlEnabled, initial);
+  const { signals: analysisCandidates, scrapedPages } = await deepenSignals(
+    clients.firecrawl, firecrawlEnabled, initial.slice(0, analysisEnd),
+  );
+  const signals = [...analysisCandidates, ...initial.slice(analysisEnd)];
   const analyzedByProvider = new Map<MarketResearchProvider, number>();
-  for (const signal of signals) {
+  for (const signal of analysisCandidates) {
     analyzedByProvider.set(signal.provider, (analyzedByProvider.get(signal.provider) ?? 0) + 1);
   }
 
@@ -473,17 +473,15 @@ export async function acquireMarketResearchSignals(
   return {
     providers,
     signals,
+    analysisCandidates,
     metrics: {
       requestedSignals,
       returnedSignals,
       validSignals,
       uniqueSignals,
       duplicatesRemoved,
-      analyzedSignals: signals.length,
-      discardedByAnalysisBudget: Math.max(
-        0,
-        nonYoutubeRanked.length - Math.min(nonYoutubeRanked.length, MARKET_RESEARCH_BUDGETS.analysisSignals),
-      ) + Math.max(0, youtubeRanked.length - analyzedSignalCap()),
+      analyzedSignals: analysisCandidates.length,
+      discardedByAnalysisBudget: signals.length - analysisEnd + Math.max(0, youtubeRanked.length - analyzedSignalCap()),
       deepenedSignals: signals.filter((signal) => signal.deepened).length,
     },
   };

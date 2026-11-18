@@ -219,7 +219,7 @@ export async function createApp(
   registerResearchFocusRoutes(app, settings, database);
   registerSourceRoutes(app, sources, jobs, youtubeImports, productStudio);
   registerModuleRoutes(app, projects, modules);
-  registerMarketResearchRoutes(app, projects, marketResearch);
+  registerMarketResearchRoutes(app, projects, marketResearch, knowledgeIngestion);
   registerDemoRoutes(app, projects, sources, modules);
   registerFileRoutes(app, projects, exporter);
   registerTraceabilityRoutes(app, traceability);

@@ -75,11 +75,11 @@ export const MARKET_RESEARCH_BUDGETS = {
   youtubeNearDuplicateMinTokens: 5,
   youtubeNearDuplicateMaxComparisons: 48,
   youtubeNearDuplicatePostings: 64,
-  tavilyResults: 5,
-  exaResults: 5,
-  braveResults: 5,
-  firecrawlSearchResults: 5,
-  firecrawlScrapePages: 2,
+  tavilyResults: 20,
+  exaResults: 20,
+  braveResults: 20,
+  firecrawlSearchResults: 20,
+  firecrawlScrapePages: 8,
   analysisSignals: 20,
   analysisSignalChars: 1_500,
   analysisMaxOutputTokens: 4_000,
@@ -402,6 +402,14 @@ export const MarketResearchRunSchema = Type.Object({
   signals: Type.Array(MarketResearchSignalSchema),
 });
 export type MarketResearchRun = Static<typeof MarketResearchRunSchema>;
+
+export const MARKET_RESEARCH_SUPPLEMENT_MAX_BYTES = 64 * 1024;
+export const MarketResearchSupplementSchema = Type.Object({
+  documentId: Type.String({ format: "uuid" }),
+  title: Type.String({ maxLength: 300 }),
+  markdown: Type.String({ maxLength: MARKET_RESEARCH_SUPPLEMENT_MAX_BYTES }),
+}, { additionalProperties: false });
+export type MarketResearchSupplement = Static<typeof MarketResearchSupplementSchema>;
 
 /** Bounded, safe response used to restore saved Market Research runs. */
 export const MarketResearchHistorySchema = Type.Object({

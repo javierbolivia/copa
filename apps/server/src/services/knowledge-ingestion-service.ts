@@ -1,6 +1,11 @@
-import type { ImportKnowledgeDocumentInput } from "@our-platform/shared";
+import {
+  MARKET_RESEARCH_SUPPLEMENT_MAX_BYTES,
+  type ImportKnowledgeDocumentInput,
+  type MarketResearchSupplement,
+} from "@our-platform/shared";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
@@ -13,6 +18,30 @@ export class KnowledgeIngestionService {
 
   constructor(private readonly database: AppDatabase, private readonly repository: KnowledgeRepository, dataRoot: string) {
     this.dataRoot = resolve(dataRoot);
+  }
+
+  async readResearchSupplement(projectId: string, documentId: string): Promise<MarketResearchSupplement | null> {
+    const document = this.repository.getDocument(documentId);
+    if (document?.scope !== "PROJECT" || document.projectId !== projectId ||
+        document.status !== "READY" || document.documentType !== "markdown" ||
+        !document.storedRelativePath || !document.fileSha256 ||
+        document.bytes < 1 || document.bytes > MARKET_RESEARCH_SUPPLEMENT_MAX_BYTES) return null;
+
+    try {
+      const file = await open(this.safeAbsolutePath(document.storedRelativePath), "r");
+      try {
+        if ((await file.stat()).size !== document.bytes) return null;
+        const buffer = Buffer.alloc(document.bytes);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        if (bytesRead !== document.bytes || createHash("sha256").update(buffer).digest("hex") !== document.fileSha256) return null;
+        return { documentId, title: document.title, markdown: buffer.toString("utf8") };
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+      throw error;
+    }
   }
 
   async import(projectId: string, libraryId: string, input: ImportKnowledgeDocumentInput): Promise<KnowledgeDocument> {

@@ -315,4 +315,23 @@ input[type="checkbox"]{position:relative;display:grid;place-items:center;flex:0 
 .problem-evidence-pagination>label{display:flex;align-items:center;gap:6px}
 .problem-evidence-pagination select{width:auto;min-width:70px;padding:7px}
 .problem-evidence-pagination .button{min-height:34px;padding:7px 10px;font-size:11px}
+.market-research-supplement article {
+  padding: 16px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.market-research-supplement h3,.market-research-supplement h4 { margin: 0 0 10px; color: var(--text); }
+.market-research-supplement p { margin: 0 0 12px; white-space: pre-line; }
+.market-research-supplement a { color: var(--accent-bright); text-decoration: underline; }
+.research-supplement-table { overflow-x: auto; margin-bottom: 12px; }
+.research-supplement-table table { width: 100%; min-width: 540px; border-collapse: collapse; }
+.research-supplement-table th,.research-supplement-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.research-supplement-table th { color: var(--text); background: var(--surface-1); }
 @media(max-width:600px){.problem-row>summary{grid-template-columns:24px minmax(0,1fr) 18px;gap:9px;padding:13px}.problem-row-count{grid-column:2;grid-row:2}.problem-row-chevron{grid-column:3;grid-row:1}.problem-row .problem-row-title h3{font-size:13px}.problem-row-detail{padding:13px}.problem-evidence-pagination>span{flex-basis:100%}.problem-evidence-pagination .button{min-height:40px}}

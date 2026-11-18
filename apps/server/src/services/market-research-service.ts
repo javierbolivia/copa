@@ -363,7 +363,7 @@ export class MarketResearchService {
 
     const { findings, analysis, analyzedSignalIds } = await mineMarketResearchFindings({
       topic,
-      signals: acquisition.signals,
+      signals: acquisition.analysisCandidates,
       referenceAt: startedAt,
       primary: {
         analyzer: "deepseek",
@@ -379,7 +379,7 @@ export class MarketResearchService {
 
     const analyzed = new Set(analyzedSignalIds);
     const analyzedByProvider = new Map<MarketResearchProvider, number>();
-    for (const signal of acquisition.signals) {
+    for (const signal of acquisition.analysisCandidates) {
       if (analyzed.has(signal.id)) {
         analyzedByProvider.set(signal.provider, (analyzedByProvider.get(signal.provider) ?? 0) + 1);
       }
@@ -418,6 +418,25 @@ export class MarketResearchService {
    */
   latest(projectId: string): MarketResearchRun | null {
     return this.history(projectId, 1)[0] ?? null;
+  }
+
+  supplementDocumentId(projectId: string, runId: string): string | null {
+    const row = this.database.connection.prepare(`
+      SELECT json_extract(output_data, '$.supplementDocumentId') AS documentId
+      FROM generations
+      WHERE id=? AND project_id=? AND agent_key=? AND status='COMPLETED' AND json_valid(output_data)
+    `).get(runId, projectId, MARKET_RESEARCH_AGENT_KEY) as { documentId: unknown } | undefined;
+    return typeof row?.documentId === "string" ? row.documentId : null;
+  }
+
+  attachSupplement(projectId: string, runId: string, documentId: string): boolean {
+    const result = this.database.connection.prepare(`
+      UPDATE generations
+      SET output_data=json_set(output_data, '$.supplementDocumentId', ?)
+      WHERE id=? AND project_id=? AND agent_key=? AND status='COMPLETED' AND json_valid(output_data)
+        AND json_extract(output_data, '$.runId')=id AND json_extract(output_data, '$.projectId')=project_id
+    `).run(documentId, runId, projectId, MARKET_RESEARCH_AGENT_KEY);
+    return Number(result.changes) === 1;
   }
 
   /**

@@ -1,3 +1,4 @@
+import { MARKET_RESEARCH_BUDGETS } from "@our-platform/shared";
 import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
@@ -113,7 +114,7 @@ export class TavilyProvider {
 
   async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Tavily no está configurado.");
-    const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
+    const maxResults = Math.min(MARKET_RESEARCH_BUDGETS.tavilyResults, Math.max(1, Math.floor(options.maxResults ?? 5)));
     const { response, body } = await withIntegrationTimeout("Tavily", this.timeoutMs, async signal => {
       let response: Response;
       try {

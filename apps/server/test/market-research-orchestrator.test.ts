@@ -82,10 +82,10 @@ function firecrawl(results: number): { provider: FirecrawlProvider; fetchMock: R
 describe("Phase 20.4 market research acquisition", () => {
   it("integra los cinco proveedores reales aplicando los límites antes de la red", async () => {
     const youtube = youtubeClient(3);
-    const tavilyClient = tavily(6);
-    const exaClient = exa(6);
-    const braveClient = brave(6);
-    const firecrawlClient = firecrawl(6);
+    const tavilyClient = tavily(21);
+    const exaClient = exa(21);
+    const braveClient = brave(21);
+    const firecrawlClient = firecrawl(21);
     const clients: MarketResearchClients = {
       youtube,
       tavily: tavilyClient.provider,
@@ -98,27 +98,28 @@ describe("Phase 20.4 market research acquisition", () => {
 
     expect(result.providers.map((report) => report.provider)).toEqual(["youtube", "tavily", "exa", "brave", "firecrawl"]);
     expect(result.providers.every((report) => report.state === "available" && report.failure === null)).toBe(true);
-    expect(result.providers.find((report) => report.provider === "tavily")).toMatchObject({ requested: 5, returned: 5, valid: 5, unique: 5 });
+    expect(result.providers.find((report) => report.provider === "tavily")).toMatchObject({ requested: 20, returned: 20, valid: 20, unique: 20 });
     expect(result.providers.find((report) => report.provider === "youtube")).toMatchObject({ requested: MARKET_RESEARCH_BUDGETS.youtubeTargetComments, returned: 3, valid: 3, unique: 3 });
-    expect(result.metrics).toMatchObject({ validSignals: 23, uniqueSignals: 23, analyzedSignals: 23, discardedByAnalysisBudget: 0, duplicatesRemoved: 0 });
-    expect(result.signals).toHaveLength(23);
+    expect(result.metrics).toMatchObject({ validSignals: 83, uniqueSignals: 83, analyzedSignals: 23, discardedByAnalysisBudget: 60, duplicatesRemoved: 0 });
+    expect(result.signals).toHaveLength(83);
+    expect(result.analysisCandidates).toHaveLength(23);
     expect(result.signals.filter((signal) => signal.provider === "youtube")).toHaveLength(3);
     expect(result.signals.filter((signal) => signal.provider === "youtube").every((signal) => signal.youtube?.query === TOPIC)).toBe(true);
 
     // Budgets are applied at the network boundary, not merely post-filtered.
-    expect(JSON.parse(String((tavilyClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ max_results: 5 });
-    expect(JSON.parse(String((exaClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ numResults: 5 });
-    expect((braveClient.fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.get("count")).toBe("5");
+    expect(JSON.parse(String((tavilyClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ max_results: 20 });
+    expect(JSON.parse(String((exaClient.fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({ numResults: 20 });
+    expect((braveClient.fetchMock.mock.calls[0] as unknown as [URL])[0].searchParams.get("count")).toBe("20");
     expect(youtube.listCommentThreads).toHaveBeenCalledWith({ videoId: "dQw4w9WgXcQ", maxResults: MARKET_RESEARCH_BUDGETS.youtubeCommentPageSize });
     const firecrawlSearch = firecrawlClient.fetchMock.mock.calls.find((call) => !String(call[0]).includes("/scrape")) as unknown as [string, RequestInit];
-    expect(JSON.parse(String(firecrawlSearch[1].body))).toMatchObject({ limit: 5, sources: ["web"] });
+    expect(JSON.parse(String(firecrawlSearch[1].body))).toMatchObject({ limit: 20, sources: ["web"] });
 
-    // Deep extraction happens only after dedupe, on at most two selected URLs.
+    // Deep extraction happens only after dedupe, on at most eight selected URLs.
     const scrapes = firecrawlClient.fetchMock.mock.calls.filter((call) => String(call[0]).includes("/scrape"));
     expect(scrapes).toHaveLength(MARKET_RESEARCH_BUDGETS.firecrawlScrapePages);
-    expect(scrapes).toHaveLength(2);
+    expect(scrapes).toHaveLength(8);
     expect(result.metrics.deepenedSignals).toBeGreaterThan(0);
-    expect(result.providers.find((report) => report.provider === "firecrawl")?.scrapedPages).toBe(2);
+    expect(result.providers.find((report) => report.provider === "firecrawl")?.scrapedPages).toBe(8);
   });
 
   it("aísla el fallo de un proveedor y mantiene el resto de la investigación", async () => {
@@ -245,7 +246,7 @@ describe("Phase 20.4 market research acquisition", () => {
 
     expect(result.providers.map((report) => report.provider)).toEqual(["tavily"]);
     expect(exaClient.fetchMock).not.toHaveBeenCalled();
-    expect(result.providers[0]).toMatchObject({ requested: 5, valid: 5 });
+    expect(result.providers[0]).toMatchObject({ requested: 20, valid: 6 });
   });
 
   it("normaliza el texto de análisis de forma determinista", () => {

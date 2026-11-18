@@ -2,11 +2,13 @@ import {
   ApiErrorSchema,
   MarketResearchHistorySchema,
   MarketResearchRunSchema,
+  MarketResearchSupplementSchema,
   RunMarketResearchSchema,
   type ApiError,
   type MarketResearchHistory,
   type MarketResearchRun,
   type MarketResearchStatus,
+  type MarketResearchSupplement,
   type RunMarketResearchInput,
 } from "@our-platform/shared";
 import { Type } from "@sinclair/typebox";
@@ -14,8 +16,11 @@ import type { FastifyInstance } from "fastify";
 
 import type { ProjectRepository } from "../repositories/project-repository.js";
 import type { MarketResearchService } from "../services/market-research-service.js";
+import type { KnowledgeIngestionService } from "../services/knowledge-ingestion-service.js";
 
 const ProjectParams = Type.Object({ id: Type.String({ format: "uuid" }) });
+const SupplementParams = Type.Object({ id: Type.String({ format: "uuid" }), runId: Type.String({ format: "uuid" }) });
+const SupplementBody = Type.Object({ documentId: Type.String({ format: "uuid" }) }, { additionalProperties: false });
 
 const missing: ApiError = { error: "not_found", message: "El proyecto no existe." };
 
@@ -28,6 +33,7 @@ export function registerMarketResearchRoutes(
   app: FastifyInstance,
   projects: ProjectRepository,
   research: MarketResearchService,
+  knowledge: KnowledgeIngestionService,
 ): void {
   app.get<{ Params: { id: string }; Reply: MarketResearchStatus | ApiError }>(
     "/api/projects/:id/market-research/status",
@@ -55,6 +61,30 @@ export function registerMarketResearchRoutes(
       return { runs: [...research.history(request.params.id)] };
     },
   );
+
+  const supplementPath = "/api/projects/:id/market-research/:runId/supplement";
+  type SupplementRoute = { Params: { id: string; runId: string }; Reply: MarketResearchSupplement | null | ApiError };
+  app.get<SupplementRoute>(supplementPath, {
+    schema: { params: SupplementParams, response: { 200: Type.Union([MarketResearchSupplementSchema, Type.Null()]), 404: ApiErrorSchema } },
+  }, async (request, reply) => {
+    const { id, runId } = request.params;
+    if (!projects.get(id)) return reply.code(404).send(missing);
+    const documentId = research.supplementDocumentId(id, runId);
+    return documentId ? knowledge.readResearchSupplement(id, documentId) : null;
+  });
+
+  app.put<SupplementRoute & { Body: { documentId: string } }>(supplementPath, {
+    schema: { params: SupplementParams, body: SupplementBody, response: { 200: MarketResearchSupplementSchema, 404: ApiErrorSchema } },
+  }, async (request, reply) => {
+    const { id, runId } = request.params;
+    if (!projects.get(id)) return reply.code(404).send(missing);
+    const document = await knowledge.readResearchSupplement(id, request.body.documentId);
+    if (!document) return reply.code(404).send({ error: "not_found", message: "No se encontró un informe Markdown disponible en este proyecto." });
+    if (!research.attachSupplement(id, runId, document.documentId)) {
+      return reply.code(404).send({ error: "not_found", message: "No se encontró una investigación completada en este proyecto." });
+    }
+    return document;
+  });
 
   app.post<{ Params: { id: string }; Body: RunMarketResearchInput; Reply: MarketResearchRun | ApiError }>(
     "/api/projects/:id/market-research",

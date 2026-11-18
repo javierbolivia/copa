@@ -527,9 +527,21 @@ const SECTION_ENRICHERS: Record<string, SectionEnricher> = {
     };
   },
   problem: (section, ctx) => {
-    const items = ctx.problems.length
-      ? ctx.problems.slice(0, 6).map((p) => ({ name: p.name, description: p.summary || p.name }))
-      : ctx.avatar.pains.slice(0, 6).map((pain, idx) => ({ name: `Dolor observado ${idx + 1}`, description: pain }));
+    const combined: Array<{ name: string; description: string }> = [
+      ...ctx.problems.map((p) => ({ name: p.name, description: p.summary || p.name })),
+      ...ctx.avatar.pains.map((pain, idx) => ({ name: `Dolor observado ${idx + 1}`, description: pain })),
+      ...ctx.avatar.frustrations.map((fr, idx) => ({ name: `Fricción frecuente ${idx + 1}`, description: fr })),
+      ...ctx.avatar.currentSituation.map((sit, idx) => ({ name: `Escenario cotidiano ${idx + 1}`, description: sit })),
+    ];
+    const seen = new Set<string>();
+    const items = combined
+      .filter((item) => {
+        const key = `${item.name}|${item.description}`.trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 6);
     return {
       layout: section.layout?.trim() || "cards",
       eyebrow: section.eyebrow?.trim() || "PROBLEMAS DOCUMENTADOS",
@@ -565,7 +577,19 @@ const SECTION_ENRICHERS: Record<string, SectionEnricher> = {
     };
   },
   benefits: (section, ctx) => {
-    const rawList = ctx.offer.benefits.length ? ctx.offer.benefits : ctx.avatar.desiredOutcome;
+    const combined = [
+      ...ctx.offer.benefits,
+      ...ctx.avatar.desiredOutcome,
+      ...ctx.product.modules.map((m) => m.outcome).filter(Boolean),
+      ...ctx.offer.deliverables,
+    ];
+    const seen = new Set<string>();
+    const rawList = combined.filter((entry) => {
+      const clean = entry.trim().toLowerCase();
+      if (!clean || seen.has(clean)) return false;
+      seen.add(clean);
+      return true;
+    });
     const items = rawList.slice(0, 6).map((entry, idx) => ({
       name: entry.length <= 72 ? entry : `Beneficio ${idx + 1}`,
       description: entry,
@@ -675,10 +699,17 @@ const SECTION_ENRICHERS: Record<string, SectionEnricher> = {
           ? `$${ctx.offer.pricingAmount} USD`
           : `${ctx.offer.pricingAmount} ${ctx.offer.pricingCurrency}`.trim())
       : "";
+    const resolvedPrice = section.price?.trim() || priceText || "Acceso digital completo";
     const items = [
       ...ctx.offer.deliverables.slice(0, 4).map((d, i) => ({ name: `Incluye ${i + 1}`, description: d })),
+      ...ctx.product.deliverables.slice(0, 2).map((d, i) => ({ name: `Entregable ${i + 1}`, description: d })),
+      ...ctx.product.checklists.slice(0, 2).map((c) => ({ name: "Checklist práctico", description: c })),
       ...ctx.offer.bonuses.slice(0, 2).map((b) => ({ name: b.name || "Bono adicional", description: b.description || b.name })),
-    ];
+    ]
+      .filter((item, idx, arr) =>
+        arr.findIndex((other) => other.description.trim().toLowerCase() === item.description.trim().toLowerCase()) === idx,
+      )
+      .slice(0, 6);
     return {
       layout: section.layout?.trim() || "pricing",
       badge: section.badge?.trim() || "ACCESO COMPLETO",
@@ -687,7 +718,7 @@ const SECTION_ENRICHERS: Record<string, SectionEnricher> = {
       subheadline: section.subheadline?.trim() || ctx.offer.promise,
       body: keepText(section.body, ctx.offer.pricingTerms || ctx.offer.pricingRationale || (section.body ?? "")),
       cta: section.cta?.trim() || ctx.offer.cta || "Consultar acceso",
-      ...(section.price?.trim() || priceText ? { price: section.price?.trim() || priceText } : {}),
+      price: resolvedPrice,
       ...(section.priceNote?.trim() || ctx.offer.pricingTerms
         ? { priceNote: section.priceNote?.trim() || ctx.offer.pricingTerms }
         : {}),
@@ -699,13 +730,19 @@ const SECTION_ENRICHERS: Record<string, SectionEnricher> = {
       ...(items.length ? { items } : {}),
     };
   },
-  guarantee: (section, ctx) => ({
-    layout: section.layout?.trim() || "badge",
-    badge: section.badge?.trim() || "GARANTÍA TRANSPARENTE",
-    eyebrow: section.eyebrow?.trim() || "ALCANCE Y GARANTÍA",
-    headline: keepText(section.headline, "Compromiso y límites transparentes"),
-    body: keepText(section.body, ctx.offer.guarantee || ctx.mechanism.limitations.join(" ") || (section.body ?? "")),
-  }),
+  guarantee: (section, ctx) => {
+    const baseBody = keepText(section.body, ctx.offer.guarantee || ctx.mechanism.limitations.join(" ") || (section.body ?? ""));
+    const words = baseBody.trim().split(/\s+/u).filter(Boolean).length;
+    const minBody = "Material estructurado con alcance formativo transparente, criterios prácticos verificables y condiciones claras de consulta desde el primer día.";
+    const resolvedBody = words >= 15 ? baseBody : baseBody.trim() ? `${baseBody.trim()} ${minBody}` : minBody;
+    return {
+      layout: section.layout?.trim() || "badge",
+      badge: section.badge?.trim() || "GARANTÍA TRANSPARENTE",
+      eyebrow: section.eyebrow?.trim() || "ALCANCE Y GARANTÍA",
+      headline: keepText(section.headline, "Compromiso y límites transparentes"),
+      body: resolvedBody,
+    };
+  },
   cta: (section, ctx) => ({
     layout: section.layout?.trim() || "centered",
     eyebrow: section.eyebrow?.trim() || "ÚLTIMO PASO",
@@ -890,10 +927,25 @@ const CORE_CONVERSION_TYPES: readonly CanonicalLandingBlockType[] = [
   "mechanism",
   "benefits",
   "product",
+  "proof",
   "offer",
   "faq",
   "guarantee",
   "cta",
+];
+
+const DEFAULT_STUDIO_IMAGES: Record<string, { url: string; alt: string }> = {
+  hero: { url: "/api/studio-assets/hero.jpg", alt: "Imagen principal de portada" },
+  problem: { url: "/api/studio-assets/problem.jpg", alt: "Escena del problema principal documentado" },
+  product: { url: "/api/studio-assets/guide.jpg", alt: "Presentación editorial de la guía digital" },
+  offer: { url: "/api/studio-assets/bundle.jpg", alt: "Paquete completo de entregables y bonos" },
+};
+
+const STANDARD_FAQ_FALLBACKS: ReadonlyArray<{ q: string; a: string }> = [
+  { q: "¿Cómo accedo al material?", a: "Acceso digital inmediato según el formato indicado en la oferta." },
+  { q: "¿Incluye pautas paso a paso?", a: "Sí, organizado de forma práctica desde los fundamentos hasta la aplicación diaria." },
+  { q: "¿Requiere experiencia previa?", a: "No, cada bloque explica qué observar y cómo aplicar las herramientas con claridad." },
+  { q: "¿Cuánto tiempo necesito cada semana?", a: "Está diseñado para aplicarse en sesiones breves dentro de tu rutina diaria." },
 ];
 
 const CARD_SECTION_TYPES = new Set([
@@ -1006,21 +1058,33 @@ export function autoFixLandingStudioPro(
       const parsed = extractStructuredFaqItems(updated.body ?? "", updated.items, objections);
       const validExisting = (Array.isArray(updated.items) ? updated.items : []).filter(
         (it) => isRecord(it) && asText(it.q).length > 0 && asText(it.a).length > 0,
-      );
-      if (parsed.length > 0 && (validExisting.length === 0 || parsed.length > validExisting.length)) {
+      ) as Array<{ q: string; a: string }>;
+      const baseQa = parsed.length >= validExisting.length && parsed.length > 0 ? parsed : validExisting;
+      const faqItems: Array<{ q: string; a: string }> = [...baseQa];
+      const seenQ = new Set(faqItems.map((it) => asText(it.q).toLowerCase()));
+      const extraCandidates: Array<{ q: string; a: string }> = [
+        ...objections.map((obj) => {
+          const clean = obj.trim();
+          const q = clean.endsWith("?") ? clean : `¿Cómo aborda este material: ${clean.replace(/\.+$/, "")}?`;
+          return { q, a: "La guía aborda este punto con criterios paso a paso y límites explícitos de aplicación." };
+        }),
+        ...STANDARD_FAQ_FALLBACKS,
+      ];
+      for (const candidate of extraCandidates) {
+        if (faqItems.length >= 4) break;
+        const key = candidate.q.trim().toLowerCase();
+        if (!key || seenQ.has(key)) continue;
+        seenQ.add(key);
+        faqItems.push(candidate);
+      }
+      if (faqItems.length > validExisting.length || (parsed.length > 0 && validExisting.length === 0)) {
         const firstQ = (updated.body ?? "").indexOf("¿");
         updated = {
           ...updated,
           ...(firstQ === 0 ? { body: "Preguntas clave sobre el alcance y condiciones del material." } : {}),
-          items: parsed,
+          items: faqItems,
         };
         actions.push("FAQ convertido a tarjetas { q, a }");
-      } else if (validExisting.length === 0) {
-        updated.items = [
-          { q: "¿Cómo accedo al material?", a: "Acceso digital inmediato según el formato indicado en la oferta." },
-          { q: "¿Incluye pautas paso a paso?", a: "Sí, organizado de forma práctica desde los fundamentos hasta la aplicación." },
-        ];
-        actions.push("Tarjetas iniciales añadidas al FAQ");
       }
     } else if (context.loaded && (!Array.isArray(updated.items) || updated.items.length === 0 || isPlaceholderText(updated.headline))) {
       updated = enrichLandingSectionFromContext(updated, context);
@@ -1051,6 +1115,42 @@ export function autoFixLandingStudioPro(
     );
     next.sections.push(created);
     actions.push(`Añadido bloque faltante: ${CANONICAL_LANDING_LABELS[coreType]}`);
+  }
+
+  let imageCount = next.sections.filter((s) => s.enabled !== false && Boolean(landingImageUrl(s.imageUrl))).length;
+  if (imageCount < 3) {
+    for (const targetType of ["hero", "problem", "product", "offer"] as const) {
+      if (imageCount >= 3) break;
+      const idx = next.sections.findIndex((s) => s.enabled !== false && s.type === targetType);
+      if (idx < 0) continue;
+      const current = next.sections[idx]!;
+      if (landingImageUrl(current.imageUrl)) continue;
+      const fallback = DEFAULT_STUDIO_IMAGES[targetType]!;
+      next.sections[idx] = {
+        ...current,
+        imageUrl: fallback.url,
+        imageAlt: current.imageAlt?.trim() || asText(current.headline) || fallback.alt,
+      };
+      imageCount++;
+      actions.push(`Imagen de estudio agregada en ${targetType}`);
+    }
+  }
+
+  let ctaCount = next.sections.filter((s) => s.enabled !== false && asText(s.cta).length > 0).length;
+  if (ctaCount < 3) {
+    for (const targetType of ["hero", "product", "mechanism", "offer", "cta"] as const) {
+      if (ctaCount >= 3) break;
+      const idx = next.sections.findIndex((s) => s.enabled !== false && s.type === targetType);
+      if (idx < 0) continue;
+      const current = next.sections[idx]!;
+      if (asText(current.cta).length > 0) continue;
+      next.sections[idx] = {
+        ...current,
+        cta: context.offer.cta || "Explorar la propuesta",
+      };
+      ctaCount++;
+      actions.push(`CTA agregado en ${targetType}`);
+    }
   }
 
   next.sections = next.sections.map((section) => {

@@ -1,3 +1,4 @@
+import { MARKET_RESEARCH_BUDGETS } from "@our-platform/shared";
 import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
@@ -54,7 +55,7 @@ export class BraveSearchProvider {
 
   async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
     if (!this.configured) throw new IntegrationError("missing_api_key", "Brave Search no está configurado.");
-    const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
+    const maxResults = Math.min(MARKET_RESEARCH_BUDGETS.braveResults, Math.max(1, Math.floor(options.maxResults ?? 5)));
     const url = new URL(this.endpoint);
     url.searchParams.set("q", query);
     url.searchParams.set("count", String(maxResults));

@@ -1,3 +1,4 @@
+import { MARKET_RESEARCH_BUDGETS } from "@our-platform/shared";
 import { withIntegrationTimeout } from "./request-timeout.js";
 import {
   IntegrationError,
@@ -107,7 +108,7 @@ export class ExaProvider {
   async discover(query: string, options: { readonly maxResults?: number } = {}): Promise<WebDiscoveryResponse> {
     const apiKey = this.apiKey;
     if (!apiKey?.trim()) throw new IntegrationError("missing_api_key", "Exa no está configurado.");
-    const maxResults = Math.min(5, Math.max(1, Math.floor(options.maxResults ?? 5)));
+    const maxResults = Math.min(MARKET_RESEARCH_BUDGETS.exaResults, Math.max(1, Math.floor(options.maxResults ?? 5)));
     const { response, body } = await withIntegrationTimeout("Exa", this.timeoutMs, async signal => {
       let response: Response;
       try {

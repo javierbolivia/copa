@@ -44,11 +44,11 @@ describe("TavilyProvider", () => {
   it("expone discovery limitado sin cambiar la búsqueda de conectividad", async () => {
     const provider = new TavilyProvider({
       apiKey: "tavily-test-key",
-      fetch: async () => new Response(JSON.stringify({ results: Array.from({ length: 6 }, (_, index) => ({ url: `https://example.test/${index}`, title: `R${index}`, content: "texto" })), usage: 1 }), { status: 200 }),
+      fetch: async () => new Response(JSON.stringify({ results: Array.from({ length: 21 }, (_, index) => ({ url: `https://example.test/${index}`, title: `R${index}`, content: "texto" })), usage: 1 }), { status: 200 }),
     });
 
     await expect(provider.discover("consulta", { maxResults: 99 })).resolves.toMatchObject({
-      results: Array.from({ length: 5 }, (_, index) => expect.objectContaining({ url: `https://example.test/${index}`, text: "texto" })),
-      metadata: { resultCount: 5, usage: 1 },
+      results: Array.from({ length: 20 }, (_, index) => expect.objectContaining({ url: `https://example.test/${index}`, text: "texto" })),
+      metadata: { resultCount: 20, usage: 1 },
     });
   });

@@ -255,11 +255,11 @@ describe("Phase 20.4 market research route", () => {
 
     const status = (await app.inject({ method: "GET", url: `/api/projects/${project.id}/market-research/status` })).json<MarketResearchStatus>();
     expect(status.providers.map((provider) => provider.provider)).toEqual(["youtube", "tavily", "exa", "brave", "firecrawl"]);
-    expect(status.providers.find((provider) => provider.provider === "tavily")).toMatchObject({ state: "available", budget: 5 });
+    expect(status.providers.find((provider) => provider.provider === "tavily")).toMatchObject({ state: "available", budget: 20 });
     expect(status.providers.find((provider) => provider.provider === "exa")).toMatchObject({ state: "not_configured" });
     expect(status.analyzers.primary).toMatchObject({ analyzer: "deepseek", model: DEEPSEEK_DEFAULT_MODEL, state: "available" });
     expect(status.analyzers.fallback).toMatchObject({ analyzer: "gemini", model: GEMINI_ANALYSIS_MODEL });
-    expect(status.budgets).toMatchObject({ analysisSignals: 20, analysisSignalChars: 1_500, firecrawlScrapePages: 2 });
+    expect(status.budgets).toMatchObject({ analysisSignals: 20, analysisSignalChars: 1_500, firecrawlScrapePages: 8 });
 
     const response = await app.inject({ method: "POST", url: `/api/projects/${project.id}/market-research`, payload: { topic: "organización de fotografías digitales" } });
     expect(response.statusCode).toBe(200);
@@ -287,6 +287,79 @@ describe("Phase 20.4 market research route", () => {
     expect((await app.inject({ method: "POST", url: `/api/projects/${project.id}/market-research`, payload: { topic: "tema válido", providers: ["invalido"] } })).statusCode).toBe(400);
     expect((await app.inject({ method: "GET", url: "/api/projects/019ff678-1319-71c2-a129-3294c901efbc/market-research/status" })).statusCode).toBe(404);
     expect(primary.generate).not.toHaveBeenCalled();
+  });
+
+  it("conserva todas las señales web únicas aunque el análisis use una muestra", async () => {
+    const primary = analyzer(findingsOutput);
+    const web = (name: string): WebDiscoveryProvider => ({
+      name,
+      configured: true,
+      discover: async (_query, { maxResults } = {}) => {
+        const results = Array.from({ length: maxResults ?? 0 }, (_, index) => ({
+          url: `https://${name}.test/${index}`,
+          title: `Fuente ${index}`,
+          text: `Los usuarios pierden tiempo organizando fotos de la colección ${index} en ${name}.`,
+        }));
+        return { results, metadata: { status: 200, resultCount: results.length } };
+      },
+    });
+    app = await createApp({
+      databasePath: ":memory:",
+      marketResearch: { clients: { tavily: web("tavily"), exa: web("exa") }, analyzers: { deepSeek: primary } },
+    });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Evidencia completa", niche: "Fotografía" } })).json<Project>();
+    const path = `/api/projects/${project.id}/market-research`;
+    const response = await app.inject({ method: "POST", url: path, payload: { topic: "organización de fotografías digitales", providers: ["tavily", "exa"] } });
+    expect(response.statusCode).toBe(200);
+    const run = response.json<MarketResearchRun>();
+    expect(run.metrics).toMatchObject({ uniqueSignals: 40, analyzedSignals: 20, discardedByAnalysisBudget: 20 });
+    expect(run.signals).toHaveLength(40);
+    const evidence = marketResearchSignalEvidence(run);
+    for (const provider of ["tavily", "exa"] as const) {
+      expect(filterMarketResearchSignalEvidence(evidence, provider)).toHaveLength(20);
+      expect(run.providers.find(report => report.provider === provider)).toMatchObject({ returned: 20, unique: 20, analyzed: 10 });
+    }
+    expect(primary.generate).toHaveBeenCalledOnce();
+    const { signals } = JSON.parse(String((primary.generate.mock.calls[0]?.[0] as LlmGenerateRequest).input)) as { signals: unknown[] };
+    expect(signals).toHaveLength(20);
+    expect((await app.inject({ method: "GET", url: `${path}/latest` })).json()).toEqual(run);
+  });
+
+  it("adjunta el Markdown del mismo proyecto a su investigación guardada sin repetir el análisis", async () => {
+    const primary = analyzer(findingsOutput);
+    app = await createResearchApp({ deepSeek: primary });
+    const project = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Investigación con informe", niche: "Fotografía" } })).json<Project>();
+    const other = (await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Otro proyecto", niche: "Fotografía" } })).json<Project>();
+    const projectPath = `/api/projects/${project.id}`;
+    const run = (await app.inject({ method: "POST", url: `${projectPath}/market-research`, payload: { topic: "organización de fotografías digitales" } })).json<MarketResearchRun>();
+    const supplementPath = `${projectPath}/market-research/${run.runId}/supplement`;
+    const library = (await app.inject({ method: "POST", url: `${projectPath}/knowledge/libraries`, payload: { name: "Archivo del estudio", scope: "PROJECT" } })).json<{ id: string }>();
+    await app.inject({ method: "PUT", url: `${projectPath}/knowledge/libraries/${library.id}/selection`, payload: { enabled: false } });
+
+    const markdown = "# Investigación ampliada\n\nInforme complementario con evidencia independiente.";
+    const uploaded = await app.inject({
+      method: "POST", url: `${projectPath}/knowledge/libraries/${library.id}/documents`,
+      payload: { title: "Informe", fileType: "md", filename: "informe.md", contentBase64: Buffer.from(markdown).toString("base64") },
+    });
+    expect(uploaded.statusCode).toBe(201);
+    const documentId = uploaded.json<{ id: string }>().id;
+
+    const unattached = await app.inject({ method: "GET", url: supplementPath });
+    expect(unattached.statusCode).toBe(200);
+    expect(unattached.json()).toBeNull();
+    expect((await app.inject({
+      method: "PUT", url: `/api/projects/${other.id}/market-research/${run.runId}/supplement`, payload: { documentId },
+    })).statusCode).toBe(404);
+
+    const attached = await app.inject({ method: "PUT", url: supplementPath, payload: { documentId } });
+    expect(attached.statusCode).toBe(200);
+    expect(attached.json()).toEqual({ documentId, title: "Informe", markdown });
+    expect((await app.inject({ method: "GET", url: supplementPath })).json()).toEqual(attached.json());
+    expect((await app.inject({ method: "GET", url: `${projectPath}/market-research/latest` })).json()).toEqual(run);
+    expect(primary.generate).toHaveBeenCalledOnce();
+
+    expect((await app.inject({ method: "DELETE", url: `${projectPath}/knowledge/documents/${documentId}` })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: supplementPath })).json()).toBeNull();
   });
 
   it("rechaza antes de adquirir señales si no hay analizador configurado", async () => {

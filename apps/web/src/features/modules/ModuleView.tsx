@@ -26,6 +26,7 @@ import {
 import type { MarketResearchEvidenceFilter } from "@our-platform/shared";
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { OpportunityWorkspace } from "./OpportunityWorkspace";
+import { MarketResearchSupplementPanel } from "./MarketResearchSupplement";
 import { ProblemCompactList, ProblemLinkedEvidence } from "./ProblemCompactList";
 export { OpportunityOutput } from "./OpportunityWorkspace";
 import { queueSourceSelection } from "./source-import-selection";
@@ -185,7 +186,10 @@ const PROVIDER_STATE_CLASS:Record<MarketResearchProviderState,string>={available
 
 function ProviderTile({provider,status,selected,running,onToggle}:{provider:MarketResearchStatus["providers"][number];status:MarketResearchStatus|null;selected:boolean;running:boolean;onToggle:()=>void}) {
   const available=provider.state==="available";
-  const content=<><span className="provider-tile-mark">{marketResearchProviderLabel(provider.provider).slice(0,2).toUpperCase()}</span><div className="provider-tile-copy"><strong>{marketResearchProviderLabel(provider.provider)}</strong><small>{provider.provider==="youtube"&&status?`${status.budgets.youtubeTargetVideos} videos · ${status.budgets.youtubeTargetComments} comentarios`:`Budget máximo · ${provider.budget}`}</small></div><StatusBadge tone={available?"success":"warning"}>{marketResearchProviderStateLabel(provider.state)}</StatusBadge>{available&&<span className="provider-selection-state"><CheckCircle2 size={13}/>{selected?"Seleccionado":"Seleccionar"}</span>}</>;
+  const limit = provider.provider === "youtube" && status
+    ? `${status.budgets.youtubeTargetVideos} videos · ${status.budgets.youtubeTargetComments} comentarios`
+    : `Hasta ${provider.budget} resultados`;
+  const content=<><span className="provider-tile-mark">{marketResearchProviderLabel(provider.provider).slice(0,2).toUpperCase()}</span><div className="provider-tile-copy"><strong>{marketResearchProviderLabel(provider.provider)}</strong><small>{limit}</small>{provider.provider==="firecrawl"&&status&&<small>Hasta {status.budgets.firecrawlScrapePages} extracciones</small>}</div><StatusBadge tone={available?"success":"warning"}>{marketResearchProviderStateLabel(provider.state)}</StatusBadge>{available&&<span className="provider-selection-state"><CheckCircle2 size={13}/>{selected?"Seleccionado":"Seleccionar"}</span>}</>;
   return available?<label className={`provider-tile ${PROVIDER_STATE_CLASS[provider.state]}${selected?" selected":""}`}><input className="provider-checkbox" type="checkbox" disabled={running} checked={selected} onChange={onToggle}/>{content}</label>:<div className={`provider-tile ${PROVIDER_STATE_CLASS[provider.state]} disabled`} aria-disabled="true">{content}</div>;
 }
 
@@ -223,10 +227,17 @@ function AutomaticSourcesPanel({projectId,savedFocus}:{projectId:string;savedFoc
   const evidence=useMemo(()=>run?marketResearchSignalEvidence(run):[],[run]);
   const evidenceFilters=useMemo(()=>run?marketResearchEvidenceFilters(run):[],[run]);
   const filteredEvidence=useMemo(()=>filterMarketResearchSignalEvidence(evidence,evidenceFilter),[evidence,evidenceFilter]);
+  const hiddenEvidence = Math.max(0, (run?.metrics.uniqueSignals ?? 0) - evidence.length);
+  const selectedProvider = run?.providers.find(report => report.provider === evidenceFilter);
+  const evidenceLabel = (filter: MarketResearchEvidenceFilter): string => {
+    const saved = filter === "all" ? evidence.length : evidence.filter(item => item.signal.provider === filter).length;
+    const unique = filter === "all" ? run?.metrics.uniqueSignals : run?.providers.find(report => report.provider === filter)?.unique;
+    return unique !== undefined && unique > saved ? `${saved} de ${unique}` : String(saved);
+  };
 
   return <article className="detail-card jobs-panel market-research-panel">
     <span className="eyebrow">FUENTES AUTOMÁTICAS</span>
-    <p className="muted-copy">Un solo tema consulta los proveedores configurados en el servidor con límites fijos por ejecución. Las claves nunca salen del backend.</p>
+    <p className="muted-copy">Límites por investigación. Los resultados solicitados y recuperados se muestran en la ejecución guardada.</p>
     <div className="provider-tile-grid">{(status?.providers??[]).map(provider=><ProviderTile key={provider.provider} provider={provider} status={status} selected={selected.includes(provider.provider)} running={running} onToggle={()=>setSelected(current=>current.includes(provider.provider)?current.filter(item=>item!==provider.provider):[...current,provider.provider])}/>)}</div>
     <label>Tema a investigar<input value={topic} disabled={running||status===null} onChange={event=>{setTopicEdited(true);setTopic(event.target.value);}} placeholder="organización de fotografías digitales"/></label>
     <div className="button-row"><button type="button" className="button primary" disabled={!canRun} onClick={()=>void investigate()}>{running?"Investigando…":"Investigar mercado"}</button>{status&&<small>Análisis: {marketResearchAnalyzerLabel(status.analyzers.primary.analyzer)} · {status.analyzers.primary.model} · {marketResearchProviderStateLabel(status.analyzers.primary.state)} · respaldo {marketResearchAnalyzerLabel(status.analyzers.fallback.analyzer)} · {marketResearchProviderStateLabel(status.analyzers.fallback.state)}</small>}</div>
@@ -235,6 +246,7 @@ function AutomaticSourcesPanel({projectId,savedFocus}:{projectId:string;savedFoc
     {running&&<p className="form-hint" role="status">{MARKET_RESEARCH_PROGRESS_PHASES[phase]}</p>}
     {error&&<InlineError message={error} onRetry={()=>setReload(value=>value+1)}/>}
     {run&&<p className="form-hint" role={run.analysis.analyzer===null?"alert":undefined}><strong>{run.analysis.analyzer===null?"Investigación fallida":run.runId===latestRunId?"Última investigación guardada":"Investigación guardada"}</strong> · {new Date(run.completedAt).toLocaleString("es")} · {run.topic}{run.analysis.analyzer===null&&" · No se obtuvieron hallazgos; revisa los analizadores y vuelve a intentar."}</p>}
+    {run&&<MarketResearchSupplementPanel key={run.runId} projectId={projectId} runId={run.runId}/>}
     {history.length>0&&<details className="analysis-details"><summary>Investigaciones anteriores ({history.length})</summary><div className="history-list">{history.map(item=><button type="button" className={run?.runId===item.runId?"active":""} key={item.runId} onClick={()=>{setRun(item);setOpenFindingId(null);}}><strong>{item.topic}</strong><small>{new Date(item.completedAt).toLocaleString("es")} · {item.analysis.analyzer===null?"Fallida":marketResearchAnalyzerLabel(item.analysis.analyzer)} · {item.metrics.uniqueSignals} señales</small></button>)}</div></details>}
     {run&&summary&&<div className="market-research-result"><p className="form-hint">Estas señales pertenecen a esta investigación guardada; no se añaden automáticamente al conjunto local que usa Problemas. Una cita puede proceder de una web comercial o de un comentario: no implica demanda validada ni demuestra causalidad.</p>
       <div className="metric-strip"><div><strong>{summary.totalFound}</strong><span>señales</span></div><div><strong>{summary.valid}</strong><span>válidas</span></div><div><strong>{summary.unique}</strong><span>únicas</span></div><div><strong>{summary.analyzed}</strong><span>analizadas</span></div></div>
@@ -243,13 +255,22 @@ function AutomaticSourcesPanel({projectId,savedFocus}:{projectId:string;savedFoc
         <section className="output-section"><h3>ANÁLISIS</h3><div className="output-field"><span>Motor</span><strong>{summary.analysisLabel}{run.analysis.model===null?"":` · ${run.analysis.model}`}</strong></div><div className="output-field"><span>Respaldo usado</span><strong>{run.analysis.fallbackUsed?"Sí":"No"}</strong></div>{run.analysis.primaryFailure!==null&&<div className="output-field"><span>Fallo del primario</span><strong>{run.analysis.primaryFailure}</strong></div>}<div className="output-field"><span>Hallazgos</span><strong>{summary.findingCount}</strong></div></section>
       </div>
       <details className="analysis-details"><summary>Detalles técnicos</summary><div className="structured-output">
-        <section className="output-section"><h3>SEÑALES POR PROVEEDOR</h3>{run.providers.map(report=><div className="output-field" key={report.provider}><span>{marketResearchProviderLabel(report.provider)}</span><strong>{report.failure!==null?`${marketResearchProviderStateLabel(report.state)} · ${report.failure}`:report.state==="not_configured"?marketResearchProviderStateLabel(report.state):`${report.unique} señales`}</strong></div>)}</section>
+        <section className="output-section"><h3>RESULTADOS WEB POR PROVEEDOR</h3>
+          {run.providers.filter(report=>report.provider!=="youtube").map(report=><div className="output-field" key={report.provider}>
+            <span>{marketResearchProviderLabel(report.provider)}</span>
+            <strong>{report.state==="available"
+              ? `${report.requested} solicitados · ${report.returned} recuperados · ${report.unique} únicos · ${report.analyzed} analizados${report.provider==="firecrawl"?` · ${report.scrapedPages} extracciones intentadas`:""}`
+              : [marketResearchProviderStateLabel(report.state),report.failure].filter(Boolean).join(" · ")}</strong>
+          </div>)}
+        </section>
         {run.providers.find(report=>report.provider==="youtube")?.youtube&&<section className="output-section"><h3>YOUTUBE · ADQUISICIÓN</h3>{(()=>{const youtube=run.providers.find(report=>report.provider==="youtube")!.youtube!;return <><div className="output-field"><span>Videos</span><strong>{youtube.videosDiscovered} descubiertos · {youtube.videosSelected} seleccionados · {youtube.distinctVideosRepresented} representados · {youtube.distinctChannelsRepresented} canales</strong></div><div className="output-field"><span>Comentarios</span><strong>{youtube.commentsFetched} raw · {youtube.structurallyRejected+youtube.qualityRejected} rechazados · {youtube.exactDuplicatesRemoved+youtube.nearDuplicatesRemoved} duplicados · {youtube.commentsUnique} únicos</strong></div><div className="output-field"><span>Parada de adquisición</span><strong>{youtube.stopReason}</strong></div></>;})()}</section>}
         {run.analysis.youtube&&<section className="output-section"><h3>YOUTUBE · ANÁLISIS SEMÁNTICO</h3><div className="output-field"><span>Señales y batches</span><strong>{run.analysis.youtube.analyzedSignals} señales · {run.analysis.youtube.semanticBatches} batches · {run.analysis.youtube.successfulBatches} correctos · {run.analysis.youtube.failedBatches} fallidos</strong></div><div className="output-field"><span>DeepSeek / Gemini</span><strong>{run.analysis.inputTokens??0} entrada · {run.analysis.outputTokens??0} salida · Gemini fallback {run.analysis.youtube.fallbackBatches}</strong></div><div className="output-field"><span>Evidencia citada</span><strong>{run.analysis.youtube.citedSignals} señales · {run.analysis.youtube.citedVideos} videos · {run.analysis.youtube.citedChannels} canales{run.analysis.youtube.languages.length>0?` · ${run.analysis.youtube.languages.join(", ")}`:""}</strong></div></section>}
-        <section className="output-section"><h3>PRESUPUESTO</h3><div className="output-field"><span>Duplicados eliminados</span><strong>{run.metrics.duplicatesRemoved}</strong></div><div className="output-field"><span>Descartadas por presupuesto</span><strong>{run.metrics.discardedByAnalysisBudget}</strong></div><div className="output-field"><span>Profundizadas con Firecrawl</span><strong>{run.metrics.deepenedSignals}</strong></div><div className="output-field"><span>Claims sin evidencia descartados</span><strong>{run.analysis.rejectedClaims}</strong></div><div className="output-field"><span>Duración</span><strong>{Math.round(run.durationMs/100)/10}s</strong></div></section>
+        <section className="output-section"><h3>PRESUPUESTO</h3><div className="output-field"><span>Duplicados eliminados</span><strong>{run.metrics.duplicatesRemoved}</strong></div><div className="output-field"><span>Fuera del análisis por el límite de señales</span><strong>{run.metrics.discardedByAnalysisBudget}</strong></div><div className="output-field"><span>Profundizadas con Firecrawl</span><strong>{run.metrics.deepenedSignals}</strong></div><div className="output-field"><span>Claims sin evidencia descartados</span><strong>{run.analysis.rejectedClaims}</strong></div><div className="output-field"><span>Duración</span><strong>{Math.round(run.durationMs/100)/10}s</strong></div></section>
       </div></details>
-      {evidenceFilters.length>0&&<details className="analysis-details market-research-evidence"><summary>Evidencia original del Research ({run.signals.length})</summary>
-        <div className="button-row">{evidenceFilters.map(filter=><button type="button" key={filter} className={evidenceFilter===filter?"button primary":"button secondary"} onClick={()=>setEvidenceFilter(filter)}>{marketResearchEvidenceFilterLabel(filter)}{filter==="all"?` (${evidence.length})`:` (${evidence.filter(item=>item.signal.provider===filter).length})`}</button>)}</div>
+      {evidenceFilters.length>0&&<details className="analysis-details market-research-evidence"><summary>Evidencia original del Research ({evidenceLabel("all")})</summary>
+        {hiddenEvidence>0&&<p className="form-hint">Esta corrida guardó el texto de {evidence.length} de {run.metrics.uniqueSignals} señales únicas. El texto de las otras {hiddenEvidence} no se guardó.</p>}
+        <div className="button-row">{evidenceFilters.map(filter=><button type="button" key={filter} className={evidenceFilter===filter?"button primary":"button secondary"} onClick={()=>setEvidenceFilter(filter)}>{marketResearchEvidenceFilterLabel(filter)} ({evidenceLabel(filter)})</button>)}</div>
+        {selectedProvider&&<p className="form-hint">{selectedProvider.returned} {evidenceFilter==="youtube"?"comentarios":"resultados"} recuperados · {selectedProvider.unique} señales únicas · {filteredEvidence.length} guardadas · {selectedProvider.analyzed} analizadas</p>}
         {filteredEvidence.length===0?<p className="muted-copy">Esta ejecución no guardó señales de este proveedor.</p>:<div className="comment-list">{filteredEvidence.map(({signal,categories,cited})=><article key={signal.id}>
           <header><strong>{marketResearchProviderLabel(signal.provider)}</strong><div><span className="status-pill">{marketResearchSignalSourceLabel(signal.source)}</span><span className={`status-pill ${cited?"fresh":"stale"}`}>{cited?"Citada en hallazgo":"Capturada"}</span><span className="status-pill">{signal.id}</span></div></header>
           <p>“{signal.text}”</p>
